@@ -117,6 +117,7 @@
         <div class="avatar">{{ current_user.username[0].upper() }}</div>
         <span>{{ current_user.username }}</span>
         <span class="badge badge-blue">{{ current_user.role }}</span>
+        <a href="{{ url_for('change_password') }}" class="btn-logout" style="margin-right:4px;">Change Password</a>
         <a href="{{ url_for('logout') }}" class="btn-logout">Sign out</a>
       </div>
     </header>

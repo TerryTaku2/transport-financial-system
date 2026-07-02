@@ -321,6 +321,28 @@ def logout():
     return redirect(url_for('login'))
 
 
+@app.route('/account/change-password', methods=['GET', 'POST'])
+@login_required
+def change_password():
+    if request.method == 'POST':
+        current_pw = request.form.get('current_password', '')
+        new_pw = request.form.get('new_password', '')
+        confirm_pw = request.form.get('confirm_password', '')
+        if not current_user.check_password(current_pw):
+            flash('Current password is incorrect.', 'danger')
+        elif len(new_pw) < 6:
+            flash('New password must be at least 6 characters.', 'danger')
+        elif new_pw != confirm_pw:
+            flash('New passwords do not match.', 'danger')
+        else:
+            current_user.set_password(new_pw)
+            log_audit('UPDATE', 'users', current_user.id, f'{current_user.username} changed their password')
+            db.session.commit()
+            flash('Password changed successfully.', 'success')
+            return redirect(url_for('dashboard'))
+    return render_template('auth/change_password.html')
+
+
 # ─────────────────────────────────────────────────────────────
 # Dashboard
 # ─────────────────────────────────────────────────────────────
