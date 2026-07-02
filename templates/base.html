@@ -22,12 +22,26 @@
       </div>
     </a>
 
+    {% if current_user.has_permission('dashboard') %}
     <div class="nav-section">
       <div class="nav-section-label">Overview</div>
       <a href="{{ url_for('dashboard') }}" class="nav-item {% if request.endpoint == 'dashboard' %}active{% endif %}">
         <i data-feather="grid"></i> Dashboard
       </a>
     </div>
+    {% endif %}
+
+    {% if current_user.has_permission('crew_portal') %}
+    <div class="nav-section">
+      <div class="nav-section-label">Crew Portal</div>
+      <a href="{{ url_for('crew_log') }}" class="nav-item {% if request.endpoint == 'crew_log' %}active{% endif %}">
+        <i data-feather="edit-3"></i> Log Income
+      </a>
+      <a href="{{ url_for('crew_leaderboard') }}" class="nav-item {% if request.endpoint == 'crew_leaderboard' %}active{% endif %}">
+        <i data-feather="award"></i> Performance
+      </a>
+    </div>
+    {% endif %}
 
     {% if current_user.has_permission('vehicles') or current_user.has_permission('drivers') or current_user.has_permission('routes') %}
     <div class="nav-section">

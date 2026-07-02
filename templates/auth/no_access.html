@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block title %}No Access{% endblock %}
+{% block page_title %}No Access{% endblock %}
+
+{% block content %}
+<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:80px 20px;text-align:center;">
+  <i data-feather="lock" style="width:56px;height:56px;color:var(--text-secondary);margin-bottom:20px;"></i>
+  <h2 style="margin-bottom:8px;">No Sections Assigned</h2>
+  <p style="color:var(--text-secondary);max-width:380px;margin-bottom:28px;">
+    Your account has no permissions yet. Please contact your administrator to grant you access to the relevant sections.
+  </p>
+  <div style="display:flex;gap:10px;">
+    <a href="{{ url_for('change_password') }}" class="btn btn-outline">Change Password</a>
+    <a href="{{ url_for('logout') }}" class="btn btn-outline">Sign Out</a>
+  </div>
+</div>
+{% endblock %}

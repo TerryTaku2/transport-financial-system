@@ -1,0 +1,119 @@
+{% extends 'base.html' %}
+{% block title %}Crew Performance{% endblock %}
+{% block page_title %}Crew Performance Leaderboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Performance Leaderboard</h1>
+    <div class="subtitle">Ranked by gross revenue for the selected period</div>
+  </div>
+  <a href="{{ url_for('crew_log') }}" class="btn btn-primary"><i data-feather="plus"></i> Log Income</a>
+</div>
+
+<!-- Date filter -->
+<form method="GET" class="card" style="margin-bottom:20px;">
+  <div class="card-body" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;">
+    <div class="form-group" style="margin:0;">
+      <label style="font-size:0.8rem;">From</label>
+      <input type="date" name="date_from" value="{{ date_from }}" style="height:36px;">
+    </div>
+    <div class="form-group" style="margin:0;">
+      <label style="font-size:0.8rem;">To</label>
+      <input type="date" name="date_to" value="{{ date_to }}" style="height:36px;">
+    </div>
+    <button type="submit" class="btn btn-outline" style="height:36px;">Filter</button>
+    <a href="{{ url_for('crew_leaderboard') }}" class="btn btn-outline" style="height:36px;">This Month</a>
+  </div>
+</form>
+
+<!-- My stats card (only shown if linked to a driver and they have stats) -->
+{% if my_row %}
+<div class="card" style="margin-bottom:20px;border-left:4px solid var(--primary);">
+  <div class="card-body">
+    <div style="font-size:0.75rem;color:var(--text-secondary);text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">Your Performance</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:16px;">
+      <div>
+        <div style="font-size:1.6rem;font-weight:700;color:var(--primary);">#{{ my_row.rank }}</div>
+        <div style="font-size:0.78rem;color:var(--text-secondary);">Rank</div>
+      </div>
+      <div>
+        <div style="font-size:1.6rem;font-weight:700;">{{ my_row.total_revenue|currency }}</div>
+        <div style="font-size:0.78rem;color:var(--text-secondary);">Total Revenue</div>
+      </div>
+      <div>
+        <div style="font-size:1.6rem;font-weight:700;">{{ my_row.total_trips }}</div>
+        <div style="font-size:0.78rem;color:var(--text-secondary);">Total Trips</div>
+      </div>
+      <div>
+        <div style="font-size:1.6rem;font-weight:700;">{{ my_row.days_worked }}</div>
+        <div style="font-size:0.78rem;color:var(--text-secondary);">Days Worked</div>
+      </div>
+      <div>
+        <div style="font-size:1.6rem;font-weight:700;">{{ my_row.avg_per_day|currency }}</div>
+        <div style="font-size:0.78rem;color:var(--text-secondary);">Avg / Day</div>
+      </div>
+      <div>
+        <div style="font-size:1.6rem;font-weight:700;">{{ my_row.commission|currency }}</div>
+        <div style="font-size:0.78rem;color:var(--text-secondary);">Est. Commission ({{ my_row.rate_pct|pct }})</div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<!-- Full leaderboard -->
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:48px;">Rank</th>
+          <th>Name</th>
+          <th>Role</th>
+          <th>Days</th>
+          <th>Trips</th>
+          <th>Total Revenue</th>
+          <th>Avg / Day</th>
+          <th>Est. Commission</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr {% if my_row and r.driver.id == my_row.driver.id %}style="background:var(--hover-bg);font-weight:600;"{% endif %}>
+          <td>
+            {% if r.rank == 1 %}
+              <span style="font-size:1.1rem;">🥇</span>
+            {% elif r.rank == 2 %}
+              <span style="font-size:1.1rem;">🥈</span>
+            {% elif r.rank == 3 %}
+              <span style="font-size:1.1rem;">🥉</span>
+            {% else %}
+              <span style="color:var(--text-secondary);">#{{ r.rank }}</span>
+            {% endif %}
+          </td>
+          <td>
+            {{ r.driver.name }}
+            {% if my_row and r.driver.id == my_row.driver.id %}
+              <span class="badge badge-blue" style="margin-left:6px;">You</span>
+            {% endif %}
+          </td>
+          <td><span class="badge badge-gray">{{ r.driver.role|title }}</span></td>
+          <td>{{ r.days_worked }}</td>
+          <td>{{ r.total_trips }}</td>
+          <td><strong>{{ r.total_revenue|currency }}</strong></td>
+          <td>{{ r.avg_per_day|currency }}</td>
+          <td>{{ r.commission|currency }} <span style="font-size:0.75rem;color:var(--text-secondary);">({{ r.rate_pct|pct }})</span></td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" style="text-align:center;color:var(--text-secondary);padding:32px;">
+            No activity recorded for this period.
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

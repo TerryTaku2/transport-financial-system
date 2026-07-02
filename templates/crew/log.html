@@ -1,0 +1,106 @@
+{% extends 'base.html' %}
+{% block title %}Log Daily Income{% endblock %}
+{% block page_title %}Crew — Log Daily Income{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Log Daily Income</h1>
+    <div class="subtitle">Record your trip revenue for the day</div>
+  </div>
+  <a href="{{ url_for('crew_leaderboard') }}" class="btn btn-outline"><i data-feather="bar-chart-2"></i> View Performance</a>
+</div>
+
+<div class="card" style="max-width:640px;">
+  <div class="card-body">
+    <form method="POST">
+      <div class="form-grid mb-16">
+
+        <div class="form-group">
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="log_date" value="{{ today }}" required>
+        </div>
+
+        <div class="form-group">
+          <label>Vehicle<span class="req">*</span></label>
+          <select name="vehicle_id" required>
+            <option value="">— Select vehicle —</option>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}">{{ v.registration }} ({{ v.make }} {{ v.model }})</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Route<span class="req">*</span></label>
+          <select name="route_id" required>
+            <option value="">— Select route —</option>
+            {% for r in routes %}
+            <option value="{{ r.id }}">{{ r.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label>Your Role Today<span class="req">*</span></label>
+          <select name="driver_id" id="role-driver" onchange="toggleConductor(this)">
+            <option value="">— Select your name as Driver —</option>
+            {% for d in drivers %}
+            <option value="{{ d.id }}"
+              {% if my_driver and d.id == my_driver.id %}selected{% endif %}>
+              {{ d.name }} ({{ d.role|title }})
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-hint">Select your name if you drove today.</div>
+        </div>
+
+        <div class="form-group" id="conductor-section">
+          <label>Conductor</label>
+          <select name="conductor_id">
+            <option value="">— None / N/A —</option>
+            {% for d in drivers %}
+            <option value="{{ d.id }}"
+              {% if my_driver and d.id == my_driver.id and my_driver.role == 'conductor' %}selected{% endif %}>
+              {{ d.name }} ({{ d.role|title }})
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-hint">Select your name here if you were a conductor.</div>
+        </div>
+
+        <div class="form-group">
+          <label>Trips Completed<span class="req">*</span></label>
+          <input type="number" name="trips_completed" min="0" required value="0">
+        </div>
+
+        <div class="form-group">
+          <label>Gross Revenue (USD)<span class="req">*</span></label>
+          <input type="number" name="gross_revenue" step="0.01" min="0" required placeholder="0.00">
+        </div>
+
+        <div class="form-group" style="grid-column:1/-1;">
+          <label>Notes</label>
+          <textarea name="notes" rows="2" placeholder="Any issues, breakdowns, route changes…"></textarea>
+        </div>
+      </div>
+
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Submit Income</button>
+        <a href="{{ url_for('crew_leaderboard') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+{% block scripts %}
+<script>
+function toggleConductor(sel) {
+  const section = document.getElementById('conductor-section');
+  if (sel.value) {
+    section.querySelector('select').querySelector('option[value="' + sel.value + '"]').disabled = true;
+  }
+}
+</script>
+{% endblock %}
+{% endblock %}

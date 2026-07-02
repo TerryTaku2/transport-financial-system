@@ -8,7 +8,7 @@ import os
 import csv
 import io
 import json
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 
 from flask import (Flask, render_template, request, redirect, url_for,
@@ -50,7 +50,10 @@ class User(UserMixin, db.Model):
     role = db.Column(db.String(20), nullable=False, default='manager')
     is_active = db.Column(db.Boolean, default=True)
     permissions = db.Column(db.Text, default='[]')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    linked_driver = db.relationship('Driver', foreign_keys=[driver_id])
 
     def set_password(self, pw):
         self.password_hash = generate_password_hash(pw)
@@ -82,7 +85,7 @@ class Vehicle(db.Model):
     year = db.Column(db.Integer, nullable=False)
     acquisition_cost = db.Column(db.Float, default=0.0)
     status = db.Column(db.String(20), default='active')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     documents = db.relationship('VehicleDocument', backref='vehicle',
                                 lazy=True, cascade='all, delete-orphan')
@@ -112,7 +115,7 @@ class VehicleDocument(db.Model):
     issue_date = db.Column(db.Date)
     expiry_date = db.Column(db.Date, nullable=False)
     notes = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     @property
     def days_to_expiry(self):
@@ -138,7 +141,7 @@ class Driver(db.Model):
     role = db.Column(db.String(20), default='driver')
     commission_rate = db.Column(db.Float)
     status = db.Column(db.String(20), default='active')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     driven_logs = db.relationship('DailyLog', foreign_keys='DailyLog.driver_id',
                                   backref='driver', lazy=True)
@@ -155,7 +158,7 @@ class Route(db.Model):
     distance_km = db.Column(db.Float)
     fare_rate = db.Column(db.Float, nullable=False)
     status = db.Column(db.String(20), default='active')
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     logs = db.relationship('DailyLog', backref='route', lazy=True)
 
@@ -173,8 +176,8 @@ class DailyLog(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id'))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     creator = db.relationship('User', foreign_keys=[created_by])
     updater = db.relationship('User', foreign_keys=[updated_by])
@@ -192,7 +195,7 @@ class FuelLog(db.Model):
     supplier = db.Column(db.String(100))
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     creator = db.relationship('User', foreign_keys=[created_by])
 
@@ -209,7 +212,7 @@ class MaintenanceLog(db.Model):
     mechanic = db.Column(db.String(100))
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     creator = db.relationship('User', foreign_keys=[created_by])
 
@@ -223,7 +226,7 @@ class AuditLog(db.Model):
     record_id = db.Column(db.Integer)
     description = db.Column(db.Text)
     ip_address = db.Column(db.String(50))
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = db.relationship('User')
 
@@ -237,15 +240,39 @@ def load_user(user_id):
 
 
 PERMISSIONS = {
-    'vehicles':    'Vehicles — view, add & edit vehicles',
-    'drivers':     'Crew — view, add & edit drivers/conductors',
-    'routes':      'Routes — view, add & edit routes',
-    'daily_logs':  'Daily Logs — view, record & edit trip logs',
-    'fuel_logs':   'Fuel Logs — view & record fuel entries',
-    'maintenance': 'Maintenance — view & record maintenance logs',
-    'reports':     'Finance & Reports — income statement, payroll, CSV exports',
-    'compliance':  'Compliance — vehicle documents & expiry tracker',
+    'dashboard':    'Dashboard — overview stats, charts & recent activity',
+    'crew_portal':  'Crew Portal — log daily income & view team performance leaderboard',
+    'vehicles':     'Vehicles — view, add & edit vehicles',
+    'drivers':      'Crew — view, add & edit drivers/conductors',
+    'routes':       'Routes — view, add & edit routes',
+    'daily_logs':   'Daily Logs — view, record & edit trip logs',
+    'fuel_logs':    'Fuel Logs — view & record fuel entries',
+    'maintenance':  'Maintenance — view & record maintenance logs',
+    'reports':      'Finance & Reports — income statement, payroll, CSV exports',
+    'compliance':   'Compliance — vehicle documents & expiry tracker',
 }
+
+PERMISSION_REDIRECTS = [
+    ('dashboard',   'dashboard'),
+    ('crew_portal', 'crew_leaderboard'),
+    ('vehicles',    'vehicles'),
+    ('drivers',     'drivers'),
+    ('routes',      'routes_list'),
+    ('daily_logs',  'daily_logs'),
+    ('fuel_logs',   'fuel_logs'),
+    ('maintenance', 'maintenance_logs'),
+    ('reports',     'report_income'),
+    ('compliance',  'compliance'),
+]
+
+
+def first_permitted_url(user):
+    if user.role == 'admin':
+        return url_for('dashboard')
+    for perm, endpoint in PERMISSION_REDIRECTS:
+        if user.has_permission(perm):
+            return url_for(endpoint)
+    return url_for('no_access')
 
 
 def admin_required(f):
@@ -253,7 +280,7 @@ def admin_required(f):
     def decorated(*args, **kwargs):
         if not current_user.is_authenticated or current_user.role != 'admin':
             flash('Admin access required.', 'danger')
-            return redirect(url_for('dashboard'))
+            return redirect(first_permitted_url(current_user))
         return f(*args, **kwargs)
     return decorated
 
@@ -264,7 +291,7 @@ def permission_required(perm):
         def decorated(*args, **kwargs):
             if not current_user.has_permission(perm):
                 flash('You do not have permission to access that section.', 'danger')
-                return redirect(url_for('dashboard'))
+                return redirect(first_permitted_url(current_user))
             return f(*args, **kwargs)
         return decorated
     return decorator
@@ -297,16 +324,16 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
-        return redirect(url_for('dashboard'))
+        return redirect(first_permitted_url(current_user))
     if request.method == 'POST':
-        username = request.form.get('username', '').strip()
+        username = request.form.get('username', '').strip().lower()
         password = request.form.get('password', '')
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password) and user.is_active:
             login_user(user)
             log_audit('LOGIN', description=f'User {username} logged in')
             db.session.commit()
-            return redirect(url_for('dashboard'))
+            return redirect(first_permitted_url(user))
         flash('Invalid username or password.', 'danger')
     return render_template('auth/login.html')
 
@@ -346,8 +373,15 @@ def change_password():
 # ─────────────────────────────────────────────────────────────
 # Dashboard
 # ─────────────────────────────────────────────────────────────
+@app.route('/no-access')
+@login_required
+def no_access():
+    return render_template('auth/no_access.html')
+
+
 @app.route('/dashboard')
 @login_required
+@permission_required('dashboard')
 def dashboard():
     today = date.today()
     month_start = today.replace(day=1)
@@ -538,6 +572,25 @@ def driver_add():
         db.session.add(d)
         db.session.flush()
         log_audit('CREATE', 'drivers', d.id, f'Added driver {d.name}')
+
+        login_username = request.form.get('login_username', '').strip().lower()
+        login_password = request.form.get('login_password', '').strip()
+        if login_username and login_password:
+            if len(login_password) < 6:
+                flash('System login password must be at least 6 characters — login not created.', 'warning')
+            elif User.query.filter_by(username=login_username).first():
+                flash(f'Username "{login_username}" is already taken — login not created.', 'warning')
+            else:
+                driver_email = d.email.strip().lower() if d.email else ''
+                if driver_email and User.query.filter_by(email=driver_email).first():
+                    driver_email = ''
+                email = driver_email or f'{login_username}@transport.local'
+                u = User(username=login_username, email=email, role='manager', driver_id=d.id)
+                u.set_password(login_password)
+                db.session.add(u)
+                log_audit('CREATE', 'users', None, f'Created login "{login_username}" for driver {d.name}')
+                flash(f'System login created — username: {login_username}', 'info')
+
         db.session.commit()
         flash(f'Driver {d.name} registered.', 'success')
         return redirect(url_for('drivers'))
@@ -716,7 +769,7 @@ def daily_log_edit(lid):
         log.gross_revenue = float(request.form['gross_revenue'])
         log.notes = request.form.get('notes', '').strip()
         log.updated_by = current_user.id
-        log.updated_at = datetime.utcnow()
+        log.updated_at = datetime.now(timezone.utc)
         log_audit('UPDATE', 'daily_logs', lid, f'Updated daily log {lid}')
         db.session.commit()
         flash('Daily log updated.', 'success')
@@ -867,6 +920,107 @@ def maintenance_log_delete(lid):
 # ─────────────────────────────────────────────────────────────
 # Reports
 # ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
+# Crew Portal
+# ─────────────────────────────────────────────────────────────
+@app.route('/crew/log', methods=['GET', 'POST'])
+@login_required
+@permission_required('crew_portal')
+def crew_log():
+    my_driver = current_user.linked_driver
+    if request.method == 'POST':
+        driver_id = request.form.get('driver_id')
+        if not driver_id:
+            flash('Please select your name as the driver or conductor.', 'danger')
+            return redirect(url_for('crew_log'))
+        conductor_id = request.form.get('conductor_id') or None
+        log = DailyLog(
+            vehicle_id=int(request.form['vehicle_id']),
+            driver_id=int(driver_id),
+            conductor_id=int(conductor_id) if conductor_id else None,
+            route_id=int(request.form['route_id']),
+            log_date=parse_date(request.form['log_date']),
+            trips_completed=int(request.form.get('trips_completed') or 0),
+            gross_revenue=float(request.form['gross_revenue']),
+            notes=request.form.get('notes', '').strip(),
+            created_by=current_user.id,
+        )
+        db.session.add(log)
+        db.session.flush()
+        log_audit('CREATE', 'daily_logs', log.id,
+                  f'Crew log by {current_user.username} for {log.vehicle.registration}')
+        db.session.commit()
+        flash('Income logged successfully.', 'success')
+        return redirect(url_for('crew_leaderboard'))
+
+    all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
+    all_drivers = Driver.query.filter_by(status='active').order_by(Driver.name).all()
+    all_routes = Route.query.filter_by(status='active').order_by(Route.name).all()
+    return render_template('crew/log.html',
+                           my_driver=my_driver,
+                           vehicles=all_vehicles,
+                           drivers=all_drivers,
+                           routes=all_routes,
+                           today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/crew/leaderboard')
+@login_required
+@permission_required('crew_portal')
+def crew_leaderboard():
+    today = date.today()
+    date_from_str = request.args.get('date_from', today.replace(day=1).strftime('%Y-%m-%d'))
+    date_to_str = request.args.get('date_to', today.strftime('%Y-%m-%d'))
+    df = parse_date(date_from_str)
+    dt = parse_date(date_to_str)
+
+    dr_rate = app.config['COMMISSION_DRIVER_RATE']
+    co_rate = app.config['COMMISSION_CONDUCTOR_RATE']
+
+    rows = []
+    for d in Driver.query.filter_by(status='active').order_by(Driver.name).all():
+        driven = db.session.query(
+            func.sum(DailyLog.gross_revenue),
+            func.sum(DailyLog.trips_completed),
+            func.count(DailyLog.id),
+        ).filter(DailyLog.driver_id == d.id,
+                 DailyLog.log_date.between(df, dt)).first()
+        conducted = db.session.query(
+            func.sum(DailyLog.gross_revenue),
+            func.sum(DailyLog.trips_completed),
+            func.count(DailyLog.id),
+        ).filter(DailyLog.conductor_id == d.id,
+                 DailyLog.log_date.between(df, dt)).first()
+
+        total_rev   = (driven[0] or 0) + (conducted[0] or 0)
+        total_trips = (driven[1] or 0) + (conducted[1] or 0)
+        days_worked = (driven[2] or 0) + (conducted[2] or 0)
+        if days_worked == 0:
+            continue
+        rate = d.commission_rate if d.commission_rate is not None else (
+            dr_rate if d.role == 'driver' else co_rate)
+        rows.append({
+            'driver': d,
+            'total_revenue': total_rev,
+            'total_trips': total_trips,
+            'days_worked': days_worked,
+            'avg_per_day': total_rev / days_worked if days_worked else 0,
+            'commission': total_rev * rate,
+            'rate_pct': rate * 100,
+        })
+
+    rows.sort(key=lambda r: r['total_revenue'], reverse=True)
+    for i, r in enumerate(rows):
+        r['rank'] = i + 1
+
+    my_driver = current_user.linked_driver
+    my_row = next((r for r in rows if my_driver and r['driver'].id == my_driver.id), None)
+
+    return render_template('crew/leaderboard.html',
+                           rows=rows, my_row=my_row,
+                           date_from=date_from_str, date_to=date_to_str, today=today)
+
+
 @app.route('/reports/income')
 @login_required
 @permission_required('reports')
@@ -1263,10 +1417,12 @@ def migrate_db():
     from sqlalchemy import inspect, text
     inspector = inspect(db.engine)
     cols = [c['name'] for c in inspector.get_columns('users')]
-    if 'permissions' not in cols:
-        with db.engine.connect() as conn:
+    with db.engine.connect() as conn:
+        if 'permissions' not in cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN permissions TEXT DEFAULT '[]'"))
-            conn.commit()
+        if 'driver_id' not in cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN driver_id INTEGER REFERENCES drivers(id)"))
+        conn.commit()
 
 
 def create_default_admin():
