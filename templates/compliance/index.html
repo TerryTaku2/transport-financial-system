@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% block title %}Compliance{% endblock %}
+{% block page_title %}Compliance Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Compliance Dashboard</h1>
+    <div class="subtitle">Fitness certificates, route permits & insurance — as of {{ today.strftime('%d %B %Y') }}</div>
+  </div>
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-red">
+    <div class="kpi-label">Expired Documents</div>
+    <div class="kpi-value">{{ expired|length }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Expiring within 30 Days</div>
+    <div class="kpi-value">{{ expiring|length }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Valid Documents</div>
+    <div class="kpi-value">{{ valid|length }}</div>
+  </div>
+</div>
+
+{% if expired %}
+<h3 style="margin-bottom:12px;font-size:14px;">🔴 Expired — Immediate Action Required</h3>
+<div class="comp-grid">
+  {% for doc in expired %}
+  <div class="comp-card expired">
+    <div class="comp-reg">{{ doc.vehicle.registration }}</div>
+    <div class="comp-type">{{ doc.doc_type }}</div>
+    <div class="comp-date">Expired: {{ doc.expiry_date.strftime('%d %b %Y') }}</div>
+    <div class="comp-days text-danger">{{ -doc.days_to_expiry }} days overdue</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+{% if expiring %}
+<h3 style="margin-bottom:12px;font-size:14px;">🟡 Expiring Soon — Renew Within 30 Days</h3>
+<div class="comp-grid">
+  {% for doc in expiring %}
+  <div class="comp-card warning">
+    <div class="comp-reg">{{ doc.vehicle.registration }}</div>
+    <div class="comp-type">{{ doc.doc_type }}</div>
+    <div class="comp-date">Expires: {{ doc.expiry_date.strftime('%d %b %Y') }}</div>
+    <div class="comp-days text-warning">{{ doc.days_to_expiry }} days left</div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<h3 style="margin-bottom:12px;font-size:14px;">🟢 Valid Documents</h3>
+{% if valid %}
+<div class="comp-grid">
+  {% for doc in valid %}
+  <div class="comp-card valid">
+    <div class="comp-reg">{{ doc.vehicle.registration }}</div>
+    <div class="comp-type">{{ doc.doc_type }}</div>
+    <div class="comp-date">Expires: {{ doc.expiry_date.strftime('%d %b %Y') }}</div>
+    <div class="comp-days text-success">{{ doc.days_to_expiry }} days left</div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty-state"><p>No documents on file yet. Add documents from each vehicle's detail page.</p></div>
+{% endif %}
+{% endblock %}

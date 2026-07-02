@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% block title %}Audit Log{% endblock %}
+{% block page_title %}Admin — Audit Log{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>System Audit Log</h1>
+    <div class="subtitle">Full record of who added, edited, or deleted financial data — and when</div>
+  </div>
+</div>
+
+<div class="card">
+  {% if logs.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Timestamp</th><th>User</th><th>Action</th><th>Table</th><th>Record ID</th><th>Description</th><th>IP</th></tr>
+      </thead>
+      <tbody>
+        {% for log in logs.items %}
+        <tr>
+          <td>{{ log.timestamp.strftime('%d %b %Y %H:%M:%S') }}</td>
+          <td>{{ log.user.username if log.user else 'System' }}</td>
+          <td>
+            {% if log.action == 'CREATE' %}<span class="badge badge-green">{{ log.action }}</span>
+            {% elif log.action == 'UPDATE' %}<span class="badge badge-blue">{{ log.action }}</span>
+            {% elif log.action == 'DELETE' %}<span class="badge badge-red">{{ log.action }}</span>
+            {% else %}<span class="badge badge-gray">{{ log.action }}</span>{% endif %}
+          </td>
+          <td>{{ log.table_name or '—' }}</td>
+          <td>{{ log.record_id or '—' }}</td>
+          <td>{{ log.description or '—' }}</td>
+          <td>{{ log.ip_address or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    {% if logs.has_prev %}<a href="?page={{ logs.prev_num }}">&laquo; Prev</a>{% endif %}
+    <span class="active">Page {{ logs.page }} of {{ logs.pages or 1 }}</span>
+    {% if logs.has_next %}<a href="?page={{ logs.next_num }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No audit records yet.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In | TransFleet ERP</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="login-page">
+  <div class="login-card">
+    <div class="login-logo">
+      <div class="logo-icon">🚌</div>
+      <h1>TransFleet ERP</h1>
+      <p>Transport Fleet & Finance Management</p>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }}" style="margin-bottom:14px;">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <form method="POST">
+      <div class="form-group" style="margin-bottom:14px;">
+        <label for="username">Username</label>
+        <input type="text" id="username" name="username" required placeholder="Enter username" autofocus>
+      </div>
+      <div class="form-group" style="margin-bottom:20px;">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" required placeholder="Enter password">
+      </div>
+      <button type="submit" class="btn btn-primary">Sign In</button>
+    </form>
+
+    <div class="login-footer">
+      <p>T-Tech Solutions &copy; 2026 &mdash; All rights reserved</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>

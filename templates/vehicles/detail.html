@@ -1,0 +1,141 @@
+{% extends 'base.html' %}
+{% block title %}{{ vehicle.registration }}{% endblock %}
+{% block page_title %}Vehicle — {{ vehicle.registration }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ vehicle.registration }}</h1>
+    <div class="subtitle">{{ vehicle.make }} {{ vehicle.model }} ({{ vehicle.year }})</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('vehicle_edit', vid=vehicle.id) }}" class="btn btn-outline"><i data-feather="edit-2"></i> Edit</a>
+    <a href="{{ url_for('document_add', vehicle_id=vehicle.id) }}" class="btn btn-primary"><i data-feather="file-plus"></i> Add Document</a>
+    <a href="{{ url_for('vehicles') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+  </div>
+</div>
+
+<div class="stat-grid">
+  <div class="stat-box">
+    <div class="stat-label">Lifetime Revenue</div>
+    <div class="stat-value text-success">{{ vehicle.total_revenue|currency }}</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-label">Lifetime Fuel Cost</div>
+    <div class="stat-value text-warning">{{ vehicle.total_fuel_cost|currency }}</div>
+  </div>
+  <div class="stat-box">
+    <div class="stat-label">Lifetime Maintenance Cost</div>
+    <div class="stat-value text-danger">{{ vehicle.total_maintenance_cost|currency }}</div>
+  </div>
+</div>
+
+<div class="grid-2 mb-24">
+
+  <!-- Documents -->
+  <div class="card">
+    <div class="card-header">
+      <h3>Compliance Documents</h3>
+    </div>
+    {% if vehicle.documents %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Type</th><th>Reference</th><th>Expiry</th><th>Status</th><th></th></tr></thead>
+        <tbody>
+          {% for doc in vehicle.documents %}
+          <tr>
+            <td>{{ doc.doc_type|title }}</td>
+            <td>{{ doc.reference_number or '—' }}</td>
+            <td>{{ doc.expiry_date.strftime('%d %b %Y') }}</td>
+            <td>
+              {% if doc.status == 'expired' %}<span class="badge badge-red">Expired {{ -doc.days_to_expiry }}d ago</span>
+              {% elif doc.status == 'warning' %}<span class="badge badge-amber">{{ doc.days_to_expiry }}d left</span>
+              {% else %}<span class="badge badge-green">Valid</span>{% endif %}
+            </td>
+            <td>
+              <form method="POST" action="{{ url_for('document_delete', did=doc.id) }}" data-confirm="Delete this document record?">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state"><p>No documents on file. <a href="{{ url_for('document_add', vehicle_id=vehicle.id) }}">Add one</a>.</p></div>
+    {% endif %}
+  </div>
+
+  <!-- Recent Fuel -->
+  <div class="card">
+    <div class="card-header"><h3>Recent Fuel Top-Ups</h3></div>
+    {% if recent_fuel %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Date</th><th>Liters</th><th>Cost/L</th><th class="text-right">Total</th></tr></thead>
+        <tbody>
+          {% for f in recent_fuel %}
+          <tr>
+            <td>{{ f.log_date.strftime('%d %b') }}</td>
+            <td>{{ f.liters }}L</td>
+            <td>{{ f.cost_per_liter|currency }}</td>
+            <td class="text-right">{{ f.total_cost|currency }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="empty-state"><p>No fuel logs yet.</p></div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Recent Daily Logs</h3></div>
+  {% if recent_logs %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Date</th><th>Driver</th><th>Route</th><th>Trips</th><th class="text-right">Revenue</th></tr></thead>
+      <tbody>
+        {% for l in recent_logs %}
+        <tr>
+          <td>{{ l.log_date.strftime('%d %b %Y') }}</td>
+          <td>{{ l.driver.name }}</td>
+          <td>{{ l.route.name }}</td>
+          <td>{{ l.trips_completed }}</td>
+          <td class="text-right"><strong>{{ l.gross_revenue|currency }}</strong></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No daily logs recorded for this vehicle.</p></div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Recent Maintenance</h3></div>
+  {% if recent_maint %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Date</th><th>Description</th><th>Mechanic</th><th class="text-right">Total Cost</th></tr></thead>
+      <tbody>
+        {% for m in recent_maint %}
+        <tr>
+          <td>{{ m.log_date.strftime('%d %b %Y') }}</td>
+          <td>{{ m.description }}</td>
+          <td>{{ m.mechanic or '—' }}</td>
+          <td class="text-right">{{ m.total_cost|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No maintenance records yet.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

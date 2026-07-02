@@ -1,0 +1,72 @@
+{% extends 'base.html' %}
+{% block title %}User Management{% endblock %}
+{% block page_title %}Admin — User Management{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>System Users</h1>
+    <div class="subtitle">Access control for Admin / Manager roles</div>
+  </div>
+  <a href="{{ url_for('user_add') }}" class="btn btn-primary"><i data-feather="user-plus"></i> Add User</a>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Permissions</th><th>Created</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td><strong>{{ u.username }}</strong> {% if u.id == current_user.id %}<span class="badge badge-blue">You</span>{% endif %}</td>
+          <td>{{ u.email }}</td>
+          <td><span class="badge {% if u.role == 'admin' %}badge-blue{% else %}badge-gray{% endif %}">{{ u.role|title }}</span></td>
+          <td>
+            {% if u.is_active %}<span class="badge badge-green"><span class="dot dot-green"></span>Active</span>
+            {% else %}<span class="badge badge-gray"><span class="dot dot-gray"></span>Disabled</span>{% endif %}
+          </td>
+          <td>
+            {% if u.role == 'admin' %}
+              <span class="badge badge-blue">All access</span>
+            {% else %}
+              {% set perms = u.get_permissions() %}
+              {% if perms %}
+                <span style="font-size:0.78rem;color:var(--text-secondary);">{{ perms|join(', ') }}</span>
+              {% else %}
+                <span class="badge badge-gray">No access</span>
+              {% endif %}
+            {% endif %}
+          </td>
+          <td>{{ u.created_at.strftime('%d %b %Y') }}</td>
+          <td>
+            <div class="actions">
+              {% if u.role != 'admin' %}
+              <a href="{{ url_for('user_permissions', uid=u.id) }}" class="btn btn-outline btn-xs">Permissions</a>
+              {% endif %}
+              {% if u.id != current_user.id %}
+              <form method="POST" action="{{ url_for('user_toggle', uid=u.id) }}">
+                <button class="btn btn-outline btn-xs">{{ 'Disable' if u.is_active else 'Enable' }}</button>
+              </form>
+              {% endif %}
+              <button class="btn btn-outline btn-xs" onclick="document.getElementById('pw-{{ u.id }}').classList.toggle('open-row')">Reset PW</button>
+            </div>
+          </td>
+        </tr>
+        <tr id="pw-{{ u.id }}" style="display:none;">
+          <td colspan="6">
+            <form method="POST" action="{{ url_for('user_reset_password', uid=u.id) }}" class="flex gap-8 items-center">
+              <input type="password" name="new_password" placeholder="New password (min 6 chars)" style="max-width:240px;" required>
+              <button class="btn btn-warning btn-xs">Confirm Reset</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<style>.open-row { display: table-row !important; }</style>
+{% endblock %}

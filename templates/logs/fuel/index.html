@@ -1,0 +1,69 @@
+{% extends 'base.html' %}
+{% block title %}Fuel Logs{% endblock %}
+{% block page_title %}Operations — Fuel Logs{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Fuel Logs</h1>
+    <div class="subtitle">Fuel top-ups and consumption tracking</div>
+  </div>
+  <a href="{{ url_for('fuel_log_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Record Fuel Log</a>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>Vehicle</label>
+    <select name="vehicle_id">
+      <option value="">All Vehicles</option>
+      {% for v in vehicles %}
+      <option value="{{ v.id }}" {% if vehicle_id|string == v.id|string %}selected{% endif %}>{{ v.registration }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-outline"><i data-feather="filter"></i> Filter</button>
+  <a href="{{ url_for('fuel_logs') }}" class="btn btn-outline">Reset</a>
+</form>
+
+<div class="card">
+  {% if logs.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Vehicle</th><th>Liters</th><th>Cost/Liter</th><th>Odometer</th><th>Supplier</th><th class="text-right">Total Cost</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for log in logs.items %}
+        <tr>
+          <td>{{ log.log_date.strftime('%d %b %Y') }}</td>
+          <td><a href="{{ url_for('vehicle_detail', vid=log.vehicle_id) }}">{{ log.vehicle.registration }}</a></td>
+          <td>{{ log.liters }}L</td>
+          <td>{{ log.cost_per_liter|currency }}</td>
+          <td>{{ log.odometer or '—' }}</td>
+          <td>{{ log.supplier or '—' }}</td>
+          <td class="text-right"><strong>{{ log.total_cost|currency }}</strong></td>
+          <td>
+            {% if current_user.role == 'admin' %}
+            <form method="POST" action="{{ url_for('fuel_log_delete', lid=log.id) }}" data-confirm="Delete this fuel log?">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    {% if logs.has_prev %}<a href="?page={{ logs.prev_num }}&vehicle_id={{ vehicle_id }}">&laquo; Prev</a>{% endif %}
+    <span class="active">Page {{ logs.page }} of {{ logs.pages or 1 }}</span>
+    {% if logs.has_next %}<a href="?page={{ logs.next_num }}&vehicle_id={{ vehicle_id }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">⛽</div>
+    <p>No fuel logs recorded. <a href="{{ url_for('fuel_log_add') }}">Record one now</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

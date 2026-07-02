@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% block title %}{{ action }} Vehicle{% endblock %}
+{% block page_title %}{{ action }} Vehicle{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ action }} Vehicle</h1>
+    <div class="subtitle">Asset registration details</div>
+  </div>
+  <a href="{{ url_for('vehicles') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Fleet</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Registration Number<span class="req">*</span></label>
+          <input type="text" name="registration" required placeholder="e.g. ABC 1234"
+                 value="{{ vehicle.registration if vehicle else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Make<span class="req">*</span></label>
+          <input type="text" name="make" required placeholder="e.g. Toyota"
+                 value="{{ vehicle.make if vehicle else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Model<span class="req">*</span></label>
+          <input type="text" name="model" required placeholder="e.g. Quantum"
+                 value="{{ vehicle.model if vehicle else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Year<span class="req">*</span></label>
+          <input type="number" name="year" required min="1980" max="2030" placeholder="e.g. 2019"
+                 value="{{ vehicle.year if vehicle else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Acquisition Cost (USD)</label>
+          <input type="number" name="acquisition_cost" step="0.01" min="0" placeholder="0.00"
+                 value="{{ vehicle.acquisition_cost if vehicle else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select name="status">
+            <option value="active" {% if vehicle and vehicle.status=='active' %}selected{% endif %}>Active</option>
+            <option value="maintenance" {% if vehicle and vehicle.status=='maintenance' %}selected{% endif %}>In Maintenance</option>
+            <option value="inactive" {% if vehicle and vehicle.status=='inactive' %}selected{% endif %}>Inactive</option>
+          </select>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Vehicle</button>
+        <a href="{{ url_for('vehicles') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

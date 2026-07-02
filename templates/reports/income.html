@@ -1,0 +1,94 @@
+{% extends 'base.html' %}
+{% block title %}Income Statement{% endblock %}
+{% block page_title %}Finance — Income Statement{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Income Statement</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; ZIMRA-ready financial summary</div>
+  </div>
+  <a href="{{ url_for('export_income', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
+    <i data-feather="download"></i> Export CSV
+  </a>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <div class="form-group">
+    <label>Vehicle</label>
+    <select name="vehicle_id">
+      <option value="">All Vehicles (Fleet-wide)</option>
+      {% for v in vehicles %}
+      <option value="{{ v.id }}" {% if vehicle_id|string == v.id|string %}selected{% endif %}>{{ v.registration }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Gross Revenue</div>
+    <div class="kpi-value">{{ gross_revenue|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Fuel Cost</div>
+    <div class="kpi-value">{{ fuel_cost|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-red">
+    <div class="kpi-label">Maintenance Cost</div>
+    <div class="kpi-value">{{ maintenance_cost|currency }}</div>
+  </div>
+  <div class="kpi-card {% if net_profit >= 0 %}kpi-green{% else %}kpi-red{% endif %}">
+    <div class="kpi-label">Net Profit</div>
+    <div class="kpi-value">{{ net_profit|currency }}</div>
+    <div class="kpi-sub">Margin: {{ profit_margin|pct }}</div>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Statement Summary</h3></div>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        <tr><td>Gross Revenue</td><td class="text-right">{{ gross_revenue|currency }}</td></tr>
+        <tr><td>Less: Fuel Expenses</td><td class="text-right text-warning">({{ fuel_cost|currency }})</td></tr>
+        <tr><td>Less: Maintenance Expenses</td><td class="text-right text-danger">({{ maintenance_cost|currency }})</td></tr>
+        <tr><td><strong>Total Operating Expenses</strong></td><td class="text-right"><strong>({{ total_expenses|currency }})</strong></td></tr>
+        <tr class="summary-row"><td>NET PROFIT</td><td class="text-right">{{ net_profit|currency }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Revenue by Vehicle</h3></div>
+  {% if vehicle_breakdown %}
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Vehicle</th><th>Make/Model</th><th>Days Logged</th><th class="text-right">Revenue</th></tr></thead>
+      <tbody>
+        {% for v in vehicle_breakdown %}
+        <tr>
+          <td><strong>{{ v.registration }}</strong></td>
+          <td>{{ v.make }} {{ v.model }}</td>
+          <td>{{ v.log_days }}</td>
+          <td class="text-right">{{ v.revenue|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No revenue data for the selected period.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

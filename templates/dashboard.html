@@ -1,0 +1,157 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+
+{% block scripts %}
+<script>
+  window.REVENUE_7DAYS = {{ revenue_chart|safe }};
+</script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Good day, {{ current_user.username.title() }} 👋</h1>
+    <div class="subtitle">{{ today.strftime('%A, %d %B %Y') }} &mdash; Fleet Operations Overview</div>
+  </div>
+  <a href="{{ url_for('daily_log_add') }}" class="btn btn-primary">
+    <i data-feather="plus"></i> Record Daily Log
+  </a>
+</div>
+
+<!-- KPI Cards -->
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-icon">💵</div>
+    <div class="kpi-label">Today's Revenue</div>
+    <div class="kpi-value">{{ today_revenue|currency }}</div>
+    <div class="kpi-sub">Gross collections today</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-icon">📈</div>
+    <div class="kpi-label">Month Revenue</div>
+    <div class="kpi-value">{{ month_revenue|currency }}</div>
+    <div class="kpi-sub">{{ today.strftime('%B %Y') }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-icon">📉</div>
+    <div class="kpi-label">Month Expenses</div>
+    <div class="kpi-value">{{ month_expenses|currency }}</div>
+    <div class="kpi-sub">Fuel + Maintenance</div>
+  </div>
+  <div class="kpi-card {% if month_profit >= 0 %}kpi-green{% else %}kpi-red{% endif %}">
+    <div class="kpi-icon">💰</div>
+    <div class="kpi-label">Net Profit (Month)</div>
+    <div class="kpi-value">{{ month_profit|currency }}</div>
+    <div class="kpi-sub">After all operational costs</div>
+  </div>
+  <div class="kpi-card kpi-teal">
+    <div class="kpi-icon">🚌</div>
+    <div class="kpi-label">Active Vehicles</div>
+    <div class="kpi-value">{{ active_vehicles }}</div>
+    <div class="kpi-sub">In service today</div>
+  </div>
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-icon">👤</div>
+    <div class="kpi-label">Active Crew</div>
+    <div class="kpi-value">{{ active_drivers }}</div>
+    <div class="kpi-sub">Drivers & conductors</div>
+  </div>
+</div>
+
+<!-- Alerts -->
+{% if expired_docs > 0 %}
+<div class="alert alert-danger mb-16">
+  <i data-feather="alert-circle" style="width:15px;height:15px;"></i>
+  <strong>{{ expired_docs }} document(s) EXPIRED</strong> &mdash;
+  <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">Review now &rarr;</a>
+</div>
+{% endif %}
+{% if expiring_docs > 0 %}
+<div class="alert alert-warning mb-16">
+  <i data-feather="alert-triangle" style="width:15px;height:15px;"></i>
+  <strong>{{ expiring_docs }} document(s)</strong> expiring within 30 days &mdash;
+  <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">View compliance &rarr;</a>
+</div>
+{% endif %}
+
+<!-- Charts Row -->
+<div class="chart-grid mb-24">
+  <div class="card">
+    <div class="card-header">
+      <h3>Revenue — Last 7 Days</h3>
+    </div>
+    <div class="card-body">
+      <div class="chart-wrap"><canvas id="chart7Days"></canvas></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3>Expense Breakdown (MTD)</h3>
+    </div>
+    <div class="card-body">
+      <div class="chart-wrap"><canvas id="chartExpenses"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<div class="chart-grid mb-24">
+  <div class="card">
+    <div class="card-header">
+      <h3>Revenue vs Expenses — 6 Months</h3>
+    </div>
+    <div class="card-body">
+      <div class="chart-wrap"><canvas id="chartMonthly"></canvas></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">
+      <h3>Vehicle Performance (MTD)</h3>
+    </div>
+    <div class="card-body">
+      <div class="chart-wrap" style="height:260px;"><canvas id="chartVehicles"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- Recent Activity -->
+<div class="card">
+  <div class="card-header">
+    <h3>Recent Daily Logs</h3>
+    <a href="{{ url_for('daily_logs') }}" class="btn btn-outline btn-sm">View all</a>
+  </div>
+  {% if recent_logs %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Vehicle</th>
+          <th>Driver</th>
+          <th>Route</th>
+          <th>Trips</th>
+          <th class="text-right">Gross Revenue</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in recent_logs %}
+        <tr>
+          <td>{{ log.log_date.strftime('%d %b %Y') }}</td>
+          <td><a href="{{ url_for('vehicle_detail', vid=log.vehicle_id) }}">{{ log.vehicle.registration }}</a></td>
+          <td>{{ log.driver.name }}</td>
+          <td>{{ log.route.name }}</td>
+          <td>{{ log.trips_completed }}</td>
+          <td class="text-right"><strong>{{ log.gross_revenue|currency }}</strong></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">📋</div>
+    <p>No daily logs yet. <a href="{{ url_for('daily_log_add') }}">Record the first log</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+{% block title %}Vehicles{% endblock %}
+{% block page_title %}Fleet Vehicles{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Vehicles</h1>
+    <div class="subtitle">{{ vehicles|length }} vehicle(s) registered in the fleet</div>
+  </div>
+  <a href="{{ url_for('vehicle_add') }}" class="btn btn-primary">
+    <i data-feather="plus"></i> Register Vehicle
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    {% if vehicles %}
+    <table>
+      <thead>
+        <tr>
+          <th>Registration</th>
+          <th>Vehicle</th>
+          <th>Year</th>
+          <th>Acquisition Cost</th>
+          <th>Total Revenue</th>
+          <th>Status</th>
+          <th>Documents</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in vehicles %}
+        <tr>
+          <td><a href="{{ url_for('vehicle_detail', vid=v.id) }}"><strong>{{ v.registration }}</strong></a></td>
+          <td>{{ v.make }} {{ v.model }}</td>
+          <td>{{ v.year }}</td>
+          <td>{{ v.acquisition_cost|currency }}</td>
+          <td><strong class="text-success">{{ v.total_revenue|currency }}</strong></td>
+          <td>
+            {% if v.status == 'active' %}
+              <span class="badge badge-green"><span class="dot dot-green"></span>Active</span>
+            {% elif v.status == 'maintenance' %}
+              <span class="badge badge-amber"><span class="dot dot-amber"></span>Maintenance</span>
+            {% else %}
+              <span class="badge badge-gray"><span class="dot dot-gray"></span>Inactive</span>
+            {% endif %}
+          </td>
+          <td>
+            {% set has_expired = v.documents|selectattr('status', 'equalto', 'expired')|list %}
+            {% set has_warning = v.documents|selectattr('status', 'equalto', 'warning')|list %}
+            {% if has_expired %}
+              <span class="badge badge-red">{{ has_expired|length }} expired</span>
+            {% elif has_warning %}
+              <span class="badge badge-amber">{{ has_warning|length }} expiring</span>
+            {% else %}
+              <span class="badge badge-green">{{ v.documents|length }} valid</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="actions">
+              <a href="{{ url_for('vehicle_detail', vid=v.id) }}" class="btn btn-outline btn-xs">View</a>
+              <a href="{{ url_for('vehicle_edit', vid=v.id) }}" class="btn btn-outline btn-xs">Edit</a>
+              {% if current_user.role == 'admin' %}
+              <form method="POST" action="{{ url_for('vehicle_delete', vid=v.id) }}"
+                    data-confirm="Delete vehicle {{ v.registration }}? This will also delete all related logs.">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">🚌</div>
+      <p>No vehicles registered yet. <a href="{{ url_for('vehicle_add') }}">Register the first vehicle</a>.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,63 @@
+{% extends 'base.html' %}
+{% block title %}Routes{% endblock %}
+{% block page_title %}Fleet — Routes{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Routes</h1>
+    <div class="subtitle">{{ routes|length }} route(s) configured</div>
+  </div>
+  <a href="{{ url_for('route_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Route</a>
+</div>
+
+<div class="card">
+  {% if routes %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Route Name</th>
+          <th>From</th>
+          <th>To</th>
+          <th>Distance (km)</th>
+          <th>Fare Rate</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in routes %}
+        <tr>
+          <td><strong>{{ r.name }}</strong></td>
+          <td>{{ r.start_point }}</td>
+          <td>{{ r.end_point }}</td>
+          <td>{{ r.distance_km or '—' }}</td>
+          <td>{{ r.fare_rate|currency }}</td>
+          <td>
+            {% if r.status == 'active' %}<span class="badge badge-green">Active</span>
+            {% else %}<span class="badge badge-gray">Inactive</span>{% endif %}
+          </td>
+          <td>
+            <div class="actions">
+              <a href="{{ url_for('route_edit', rid=r.id) }}" class="btn btn-outline btn-xs">Edit</a>
+              {% if current_user.role == 'admin' %}
+              <form method="POST" action="{{ url_for('route_delete', rid=r.id) }}" data-confirm="Delete route '{{ r.name }}'?">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🗺️</div>
+    <p>No routes configured yet. <a href="{{ url_for('route_add') }}">Add the first route</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

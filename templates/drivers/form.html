@@ -1,0 +1,63 @@
+{% extends 'base.html' %}
+{% block title %}{{ action }} Crew Member{% endblock %}
+{% block page_title %}{{ action }} Crew Member{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ action }} Crew Member</h1>
+    <div class="subtitle">Driver or conductor profile</div>
+  </div>
+  <a href="{{ url_for('drivers') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Crew</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Full Name<span class="req">*</span></label>
+          <input type="text" name="name" required value="{{ driver.name if driver else '' }}">
+        </div>
+        <div class="form-group">
+          <label>License Number<span class="req">*</span></label>
+          <input type="text" name="license_number" required value="{{ driver.license_number if driver else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Role<span class="req">*</span></label>
+          <select name="role">
+            <option value="driver" {% if driver and driver.role=='driver' %}selected{% endif %}>Driver</option>
+            <option value="conductor" {% if driver and driver.role=='conductor' %}selected{% endif %}>Conductor</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Phone</label>
+          <input type="text" name="phone" value="{{ driver.phone if driver else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" name="email" value="{{ driver.email if driver else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Commission Rate Override (%)</label>
+          <input type="number" name="commission_rate" step="0.1" min="0" max="100"
+                 placeholder="Leave blank for system default"
+                 value="{{ (driver.commission_rate*100)|round(1) if driver and driver.commission_rate else '' }}">
+          <div class="form-hint">Default: 15% for drivers, 10% for conductors</div>
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select name="status">
+            <option value="active" {% if driver and driver.status=='active' %}selected{% endif %}>Active</option>
+            <option value="inactive" {% if driver and driver.status=='inactive' %}selected{% endif %}>Inactive</option>
+          </select>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save</button>
+        <a href="{{ url_for('drivers') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}TransFleet ERP{% endblock %} | T-Tech Solutions</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
+  {% block head %}{% endblock %}
+</head>
+<body>
+
+<div class="app-layout">
+
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar" id="sidebar">
+    <a class="sidebar-brand" href="{{ url_for('dashboard') }}">
+      <div class="brand-icon">🚌</div>
+      <div>
+        <div class="brand-name">TransFleet ERP</div>
+        <div class="brand-sub">T-Tech Solutions</div>
+      </div>
+    </a>
+
+    <div class="nav-section">
+      <div class="nav-section-label">Overview</div>
+      <a href="{{ url_for('dashboard') }}" class="nav-item {% if request.endpoint == 'dashboard' %}active{% endif %}">
+        <i data-feather="grid"></i> Dashboard
+      </a>
+    </div>
+
+    {% if current_user.has_permission('vehicles') or current_user.has_permission('drivers') or current_user.has_permission('routes') %}
+    <div class="nav-section">
+      <div class="nav-section-label">Fleet</div>
+      {% if current_user.has_permission('vehicles') %}
+      <a href="{{ url_for('vehicles') }}" class="nav-item {% if 'vehicle' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="truck"></i> Vehicles
+      </a>
+      {% endif %}
+      {% if current_user.has_permission('drivers') %}
+      <a href="{{ url_for('drivers') }}" class="nav-item {% if 'driver' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="users"></i> Crew
+      </a>
+      {% endif %}
+      {% if current_user.has_permission('routes') %}
+      <a href="{{ url_for('routes_list') }}" class="nav-item {% if 'route' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="map"></i> Routes
+      </a>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if current_user.has_permission('daily_logs') or current_user.has_permission('fuel_logs') or current_user.has_permission('maintenance') %}
+    <div class="nav-section">
+      <div class="nav-section-label">Operations</div>
+      {% if current_user.has_permission('daily_logs') %}
+      <a href="{{ url_for('daily_logs') }}" class="nav-item {% if 'daily_log' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="clipboard"></i> Daily Logs
+      </a>
+      {% endif %}
+      {% if current_user.has_permission('fuel_logs') %}
+      <a href="{{ url_for('fuel_logs') }}" class="nav-item {% if 'fuel_log' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="droplet"></i> Fuel Logs
+      </a>
+      {% endif %}
+      {% if current_user.has_permission('maintenance') %}
+      <a href="{{ url_for('maintenance_logs') }}" class="nav-item {% if 'maintenance_log' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="tool"></i> Maintenance
+      </a>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if current_user.has_permission('reports') %}
+    <div class="nav-section">
+      <div class="nav-section-label">Finance</div>
+      <a href="{{ url_for('report_income') }}" class="nav-item {% if request.endpoint == 'report_income' %}active{% endif %}">
+        <i data-feather="bar-chart-2"></i> Income Statement
+      </a>
+      <a href="{{ url_for('report_payroll') }}" class="nav-item {% if request.endpoint == 'report_payroll' %}active{% endif %}">
+        <i data-feather="dollar-sign"></i> Payroll
+      </a>
+    </div>
+    {% endif %}
+
+    {% if current_user.has_permission('compliance') %}
+    <div class="nav-section">
+      <div class="nav-section-label">Compliance</div>
+      <a href="{{ url_for('compliance') }}" class="nav-item {% if request.endpoint == 'compliance' %}active{% endif %}">
+        <i data-feather="shield"></i> Documents
+        {% set exp_count = expired_docs_count|default(0) %}
+        {% if exp_count > 0 %}<span class="nav-badge">{{ exp_count }}</span>{% endif %}
+      </a>
+    </div>
+    {% endif %}
+
+    {% if current_user.role == 'admin' %}
+    <div class="nav-section">
+      <div class="nav-section-label">Admin</div>
+      <a href="{{ url_for('users') }}" class="nav-item {% if 'user' in (request.endpoint or '') and request.endpoint != 'logout' %}active{% endif %}">
+        <i data-feather="settings"></i> User Management
+      </a>
+      <a href="{{ url_for('audit_log') }}" class="nav-item {% if request.endpoint == 'audit_log' %}active{% endif %}">
+        <i data-feather="activity"></i> Audit Log
+      </a>
+    </div>
+    {% endif %}
+  </aside>
+
+  <!-- ── Main ── -->
+  <div class="main">
+
+    <!-- Topbar -->
+    <header class="topbar">
+      <div class="topbar-title">{% block page_title %}{% endblock %}</div>
+      <div class="topbar-user">
+        <div class="avatar">{{ current_user.username[0].upper() }}</div>
+        <span>{{ current_user.username }}</span>
+        <span class="badge badge-blue">{{ current_user.role }}</span>
+        <a href="{{ url_for('logout') }}" class="btn-logout">Sign out</a>
+      </div>
+    </header>
+
+    <!-- Flash messages -->
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="alerts" style="padding-top:12px;">
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }}">
+              <i data-feather="{% if category == 'success' %}check-circle{% elif category == 'danger' %}x-circle{% elif category == 'warning' %}alert-triangle{% else %}info{% endif %}" style="width:15px;height:15px;"></i>
+              {{ message }}
+            </div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <!-- Content -->
+    <main class="content">
+      {% block content %}{% endblock %}
+    </main>
+
+  </div><!-- /main -->
+</div><!-- /app-layout -->
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+{% block scripts %}{% endblock %}
+
+</body>
+</html>

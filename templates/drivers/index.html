@@ -1,0 +1,63 @@
+{% extends 'base.html' %}
+{% block title %}Crew{% endblock %}
+{% block page_title %}Fleet — Crew{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Drivers & Conductors</h1>
+    <div class="subtitle">{{ drivers|length }} crew member(s) registered</div>
+  </div>
+  <a href="{{ url_for('driver_add') }}" class="btn btn-primary"><i data-feather="user-plus"></i> Register Crew Member</a>
+</div>
+
+<div class="card">
+  {% if drivers %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>License No.</th>
+          <th>Role</th>
+          <th>Phone</th>
+          <th>Commission Rate</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in drivers %}
+        <tr>
+          <td><strong>{{ d.name }}</strong></td>
+          <td>{{ d.license_number }}</td>
+          <td><span class="badge badge-blue">{{ d.role|title }}</span></td>
+          <td>{{ d.phone or '—' }}</td>
+          <td>{% if d.commission_rate %}{{ (d.commission_rate*100)|round(1) }}% (custom){% else %}Default{% endif %}</td>
+          <td>
+            {% if d.status == 'active' %}<span class="badge badge-green"><span class="dot dot-green"></span>Active</span>
+            {% else %}<span class="badge badge-gray"><span class="dot dot-gray"></span>Inactive</span>{% endif %}
+          </td>
+          <td>
+            <div class="actions">
+              <a href="{{ url_for('driver_edit', did=d.id) }}" class="btn btn-outline btn-xs">Edit</a>
+              {% if current_user.role == 'admin' %}
+              <form method="POST" action="{{ url_for('driver_delete', did=d.id) }}" data-confirm="Remove {{ d.name }} from crew records?">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">👤</div>
+    <p>No crew registered yet. <a href="{{ url_for('driver_add') }}">Register the first crew member</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
