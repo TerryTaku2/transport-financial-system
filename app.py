@@ -25,7 +25,7 @@ from sqlalchemy import func
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=os.environ.get('SECRET_KEY', 'trp-erp-dev-secret-2026'),
-    SQLALCHEMY_DATABASE_URI='sqlite:///transport_erp.db',
+    SQLALCHEMY_DATABASE_URI=os.environ.get('DATABASE_URL', 'sqlite:///transport_erp.db'),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     COMMISSION_DRIVER_RATE=0.15,
     COMMISSION_CONDUCTOR_RATE=0.10,
