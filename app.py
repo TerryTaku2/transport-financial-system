@@ -393,6 +393,37 @@ def handle_form_errors(f):
     return decorated
 
 
+def query_date_range(default_from=None, default_to=None):
+    """Read date_from/date_to from the query string for report pages.
+    Falls back to defaults on missing/invalid input and auto-swaps a
+    reversed range, so any date (or combination) can be requested
+    without raising — the caller always gets a usable (from, to) pair."""
+    today = date.today()
+    default_from = default_from or today.replace(day=1)
+    default_to = default_to or today
+
+    from_str = request.args.get('date_from', '').strip()
+    to_str = request.args.get('date_to', '').strip()
+
+    try:
+        df = parse_date(from_str) if from_str else default_from
+    except ValueError:
+        flash(f'"{from_str}" is not a valid start date — showing {default_from} instead.', 'warning')
+        df = default_from
+
+    try:
+        dt = parse_date(to_str) if to_str else default_to
+    except ValueError:
+        flash(f'"{to_str}" is not a valid end date — showing {default_to} instead.', 'warning')
+        dt = default_to
+
+    if df > dt:
+        df, dt = dt, df
+        flash('Start date was after end date — the range was swapped.', 'warning')
+
+    return df, dt
+
+
 # ─────────────────────────────────────────────────────────────
 # Auth routes
 # ─────────────────────────────────────────────────────────────
@@ -798,9 +829,17 @@ def daily_logs():
 
     q = DailyLog.query
     if date_from:
-        q = q.filter(DailyLog.log_date >= parse_date(date_from))
+        try:
+            q = q.filter(DailyLog.log_date >= parse_date(date_from))
+        except ValueError:
+            flash(f'"{date_from}" is not a valid start date — filter ignored.', 'warning')
+            date_from = ''
     if date_to:
-        q = q.filter(DailyLog.log_date <= parse_date(date_to))
+        try:
+            q = q.filter(DailyLog.log_date <= parse_date(date_to))
+        except ValueError:
+            flash(f'"{date_to}" is not a valid end date — filter ignored.', 'warning')
+            date_to = ''
     if vehicle_id:
         q = q.filter(DailyLog.vehicle_id == vehicle_id)
 
@@ -1061,10 +1100,8 @@ def crew_log():
 @permission_required('crew_portal')
 def crew_leaderboard():
     today = date.today()
-    date_from_str = request.args.get('date_from', today.replace(day=1).strftime('%Y-%m-%d'))
-    date_to_str = request.args.get('date_to', today.strftime('%Y-%m-%d'))
-    df = parse_date(date_from_str)
-    dt = parse_date(date_to_str)
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
 
     dr_rate = app.config['COMMISSION_DRIVER_RATE']
     co_rate = app.config['COMMISSION_CONDUCTOR_RATE']
@@ -1117,13 +1154,9 @@ def crew_leaderboard():
 @login_required
 @permission_required('reports')
 def report_income():
-    today = date.today()
-    date_from_str = request.args.get('date_from', today.replace(day=1).strftime('%Y-%m-%d'))
-    date_to_str = request.args.get('date_to', today.strftime('%Y-%m-%d'))
     vehicle_id = request.args.get('vehicle_id', '')
-
-    df = parse_date(date_from_str)
-    dt = parse_date(date_to_str)
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
 
     rev_q = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
         DailyLog.log_date.between(df, dt))
@@ -1168,12 +1201,8 @@ def report_income():
 @login_required
 @permission_required('reports')
 def report_payroll():
-    today = date.today()
-    date_from_str = request.args.get('date_from', today.replace(day=1).strftime('%Y-%m-%d'))
-    date_to_str = request.args.get('date_to', today.strftime('%Y-%m-%d'))
-
-    df = parse_date(date_from_str)
-    dt = parse_date(date_to_str)
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
 
     dr_rate = app.config['COMMISSION_DRIVER_RATE']
     co_rate = app.config['COMMISSION_CONDUCTOR_RATE']
@@ -1219,10 +1248,14 @@ def export_daily_logs():
     df = request.args.get('date_from', '')
     dt = request.args.get('date_to', '')
     q = DailyLog.query.order_by(DailyLog.log_date.desc())
-    if df:
-        q = q.filter(DailyLog.log_date >= parse_date(df))
-    if dt:
-        q = q.filter(DailyLog.log_date <= parse_date(dt))
+    try:
+        if df:
+            q = q.filter(DailyLog.log_date >= parse_date(df))
+        if dt:
+            q = q.filter(DailyLog.log_date <= parse_date(dt))
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('daily_logs'))
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -1246,11 +1279,8 @@ def export_daily_logs():
 @login_required
 @permission_required('reports')
 def export_income():
-    today = date.today()
-    df_str = request.args.get('date_from', today.replace(day=1).strftime('%Y-%m-%d'))
-    dt_str = request.args.get('date_to', today.strftime('%Y-%m-%d'))
-    df = parse_date(df_str)
-    dt = parse_date(dt_str)
+    df, dt = query_date_range()
+    df_str, dt_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
 
     daily = DailyLog.query.filter(DailyLog.log_date.between(df, dt)).order_by(DailyLog.log_date).all()
     fuel = FuelLog.query.filter(FuelLog.log_date.between(df, dt)).order_by(FuelLog.log_date).all()
