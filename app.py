@@ -337,7 +337,60 @@ def log_audit(action, table_name=None, record_id=None, description=None):
 
 
 def parse_date(s):
-    return datetime.strptime(s, '%Y-%m-%d').date() if s else None
+    try:
+        return datetime.strptime(s, '%Y-%m-%d').date() if s else None
+    except ValueError:
+        raise ValueError(f'"{s}" is not a valid date (expected YYYY-MM-DD).')
+
+
+def form_float(form, field, label=None, required=True, default=None, min_value=None):
+    label = label or field.replace('_', ' ').capitalize()
+    raw = (form.get(field) or '').strip()
+    if not raw:
+        if required:
+            raise ValueError(f'{label} is required.')
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        raise ValueError(f'{label} must be a number.')
+    if min_value is not None and value < min_value:
+        raise ValueError(f'{label} cannot be less than {min_value}.')
+    return value
+
+
+def form_int(form, field, label=None, required=True, default=None, min_value=None):
+    label = label or field.replace('_', ' ').capitalize()
+    raw = (form.get(field) or '').strip()
+    if not raw:
+        if required:
+            raise ValueError(f'{label} is required.')
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise ValueError(f'{label} must be a whole number.')
+    if min_value is not None and value < min_value:
+        raise ValueError(f'{label} cannot be less than {min_value}.')
+    return value
+
+
+def handle_form_errors(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if request.method == 'POST':
+            try:
+                return f(*args, **kwargs)
+            except KeyError as e:
+                db.session.rollback()
+                flash(f'Missing required field: {e}', 'danger')
+                return redirect(request.url)
+            except ValueError as e:
+                db.session.rollback()
+                flash(str(e), 'danger')
+                return redirect(request.url)
+        return f(*args, **kwargs)
+    return decorated
 
 
 # ─────────────────────────────────────────────────────────────
@@ -470,14 +523,15 @@ def vehicles():
 @app.route('/vehicles/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('vehicles')
+@handle_form_errors
 def vehicle_add():
     if request.method == 'POST':
         v = Vehicle(
             registration=request.form['registration'].upper().strip(),
             make=request.form['make'].strip(),
             model=request.form['model'].strip(),
-            year=int(request.form['year']),
-            acquisition_cost=float(request.form.get('acquisition_cost') or 0),
+            year=form_int(request.form, 'year', min_value=1980),
+            acquisition_cost=form_float(request.form, 'acquisition_cost', required=False, default=0, min_value=0),
             status=request.form.get('status', 'active'),
         )
         db.session.add(v)
@@ -506,14 +560,15 @@ def vehicle_detail(vid):
 @app.route('/vehicles/<int:vid>/edit', methods=['GET', 'POST'])
 @login_required
 @permission_required('vehicles')
+@handle_form_errors
 def vehicle_edit(vid):
     v = Vehicle.query.get_or_404(vid)
     if request.method == 'POST':
         v.registration = request.form['registration'].upper().strip()
         v.make = request.form['make'].strip()
         v.model = request.form['model'].strip()
-        v.year = int(request.form['year'])
-        v.acquisition_cost = float(request.form.get('acquisition_cost') or 0)
+        v.year = form_int(request.form, 'year', min_value=1980)
+        v.acquisition_cost = form_float(request.form, 'acquisition_cost', required=False, default=0, min_value=0)
         v.status = request.form.get('status', 'active')
         log_audit('UPDATE', 'vehicles', v.id, f'Updated vehicle {v.registration}')
         db.session.commit()
@@ -538,6 +593,7 @@ def vehicle_delete(vid):
 @app.route('/vehicles/<int:vehicle_id>/documents/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('vehicles')
+@handle_form_errors
 def document_add(vehicle_id):
     vehicle = Vehicle.query.get_or_404(vehicle_id)
     if request.method == 'POST':
@@ -585,16 +641,17 @@ def drivers():
 @app.route('/drivers/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('drivers')
+@handle_form_errors
 def driver_add():
     if request.method == 'POST':
-        rate_input = request.form.get('commission_rate', '').strip()
+        rate_input = form_float(request.form, 'commission_rate', required=False, min_value=0)
         d = Driver(
             name=request.form['name'].strip(),
             license_number=request.form['license_number'].strip(),
             phone=request.form.get('phone', '').strip(),
             email=request.form.get('email', '').strip(),
             role=request.form.get('role', 'driver'),
-            commission_rate=float(rate_input) / 100 if rate_input else None,
+            commission_rate=rate_input / 100 if rate_input is not None else None,
             status=request.form.get('status', 'active'),
         )
         db.session.add(d)
@@ -628,16 +685,17 @@ def driver_add():
 @app.route('/drivers/<int:did>/edit', methods=['GET', 'POST'])
 @login_required
 @permission_required('drivers')
+@handle_form_errors
 def driver_edit(did):
     d = Driver.query.get_or_404(did)
     if request.method == 'POST':
-        rate_input = request.form.get('commission_rate', '').strip()
+        rate_input = form_float(request.form, 'commission_rate', required=False, min_value=0)
         d.name = request.form['name'].strip()
         d.license_number = request.form['license_number'].strip()
         d.phone = request.form.get('phone', '').strip()
         d.email = request.form.get('email', '').strip()
         d.role = request.form.get('role', 'driver')
-        d.commission_rate = float(rate_input) / 100 if rate_input else None
+        d.commission_rate = rate_input / 100 if rate_input is not None else None
         d.status = request.form.get('status', 'active')
         log_audit('UPDATE', 'drivers', d.id, f'Updated driver {d.name}')
         db.session.commit()
@@ -673,14 +731,15 @@ def routes_list():
 @app.route('/routes/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('routes')
+@handle_form_errors
 def route_add():
     if request.method == 'POST':
         r = Route(
             name=request.form['name'].strip(),
             start_point=request.form['start_point'].strip(),
             end_point=request.form['end_point'].strip(),
-            distance_km=float(request.form['distance_km']) if request.form.get('distance_km') else None,
-            fare_rate=float(request.form['fare_rate']),
+            distance_km=form_float(request.form, 'distance_km', required=False, min_value=0),
+            fare_rate=form_float(request.form, 'fare_rate', min_value=0),
             status=request.form.get('status', 'active'),
         )
         db.session.add(r)
@@ -695,14 +754,15 @@ def route_add():
 @app.route('/routes/<int:rid>/edit', methods=['GET', 'POST'])
 @login_required
 @permission_required('routes')
+@handle_form_errors
 def route_edit(rid):
     r = Route.query.get_or_404(rid)
     if request.method == 'POST':
         r.name = request.form['name'].strip()
         r.start_point = request.form['start_point'].strip()
         r.end_point = request.form['end_point'].strip()
-        r.distance_km = float(request.form['distance_km']) if request.form.get('distance_km') else None
-        r.fare_rate = float(request.form['fare_rate'])
+        r.distance_km = form_float(request.form, 'distance_km', required=False, min_value=0)
+        r.fare_rate = form_float(request.form, 'fare_rate', min_value=0)
         r.status = request.form.get('status', 'active')
         log_audit('UPDATE', 'routes', r.id, f'Updated route {r.name}')
         db.session.commit()
@@ -753,16 +813,17 @@ def daily_logs():
 @app.route('/logs/daily/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('daily_logs')
+@handle_form_errors
 def daily_log_add():
     if request.method == 'POST':
         log = DailyLog(
-            vehicle_id=int(request.form['vehicle_id']),
-            driver_id=int(request.form['driver_id']),
-            conductor_id=int(request.form['conductor_id']) if request.form.get('conductor_id') else None,
-            route_id=int(request.form['route_id']),
+            vehicle_id=form_int(request.form, 'vehicle_id'),
+            driver_id=form_int(request.form, 'driver_id'),
+            conductor_id=form_int(request.form, 'conductor_id', required=False),
+            route_id=form_int(request.form, 'route_id'),
             log_date=parse_date(request.form['log_date']),
-            trips_completed=int(request.form.get('trips_completed') or 0),
-            gross_revenue=float(request.form['gross_revenue']),
+            trips_completed=form_int(request.form, 'trips_completed', required=False, default=0, min_value=0),
+            gross_revenue=form_float(request.form, 'gross_revenue', min_value=0),
             notes=request.form.get('notes', '').strip(),
             created_by=current_user.id,
         )
@@ -785,16 +846,17 @@ def daily_log_add():
 @app.route('/logs/daily/<int:lid>/edit', methods=['GET', 'POST'])
 @login_required
 @permission_required('daily_logs')
+@handle_form_errors
 def daily_log_edit(lid):
     log = DailyLog.query.get_or_404(lid)
     if request.method == 'POST':
-        log.vehicle_id = int(request.form['vehicle_id'])
-        log.driver_id = int(request.form['driver_id'])
-        log.conductor_id = int(request.form['conductor_id']) if request.form.get('conductor_id') else None
-        log.route_id = int(request.form['route_id'])
+        log.vehicle_id = form_int(request.form, 'vehicle_id')
+        log.driver_id = form_int(request.form, 'driver_id')
+        log.conductor_id = form_int(request.form, 'conductor_id', required=False)
+        log.route_id = form_int(request.form, 'route_id')
         log.log_date = parse_date(request.form['log_date'])
-        log.trips_completed = int(request.form.get('trips_completed') or 0)
-        log.gross_revenue = float(request.form['gross_revenue'])
+        log.trips_completed = form_int(request.form, 'trips_completed', required=False, default=0, min_value=0)
+        log.gross_revenue = form_float(request.form, 'gross_revenue', min_value=0)
         log.notes = request.form.get('notes', '').strip()
         log.updated_by = current_user.id
         log.updated_at = datetime.now(timezone.utc)
@@ -844,17 +906,18 @@ def fuel_logs():
 @app.route('/logs/fuel/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('fuel_logs')
+@handle_form_errors
 def fuel_log_add():
     if request.method == 'POST':
-        liters = float(request.form['liters'])
-        cpl = float(request.form['cost_per_liter'])
+        liters = form_float(request.form, 'liters', min_value=0)
+        cpl = form_float(request.form, 'cost_per_liter', label='Cost per liter', min_value=0)
         log = FuelLog(
-            vehicle_id=int(request.form['vehicle_id']),
+            vehicle_id=form_int(request.form, 'vehicle_id'),
             log_date=parse_date(request.form['log_date']),
             liters=liters,
             cost_per_liter=cpl,
             total_cost=liters * cpl,
-            odometer=float(request.form['odometer']) if request.form.get('odometer') else None,
+            odometer=form_float(request.form, 'odometer', required=False, min_value=0),
             supplier=request.form.get('supplier', '').strip(),
             notes=request.form.get('notes', '').strip(),
             created_by=current_user.id,
@@ -905,12 +968,13 @@ def maintenance_logs():
 @app.route('/logs/maintenance/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('maintenance')
+@handle_form_errors
 def maintenance_log_add():
     if request.method == 'POST':
-        parts = float(request.form.get('parts_cost') or 0)
-        labor = float(request.form.get('labor_cost') or 0)
+        parts = form_float(request.form, 'parts_cost', required=False, default=0, min_value=0)
+        labor = form_float(request.form, 'labor_cost', required=False, default=0, min_value=0)
         log = MaintenanceLog(
-            vehicle_id=int(request.form['vehicle_id']),
+            vehicle_id=form_int(request.form, 'vehicle_id'),
             log_date=parse_date(request.form['log_date']),
             description=request.form['description'].strip(),
             parts_cost=parts,
@@ -954,6 +1018,7 @@ def maintenance_log_delete(lid):
 @app.route('/crew/log', methods=['GET', 'POST'])
 @login_required
 @permission_required('crew_portal')
+@handle_form_errors
 def crew_log():
     my_driver = current_user.linked_driver
     if request.method == 'POST':
@@ -961,15 +1026,14 @@ def crew_log():
         if not driver_id:
             flash('Please select your name as the driver or conductor.', 'danger')
             return redirect(url_for('crew_log'))
-        conductor_id = request.form.get('conductor_id') or None
         log = DailyLog(
-            vehicle_id=int(request.form['vehicle_id']),
-            driver_id=int(driver_id),
-            conductor_id=int(conductor_id) if conductor_id else None,
-            route_id=int(request.form['route_id']),
+            vehicle_id=form_int(request.form, 'vehicle_id'),
+            driver_id=form_int(request.form, 'driver_id'),
+            conductor_id=form_int(request.form, 'conductor_id', required=False),
+            route_id=form_int(request.form, 'route_id'),
             log_date=parse_date(request.form['log_date']),
-            trips_completed=int(request.form.get('trips_completed') or 0),
-            gross_revenue=float(request.form['gross_revenue']),
+            trips_completed=form_int(request.form, 'trips_completed', required=False, default=0, min_value=0),
+            gross_revenue=form_float(request.form, 'gross_revenue', min_value=0),
             notes=request.form.get('notes', '').strip(),
             created_by=current_user.id,
         )
@@ -1273,14 +1337,18 @@ def users():
 @app.route('/users/add', methods=['GET', 'POST'])
 @login_required
 @admin_required
+@handle_form_errors
 def user_add():
     if request.method == 'POST':
+        password = request.form.get('password', '')
+        if len(password) < 6:
+            raise ValueError('Password must be at least 6 characters.')
         u = User(
             username=request.form['username'].strip().lower(),
             email=request.form['email'].strip().lower(),
             role=request.form.get('role', 'manager'),
         )
-        u.set_password(request.form['password'])
+        u.set_password(password)
         db.session.add(u)
         db.session.flush()
         log_audit('CREATE', 'users', u.id, f'Created user {u.username}')
