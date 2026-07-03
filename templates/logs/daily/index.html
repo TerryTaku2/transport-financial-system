@@ -61,6 +61,7 @@
               <a href="{{ url_for('daily_log_edit', lid=log.id) }}" class="btn btn-outline btn-xs">Edit</a>
               {% if current_user.role == 'admin' %}
               <form method="POST" action="{{ url_for('daily_log_delete', lid=log.id) }}" data-confirm="Delete this log entry?">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-danger btn-xs">Del</button>
               </form>
               {% endif %}

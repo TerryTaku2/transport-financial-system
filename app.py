@@ -8,27 +8,50 @@ import os
 import csv
 import io
 import json
+import secrets
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 
+from dotenv import load_dotenv
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, jsonify, make_response)
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (LoginManager, UserMixin, login_user, logout_user,
                          login_required, current_user)
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import func
+
+load_dotenv()
 
 # ─────────────────────────────────────────────────────────────
 # App Setup
 # ─────────────────────────────────────────────────────────────
+IS_PRODUCTION = os.environ.get('FLASK_ENV', 'production').lower() == 'production'
+
+secret_key = os.environ.get('SECRET_KEY')
+if not secret_key:
+    if IS_PRODUCTION:
+        raise RuntimeError(
+            'SECRET_KEY environment variable must be set in production. '
+            'Set FLASK_ENV=development for local work with an auto-generated key.'
+        )
+    secret_key = secrets.token_hex(32)
+    print('WARNING: SECRET_KEY not set — using a random development key '
+          '(sessions will not persist across restarts).')
+
 app = Flask(__name__)
 app.config.update(
-    SECRET_KEY=os.environ.get('SECRET_KEY', 'trp-erp-dev-secret-2026'),
+    SECRET_KEY=secret_key,
     SQLALCHEMY_DATABASE_URI=os.environ.get('DATABASE_URL', 'sqlite:///transport_erp.db'),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     COMMISSION_DRIVER_RATE=0.15,
     COMMISSION_CONDUCTOR_RATE=0.10,
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',
+    SESSION_COOKIE_SECURE=IS_PRODUCTION,
 )
 
 db = SQLAlchemy(app)
@@ -36,6 +59,10 @@ login_manager = LoginManager(app)
 login_manager.login_view = 'login'
 login_manager.login_message = 'Please log in to access this page.'
 login_manager.login_message_category = 'warning'
+
+csrf = CSRFProtect(app)
+limiter = Limiter(get_remote_address, app=app, storage_uri='memory://',
+                  default_limits=[])
 
 
 # ─────────────────────────────────────────────────────────────
@@ -322,6 +349,7 @@ def index():
 
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit('10 per minute')
 def login():
     if current_user.is_authenticated:
         return redirect(first_permitted_url(current_user))
@@ -1332,6 +1360,7 @@ def audit_log():
 # ─────────────────────────────────────────────────────────────
 @app.route('/api/revenue/monthly')
 @login_required
+@permission_required('dashboard')
 def api_revenue_monthly():
     today = date.today()
     data = []
@@ -1360,6 +1389,7 @@ def api_revenue_monthly():
 
 @app.route('/api/vehicles/performance')
 @login_required
+@permission_required('dashboard')
 def api_vehicle_performance():
     today = date.today()
     month_start = today.replace(day=1)
@@ -1376,6 +1406,7 @@ def api_vehicle_performance():
 
 @app.route('/api/expenses/breakdown')
 @login_required
+@permission_required('dashboard')
 def api_expenses_breakdown():
     today = date.today()
     m_start = today.replace(day=1)
@@ -1390,6 +1421,7 @@ def api_expenses_breakdown():
 # WhatsApp Webhook stub
 # ─────────────────────────────────────────────────────────────
 @app.route('/api/whatsapp/webhook', methods=['POST'])
+@csrf.exempt
 def whatsapp_webhook():
     # Future: parse Twilio/Vonage WhatsApp messages and create daily logs
     return jsonify({'status': 'received'})
@@ -1427,11 +1459,13 @@ def migrate_db():
 
 def create_default_admin():
     if not User.query.filter_by(username='admin').first():
+        admin_password = os.environ.get('ADMIN_PASSWORD') or secrets.token_urlsafe(12)
         admin = User(username='admin', email='admin@transport.local', role='admin')
-        admin.set_password('admin123')
+        admin.set_password(admin_password)
         db.session.add(admin)
         db.session.commit()
-        print('Default admin created — username: admin  password: admin123')
+        print(f'Default admin created — username: admin  password: {admin_password}')
+        print('Log in and change this password immediately.')
 
 
 if __name__ == '__main__':
@@ -1439,4 +1473,6 @@ if __name__ == '__main__':
         db.create_all()
         migrate_db()
         create_default_admin()
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    debug_mode = not IS_PRODUCTION
+    host = os.environ.get('HOST', '127.0.0.1' if IS_PRODUCTION else '0.0.0.0')
+    app.run(debug=debug_mode, host=host, port=int(os.environ.get('PORT', 5000)))

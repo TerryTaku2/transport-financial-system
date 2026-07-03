@@ -54,6 +54,7 @@
             </td>
             <td>
               <form method="POST" action="{{ url_for('document_delete', did=doc.id) }}" data-confirm="Delete this document record?">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-danger btn-xs">Del</button>
               </form>
             </td>

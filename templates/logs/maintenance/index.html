@@ -45,6 +45,7 @@
           <td>
             {% if current_user.role == 'admin' %}
             <form method="POST" action="{{ url_for('maintenance_log_delete', lid=log.id) }}" data-confirm="Delete this maintenance log?">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-xs">Del</button>
             </form>
             {% endif %}

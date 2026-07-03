@@ -22,6 +22,7 @@
     {% endwith %}
 
     <form method="POST">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-group" style="margin-bottom:14px;">
         <label for="username">Username</label>
         <input type="text" id="username" name="username" required placeholder="Enter username" autofocus>

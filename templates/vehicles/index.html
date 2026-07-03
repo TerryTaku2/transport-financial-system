@@ -64,6 +64,7 @@
               {% if current_user.role == 'admin' %}
               <form method="POST" action="{{ url_for('vehicle_delete', vid=v.id) }}"
                     data-confirm="Delete vehicle {{ v.registration }}? This will also delete all related logs.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-danger btn-xs">Del</button>
               </form>
               {% endif %}

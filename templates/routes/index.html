@@ -43,6 +43,7 @@
               <a href="{{ url_for('route_edit', rid=r.id) }}" class="btn btn-outline btn-xs">Edit</a>
               {% if current_user.role == 'admin' %}
               <form method="POST" action="{{ url_for('route_delete', rid=r.id) }}" data-confirm="Delete route '{{ r.name }}'?">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-danger btn-xs">Del</button>
               </form>
               {% endif %}
