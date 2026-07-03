@@ -49,6 +49,7 @@ app.config.update(
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     COMMISSION_DRIVER_RATE=0.15,
     COMMISSION_CONDUCTOR_RATE=0.10,
+    VEHICLE_USEFUL_LIFE_YEARS=5,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=IS_PRODUCTION,
@@ -422,6 +423,93 @@ def query_date_range(default_from=None, default_to=None):
         flash('Start date was after end date — the range was swapped.', 'warning')
 
     return df, dt
+
+
+def query_single_date(param='as_of', default=None):
+    """Read a single date query param (e.g. 'as at' a point in time),
+    falling back to a default on missing/invalid input instead of raising."""
+    default = default or date.today()
+    raw = request.args.get(param, '').strip()
+    if not raw:
+        return default
+    try:
+        return parse_date(raw)
+    except ValueError:
+        flash(f'"{raw}" is not a valid date — showing {default} instead.', 'warning')
+        return default
+
+
+def compute_financial_position(as_of):
+    """Simplified statement of financial position as at a given date.
+
+    There is no cash/bank ledger or loan tracking in this system, so this
+    is an approximation, not a bookkeeping-grade statement:
+      - Vehicles are depreciated straight-line over VEHICLE_USEFUL_LIFE_YEARS,
+        dated from when each vehicle was added to the fleet (no separate
+        acquisition-date field exists).
+      - Cash & equivalents = cumulative net profit (revenue - fuel -
+        maintenance) since inception, same definition as the income
+        statement. It does not net out cash spent acquiring vehicles —
+        that spend is assumed funded by owner's capital (see below) so
+        the statement still balances.
+      - Owner's Capital is backed into as the total historical cost of
+        vehicles, since no capital-contribution or loan records exist to
+        say otherwise.
+      - Liabilities are always zero until loans/payables are tracked.
+    """
+    useful_life = app.config['VEHICLE_USEFUL_LIFE_YEARS']
+
+    vehicle_rows = []
+    total_cost = 0.0
+    total_accum_dep = 0.0
+    for v in Vehicle.query.order_by(Vehicle.registration).all():
+        acquired = v.created_at.date()
+        if acquired > as_of:
+            continue
+        years_in_service = (as_of - acquired).days / 365.25
+        accum_dep = min(v.acquisition_cost, v.acquisition_cost * years_in_service / useful_life) \
+            if useful_life else 0.0
+        nbv = v.acquisition_cost - accum_dep
+        vehicle_rows.append({
+            'vehicle': v,
+            'cost': v.acquisition_cost,
+            'accumulated_depreciation': accum_dep,
+            'net_book_value': nbv,
+            'years_in_service': years_in_service,
+        })
+        total_cost += v.acquisition_cost
+        total_accum_dep += accum_dep
+
+    total_nbv = total_cost - total_accum_dep
+
+    total_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+        DailyLog.log_date <= as_of).scalar() or 0
+    total_fuel = db.session.query(func.sum(FuelLog.total_cost)).filter(
+        FuelLog.log_date <= as_of).scalar() or 0
+    total_maintenance = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
+        MaintenanceLog.log_date <= as_of).scalar() or 0
+
+    net_operating_profit = total_revenue - total_fuel - total_maintenance
+    cash_and_equivalents = net_operating_profit
+    retained_earnings = net_operating_profit - total_accum_dep
+    owners_capital = total_cost
+    total_equity = owners_capital + retained_earnings
+    total_assets = total_nbv + cash_and_equivalents
+
+    return {
+        'as_of': as_of,
+        'useful_life': useful_life,
+        'vehicle_rows': vehicle_rows,
+        'total_cost': total_cost,
+        'total_accum_dep': total_accum_dep,
+        'total_nbv': total_nbv,
+        'cash_and_equivalents': cash_and_equivalents,
+        'total_assets': total_assets,
+        'total_liabilities': 0.0,
+        'owners_capital': owners_capital,
+        'retained_earnings': retained_earnings,
+        'total_equity': total_equity,
+    }
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1238,6 +1326,16 @@ def report_payroll():
         date_from=date_from_str, date_to=date_to_str)
 
 
+@app.route('/reports/financial-position')
+@login_required
+@permission_required('reports')
+def report_financial_position():
+    as_of = query_single_date('as_of')
+    fp = compute_financial_position(as_of)
+    return render_template('reports/financial_position.html',
+        as_of_str=as_of.strftime('%Y-%m-%d'), **fp)
+
+
 # ─────────────────────────────────────────────────────────────
 # CSV Exports
 # ─────────────────────────────────────────────────────────────
@@ -1329,6 +1427,56 @@ def export_income():
     resp = make_response(out.getvalue())
     resp.headers['Content-Type'] = 'text/csv'
     resp.headers['Content-Disposition'] = f'attachment; filename=income_{df_str}_to_{dt_str}.csv'
+    return resp
+
+
+@app.route('/reports/export/financial-position')
+@login_required
+@permission_required('reports')
+def export_financial_position():
+    as_of = query_single_date('as_of')
+    fp = compute_financial_position(as_of)
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(['STATEMENT OF FINANCIAL POSITION (SIMPLIFIED — SEE NOTES)'])
+    w.writerow([f'As at: {as_of}'])
+    w.writerow([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
+    w.writerow([])
+
+    w.writerow(['ASSETS'])
+    w.writerow(['Non-Current Assets — Vehicles'])
+    w.writerow(['Vehicle', 'Cost (USD)', 'Accumulated Depreciation (USD)', 'Net Book Value (USD)'])
+    for row in fp['vehicle_rows']:
+        w.writerow([row['vehicle'].registration, f"{row['cost']:.2f}",
+                    f"{row['accumulated_depreciation']:.2f}", f"{row['net_book_value']:.2f}"])
+    w.writerow(['', '', 'TOTAL VEHICLES (NBV)', f"{fp['total_nbv']:.2f}"])
+    w.writerow([])
+    w.writerow(['Current Assets'])
+    w.writerow(['Cash & Cash Equivalents', f"{fp['cash_and_equivalents']:.2f}"])
+    w.writerow([])
+    w.writerow(['TOTAL ASSETS', f"{fp['total_assets']:.2f}"])
+    w.writerow([])
+
+    w.writerow(['LIABILITIES'])
+    w.writerow(['TOTAL LIABILITIES', f"{fp['total_liabilities']:.2f}"])
+    w.writerow([])
+
+    w.writerow(['EQUITY'])
+    w.writerow(["Owner's Capital", f"{fp['owners_capital']:.2f}"])
+    w.writerow(['Retained Earnings', f"{fp['retained_earnings']:.2f}"])
+    w.writerow(['TOTAL EQUITY', f"{fp['total_equity']:.2f}"])
+    w.writerow([])
+    w.writerow(['TOTAL LIABILITIES + EQUITY', f"{fp['total_liabilities'] + fp['total_equity']:.2f}"])
+    w.writerow([])
+    w.writerow(['NOTE: Simplified statement — no cash/bank ledger or loan tracking exists in this '
+                 'system. Vehicles are assumed owner-funded and straight-line depreciated over '
+                 f"{fp['useful_life']} years from the date each was added to the fleet."])
+
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'text/csv'
+    resp.headers['Content-Disposition'] = f'attachment; filename=financial_position_{as_of}.csv'
     return resp
 
 

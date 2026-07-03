@@ -1,0 +1,122 @@
+{% extends 'base.html' %}
+{% block title %}Statement of Financial Position{% endblock %}
+{% block page_title %}Finance — Statement of Financial Position{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Statement of Financial Position</h1>
+    <div class="subtitle">As at {{ as_of_str }} &mdash; simplified statement, see notes below</div>
+  </div>
+  <a href="{{ url_for('export_financial_position', as_of=as_of_str) }}" class="btn btn-outline">
+    <i data-feather="download"></i> Export CSV
+  </a>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>As at</label>
+    <input type="date" name="as_of" value="{{ as_of_str }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Total Assets</div>
+    <div class="kpi-value">{{ total_assets|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Total Liabilities</div>
+    <div class="kpi-value">{{ total_liabilities|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Total Equity</div>
+    <div class="kpi-value">{{ total_equity|currency }}</div>
+  </div>
+</div>
+
+<div class="grid-2 mb-24">
+  <div class="card">
+    <div class="card-header"><h3>Assets</h3></div>
+    <div class="table-wrap">
+      <table>
+        <tbody>
+          <tr><td colspan="2"><strong>Non-Current Assets</strong></td></tr>
+          <tr><td>Vehicles at cost</td><td class="text-right">{{ total_cost|currency }}</td></tr>
+          <tr><td>Less: Accumulated depreciation</td><td class="text-right text-warning">({{ total_accum_dep|currency }})</td></tr>
+          <tr><td><strong>Net book value</strong></td><td class="text-right"><strong>{{ total_nbv|currency }}</strong></td></tr>
+          <tr><td colspan="2">&nbsp;</td></tr>
+          <tr><td colspan="2"><strong>Current Assets</strong></td></tr>
+          <tr><td>Cash &amp; cash equivalents</td><td class="text-right">{{ cash_and_equivalents|currency }}</td></tr>
+          <tr class="summary-row"><td>TOTAL ASSETS</td><td class="text-right">{{ total_assets|currency }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header"><h3>Liabilities &amp; Equity</h3></div>
+    <div class="table-wrap">
+      <table>
+        <tbody>
+          <tr><td colspan="2"><strong>Liabilities</strong></td></tr>
+          <tr><td>None recorded</td><td class="text-right">{{ total_liabilities|currency }}</td></tr>
+          <tr><td><strong>Total liabilities</strong></td><td class="text-right"><strong>{{ total_liabilities|currency }}</strong></td></tr>
+          <tr><td colspan="2">&nbsp;</td></tr>
+          <tr><td colspan="2"><strong>Equity</strong></td></tr>
+          <tr><td>Owner's capital</td><td class="text-right">{{ owners_capital|currency }}</td></tr>
+          <tr><td>Retained earnings</td><td class="text-right {% if retained_earnings < 0 %}text-danger{% endif %}">{{ retained_earnings|currency }}</td></tr>
+          <tr><td><strong>Total equity</strong></td><td class="text-right"><strong>{{ total_equity|currency }}</strong></td></tr>
+          <tr class="summary-row"><td>TOTAL LIABILITIES + EQUITY</td><td class="text-right">{{ (total_liabilities + total_equity)|currency }}</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Vehicle Depreciation Schedule</h3></div>
+  {% if vehicle_rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Vehicle</th>
+          <th>Years in Service</th>
+          <th class="text-right">Cost</th>
+          <th class="text-right">Accumulated Depreciation</th>
+          <th class="text-right">Net Book Value</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in vehicle_rows %}
+        <tr>
+          <td><strong>{{ row.vehicle.registration }}</strong> — {{ row.vehicle.make }} {{ row.vehicle.model }}</td>
+          <td>{{ '%.1f'|format(row.years_in_service) }}</td>
+          <td class="text-right">{{ row.cost|currency }}</td>
+          <td class="text-right text-warning">({{ row.accumulated_depreciation|currency }})</td>
+          <td class="text-right">{{ row.net_book_value|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No vehicles were on the fleet as at this date.</p></div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Notes &amp; Assumptions</h3></div>
+  <div style="padding:16px; font-size:0.9rem; color:var(--text-secondary,#64748b); line-height:1.6;">
+    <ul style="margin:0; padding-left:20px;">
+      <li>This is a simplified statement, not a bookkeeping-grade financial position — the system has no cash/bank ledger and no loan or accounts-payable tracking.</li>
+      <li>Vehicles are depreciated straight-line over {{ useful_life }} years, dated from when each vehicle was added to the fleet (no separate acquisition-date field exists).</li>
+      <li>Cash &amp; cash equivalents is cumulative net profit (revenue minus fuel minus maintenance) since inception — the same definition used on the Income Statement. It excludes driver/conductor commissions, which are not currently posted as an expense.</li>
+      <li>Owner's Capital is inferred as the total historical cost of vehicles, since no capital-contribution or loan records exist to say otherwise.</li>
+      <li>Liabilities will remain zero until loans or payables are tracked in the system.</li>
+    </ul>
+  </div>
+</div>
+{% endblock %}
