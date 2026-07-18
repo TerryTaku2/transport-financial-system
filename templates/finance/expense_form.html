@@ -19,8 +19,17 @@
         <div class="form-group">
           <label>Category<span class="req">*</span></label>
           <select name="category_id" required>
-            {% for c in categories %}
-            <option value="{{ c.id }}">{{ c.name }}</option>
+            {% for h in headings %}
+            {% if h.children %}
+            <optgroup label="{{ h.name }}">
+              <option value="{{ h.id }}">{{ h.name }} (general)</option>
+              {% for c in h.children|sort(attribute='name') %}
+              <option value="{{ c.id }}">{{ c.name }}</option>
+              {% endfor %}
+            </optgroup>
+            {% else %}
+            <option value="{{ h.id }}">{{ h.name }}</option>
+            {% endif %}
             {% endfor %}
           </select>
         </div>

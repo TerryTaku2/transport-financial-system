@@ -393,10 +393,21 @@ class OwnerDrawing(db.Model):
 
 
 class ExpenseCategory(db.Model):
+    """Two-level expense classification: a top-level heading (parent_id is
+    None, e.g. "Maintenance") with optional sub-headings under it (e.g.
+    "Engine Oil"). An Expense can be tagged to either a heading or a
+    sub-heading — the hierarchy is for organization, not enforcement."""
     __tablename__ = 'expense_categories'
     id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(60), unique=True, nullable=False)
+    name = db.Column(db.String(60), nullable=False)
+    parent_id = db.Column(db.Integer, db.ForeignKey('expense_categories.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    parent = db.relationship('ExpenseCategory', remote_side=[id], backref='children')
+
+    @property
+    def display_name(self):
+        return f'{self.parent.name} — {self.name}' if self.parent else self.name
 
 
 class Expense(db.Model):
@@ -410,7 +421,7 @@ class Expense(db.Model):
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
-    category = db.relationship('ExpenseCategory')
+    category = db.relationship('ExpenseCategory', backref='expenses')
     vehicle = db.relationship('Vehicle')
 
 
@@ -1857,6 +1868,10 @@ def report_budget():
         month_str = month_start.strftime('%Y-%m')
     month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
 
+    # Expense category labels are prefixed to avoid colliding with the
+    # fixed Revenue/Fuel/Maintenance keys below — an admin could otherwise
+    # name a heading "Maintenance" (as in the worked example) and silently
+    # shadow the MaintenanceLog-derived figure.
     actuals = {
         'Revenue': db.session.query(func.sum(DailyLog.gross_revenue)).filter(
             DailyLog.log_date.between(month_start, month_end)).scalar() or 0,
@@ -1866,7 +1881,7 @@ def report_budget():
             MaintenanceLog.log_date.between(month_start, month_end)).scalar() or 0,
     }
     for cat in ExpenseCategory.query.all():
-        actuals[cat.name] = db.session.query(func.sum(Expense.amount)).filter(
+        actuals[f'Expense: {cat.display_name}'] = db.session.query(func.sum(Expense.amount)).filter(
             Expense.category_id == cat.id,
             Expense.expense_date.between(month_start, month_end)).scalar() or 0
 
@@ -1876,10 +1891,11 @@ def report_budget():
     for cat in all_categories:
         budget_amt = budgets.get(cat, 0)
         actual_amt = actuals.get(cat, 0)
-        variance = actual_amt - budget_amt if cat != 'Revenue' else actual_amt - budget_amt
-        rows.append({'category': cat, 'budget': budget_amt, 'actual': actual_amt, 'variance': variance})
+        rows.append({'category': cat, 'budget': budget_amt, 'actual': actual_amt,
+                     'variance': actual_amt - budget_amt})
 
-    categories_available = ['Revenue', 'Fuel', 'Maintenance'] + [c.name for c in ExpenseCategory.query.all()]
+    categories_available = ['Revenue', 'Fuel', 'Maintenance'] + \
+        [f'Expense: {c.display_name}' for c in ExpenseCategory.query.all()]
     return render_template('reports/budget.html', rows=rows, month=month_str,
         month_label=month_start.strftime('%B %Y'), categories=categories_available)
 
@@ -2110,7 +2126,7 @@ def export_income():
     w.writerow(['Date', 'Category', 'Vehicle', 'Description', 'Amount (USD)'])
     total_exp = 0
     for e in expenses:
-        w.writerow([e.expense_date, e.category.name, e.vehicle.registration if e.vehicle else '(general)',
+        w.writerow([e.expense_date, e.category.display_name, e.vehicle.registration if e.vehicle else '(general)',
                     e.description or '', f'{e.amount:.2f}'])
         total_exp += e.amount
     w.writerow(['', '', '', 'TOTAL OTHER EXPENSES', f'{total_exp:.2f}'])
@@ -2468,8 +2484,8 @@ def owner_drawing_delete(did):
 def expenses_list():
     page = request.args.get('page', 1, type=int)
     expenses = Expense.query.order_by(Expense.expense_date.desc()).paginate(page=page, per_page=20)
-    categories = ExpenseCategory.query.order_by(ExpenseCategory.name).all()
-    return render_template('finance/expenses.html', expenses=expenses, categories=categories)
+    headings = ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all()
+    return render_template('finance/expenses.html', expenses=expenses, headings=headings)
 
 
 @app.route('/finance/expenses/add', methods=['GET', 'POST'])
@@ -2492,9 +2508,9 @@ def expense_add():
         db.session.commit()
         flash('Expense recorded.', 'success')
         return redirect(url_for('expenses_list'))
-    categories = ExpenseCategory.query.order_by(ExpenseCategory.name).all()
+    headings = ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all()
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
-    return render_template('finance/expense_form.html', categories=categories, vehicles=all_vehicles,
+    return render_template('finance/expense_form.html', headings=headings, vehicles=all_vehicles,
                            today=date.today().strftime('%Y-%m-%d'))
 
 
@@ -2512,18 +2528,44 @@ def expense_delete(eid):
 
 @app.route('/finance/expense-categories/add', methods=['POST'])
 @login_required
-@permission_required('finance')
+@admin_required
 @handle_form_errors
 def expense_category_add():
     name = request.form.get('name', '').strip()
     if not name:
         raise ValueError('Category name is required.')
-    if ExpenseCategory.query.filter_by(name=name).first():
-        flash(f'Category "{name}" already exists.', 'warning')
+    parent_id = form_int(request.form, 'parent_id', required=False)
+    parent = ExpenseCategory.query.get(parent_id) if parent_id else None
+    if parent_id and not parent:
+        raise ValueError('Selected heading does not exist.')
+
+    existing = ExpenseCategory.query.filter_by(name=name, parent_id=parent_id).first()
+    if existing:
+        flash(f'"{name}" already exists under {parent.name if parent else "top-level headings"}.', 'warning')
     else:
-        db.session.add(ExpenseCategory(name=name))
+        db.session.add(ExpenseCategory(name=name, parent_id=parent_id))
         db.session.commit()
-        flash(f'Category "{name}" added.', 'success')
+        label = f'{parent.name} — {name}' if parent else name
+        flash(f'"{label}" added.', 'success')
+    return redirect(url_for('expenses_list'))
+
+
+@app.route('/finance/expense-categories/<int:cid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def expense_category_delete(cid):
+    cat = ExpenseCategory.query.get_or_404(cid)
+    if cat.children:
+        flash(f'Cannot delete "{cat.name}" — it has sub-headings under it. Delete those first.', 'danger')
+        return redirect(url_for('expenses_list'))
+    if Expense.query.filter_by(category_id=cid).first():
+        flash(f'Cannot delete "{cat.display_name}" — expenses are recorded against it.', 'danger')
+        return redirect(url_for('expenses_list'))
+    name = cat.display_name
+    log_audit('DELETE', 'expense_categories', cid, f'Deleted expense category {name}')
+    db.session.delete(cat)
+    db.session.commit()
+    flash(f'"{name}" deleted.', 'warning')
     return redirect(url_for('expenses_list'))
 
 
@@ -2818,6 +2860,12 @@ def migrate_db():
             if 'depot_id' not in cols:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN depot_id INTEGER REFERENCES depots(id)"))
 
+        if inspector.has_table('expense_categories'):
+            exp_cat_cols = [c['name'] for c in inspector.get_columns('expense_categories')]
+            if 'parent_id' not in exp_cat_cols:
+                conn.execute(text(
+                    "ALTER TABLE expense_categories ADD COLUMN parent_id INTEGER REFERENCES expense_categories(id)"))
+
         conn.commit()
 
 
@@ -2834,10 +2882,21 @@ def create_default_depot():
 
 
 def create_default_expense_categories():
-    if not ExpenseCategory.query.first():
-        for name in ('Insurance', 'Licensing & Permits', 'Salaries & Wages', 'Rent & Utilities', 'Other Overhead'):
+    headings = ('Insurance', 'Licensing & Permits', 'Salaries & Wages', 'Rent & Utilities', 'Other Overhead')
+    for name in headings:
+        if not ExpenseCategory.query.filter_by(name=name, parent_id=None).first():
             db.session.add(ExpenseCategory(name=name))
-        db.session.commit()
+
+    maintenance = ExpenseCategory.query.filter_by(name='Maintenance', parent_id=None).first()
+    if not maintenance:
+        maintenance = ExpenseCategory(name='Maintenance')
+        db.session.add(maintenance)
+        db.session.flush()
+    for name in ('Brake Pads and Tyres', 'Brake Shoes', 'Tie Rod Ends',
+                 'Wheel Bearing', 'Ball Joints', 'Engine Oil'):
+        if not ExpenseCategory.query.filter_by(name=name, parent_id=maintenance.id).first():
+            db.session.add(ExpenseCategory(name=name, parent_id=maintenance.id))
+    db.session.commit()
 
 
 def create_default_admin():

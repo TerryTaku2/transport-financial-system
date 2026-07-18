@@ -12,16 +12,48 @@
 </div>
 
 <div class="card mb-24">
-  <div class="card-header"><h3>Categories</h3></div>
-  <div style="padding:12px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-    {% for c in categories %}
-    <span class="badge badge-gray">{{ c.name }}</span>
+  <div class="card-header"><h3>Headings &amp; Sub-headings</h3></div>
+  <div style="padding:12px 16px;">
+    {% for h in headings %}
+    <div style="margin-bottom:10px;">
+      <span class="badge badge-blue">{{ h.name }}</span>
+      {% if current_user.role == 'admin' and not h.children and not h.expenses %}
+      <form method="POST" action="{{ url_for('expense_category_delete', cid=h.id) }}" data-confirm="Delete heading '{{ h.name }}'?" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-danger btn-xs" style="padding:2px 6px;">×</button>
+      </form>
+      {% endif %}
+      {% if h.children %}
+      <div style="margin:6px 0 0 16px;display:flex;gap:6px;flex-wrap:wrap;">
+        {% for c in h.children|sort(attribute='name') %}
+        <span class="badge badge-gray">
+          {{ c.name }}
+          {% if current_user.role == 'admin' and not c.expenses %}
+          <form method="POST" action="{{ url_for('expense_category_delete', cid=c.id) }}" data-confirm="Delete '{{ c.name }}'?" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button style="border:none;background:none;cursor:pointer;color:inherit;padding:0 0 0 4px;">×</button>
+          </form>
+          {% endif %}
+        </span>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
     {% endfor %}
-    <form method="POST" action="{{ url_for('expense_category_add') }}" style="display:flex;gap:6px;margin-left:auto;">
+
+    {% if current_user.role == 'admin' %}
+    <form method="POST" action="{{ url_for('expense_category_add') }}" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="text" name="name" placeholder="New category" style="padding:6px;" required>
-      <button type="submit" class="btn btn-outline btn-xs">Add Category</button>
+      <select name="parent_id" style="padding:6px;">
+        <option value="">New Heading (top-level)</option>
+        {% for h in headings %}
+        <option value="{{ h.id }}">Sub-heading under: {{ h.name }}</option>
+        {% endfor %}
+      </select>
+      <input type="text" name="name" placeholder="Name" style="padding:6px;" required>
+      <button type="submit" class="btn btn-outline btn-xs">Add</button>
     </form>
+    {% endif %}
   </div>
 </div>
 
@@ -36,7 +68,7 @@
         {% for e in expenses.items %}
         <tr>
           <td>{{ e.expense_date }}</td>
-          <td><span class="badge badge-blue">{{ e.category.name }}</span></td>
+          <td><span class="badge badge-blue">{{ e.category.display_name }}</span></td>
           <td>{{ e.vehicle.registration if e.vehicle else '—' }}</td>
           <td>{{ e.description or '—' }}</td>
           <td class="text-right">{{ e.amount|currency }}</td>
