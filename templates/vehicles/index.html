@@ -13,6 +13,20 @@
   </a>
 </div>
 
+{% if depots %}
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>Depot</label>
+    <select name="depot_id" onchange="this.form.submit()">
+      <option value="">All Depots</option>
+      {% for dep in depots %}
+      <option value="{{ dep.id }}" {% if depot_id|string == dep.id|string %}selected{% endif %}>{{ dep.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</form>
+{% endif %}
+
 <div class="card">
   <div class="table-wrap">
     {% if vehicles %}
@@ -22,6 +36,7 @@
           <th>Registration</th>
           <th>Vehicle</th>
           <th>Year</th>
+          <th>Depot</th>
           <th>Acquisition Cost</th>
           <th>Total Revenue</th>
           <th>Status</th>
@@ -35,6 +50,7 @@
           <td><a href="{{ url_for('vehicle_detail', vid=v.id) }}"><strong>{{ v.registration }}</strong></a></td>
           <td>{{ v.make }} {{ v.model }}</td>
           <td>{{ v.year }}</td>
+          <td>{{ v.depot.name if v.depot else '—' }}</td>
           <td>{{ v.acquisition_cost|currency }}</td>
           <td><strong class="text-success">{{ v.total_revenue|currency }}</strong></td>
           <td>

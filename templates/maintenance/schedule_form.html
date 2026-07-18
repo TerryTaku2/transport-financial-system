@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% block title %}Add Maintenance Schedule{% endblock %}
+{% block page_title %}Add Maintenance Schedule{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Add Maintenance Schedule</h1>
+    <div class="subtitle">Set a recurring preventive service — by time, by distance, or both</div>
+  </div>
+  <a href="{{ url_for('maintenance_schedules') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Vehicle<span class="req">*</span></label>
+          <select name="vehicle_id" required>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}">{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Service Description<span class="req">*</span></label>
+          <input type="text" name="description" required placeholder="e.g. Oil change">
+        </div>
+        <div class="form-group">
+          <label>Interval (days)</label>
+          <input type="number" name="interval_days" min="1" placeholder="e.g. 90">
+        </div>
+        <div class="form-group">
+          <label>Interval (km)</label>
+          <input type="number" name="interval_km" min="1" placeholder="e.g. 5000">
+        </div>
+        <div class="form-group">
+          <label>Last Done Date</label>
+          <input type="date" name="last_done_date" value="{{ today }}">
+        </div>
+        <div class="form-group">
+          <label>Last Done Odometer (km)</label>
+          <input type="number" name="last_done_odometer" min="0" placeholder="e.g. 45000">
+        </div>
+      </div>
+      <div class="form-hint mb-16">At least one interval (days or km) is needed to calculate the next due date.</div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Schedule</button>
+        <a href="{{ url_for('maintenance_schedules') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

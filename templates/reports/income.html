@@ -6,9 +6,16 @@
 <div class="page-header">
   <div>
     <h1>Income Statement</h1>
-    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; ZIMRA-ready financial summary</div>
+    <div class="subtitle">
+      {{ date_from }} to {{ date_to }}
+      {% if vehicle_id %}
+        {% for v in vehicles %}{% if v.id|string == vehicle_id|string %}&mdash; {{ v.registration }} ({{ v.make }} {{ v.model }}){% endif %}{% endfor %}
+      {% else %}
+        &mdash; Consolidated (fleet-wide)
+      {% endif %}
+    </div>
   </div>
-  <a href="{{ url_for('export_income', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
+  <a href="{{ url_for('export_income', date_from=date_from, date_to=date_to, vehicle_id=vehicle_id) }}" class="btn btn-outline">
     <i data-feather="download"></i> Export CSV
   </a>
 </div>
@@ -25,9 +32,9 @@
   <div class="form-group">
     <label>Vehicle</label>
     <select name="vehicle_id">
-      <option value="">All Vehicles (Fleet-wide)</option>
+      <option value="">All Vehicles (Consolidated)</option>
       {% for v in vehicles %}
-      <option value="{{ v.id }}" {% if vehicle_id|string == v.id|string %}selected{% endif %}>{{ v.registration }}</option>
+      <option value="{{ v.id }}" {% if vehicle_id|string == v.id|string %}selected{% endif %}>{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
       {% endfor %}
     </select>
   </div>
@@ -62,6 +69,10 @@
         <tr><td>Gross Revenue</td><td class="text-right">{{ gross_revenue|currency }}</td></tr>
         <tr><td>Less: Fuel Expenses</td><td class="text-right text-warning">({{ fuel_cost|currency }})</td></tr>
         <tr><td>Less: Maintenance Expenses</td><td class="text-right text-danger">({{ maintenance_cost|currency }})</td></tr>
+        <tr><td>Less: Vehicle-tagged Expenses</td><td class="text-right text-warning">({{ vehicle_expenses|currency }})</td></tr>
+        {% if not vehicle_id %}
+        <tr><td>Less: General Overhead (untagged expenses)</td><td class="text-right text-warning">({{ general_expenses|currency }})</td></tr>
+        {% endif %}
         <tr><td><strong>Total Operating Expenses</strong></td><td class="text-right"><strong>({{ total_expenses|currency }})</strong></td></tr>
         <tr class="summary-row"><td>NET PROFIT</td><td class="text-right">{{ net_profit|currency }}</td></tr>
       </tbody>
@@ -70,25 +81,40 @@
 </div>
 
 <div class="card">
-  <div class="card-header"><h3>Revenue by Vehicle</h3></div>
+  <div class="card-header"><h3>{% if vehicle_id %}Other Vehicles This Period{% else %}Income Statement by Vehicle{% endif %}</h3></div>
   {% if vehicle_breakdown %}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>Vehicle</th><th>Make/Model</th><th>Days Logged</th><th class="text-right">Revenue</th></tr></thead>
-      <tbody>
-        {% for v in vehicle_breakdown %}
+      <thead>
         <tr>
-          <td><strong>{{ v.registration }}</strong></td>
-          <td>{{ v.make }} {{ v.model }}</td>
-          <td>{{ v.log_days }}</td>
-          <td class="text-right">{{ v.revenue|currency }}</td>
+          <th>Vehicle</th>
+          <th class="text-right">Revenue</th>
+          <th class="text-right">Fuel</th>
+          <th class="text-right">Maintenance</th>
+          <th class="text-right">Expenses</th>
+          <th class="text-right">Net Profit</th>
+          <th class="text-right">Margin</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in vehicle_breakdown %}
+        <tr>
+          <td><strong>{{ row.vehicle.registration }}</strong><div class="form-hint">{{ row.vehicle.make }} {{ row.vehicle.model }}</div></td>
+          <td class="text-right">{{ row.revenue|currency }}</td>
+          <td class="text-right">({{ row.fuel|currency }})</td>
+          <td class="text-right">({{ row.maintenance|currency }})</td>
+          <td class="text-right">({{ row.expenses|currency }})</td>
+          <td class="text-right {% if row.net_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ row.net_profit|currency }}</strong></td>
+          <td class="text-right">{{ row.margin|pct }}</td>
+          <td><a href="{{ url_for('report_income', date_from=date_from, date_to=date_to, vehicle_id=row.vehicle.id) }}" class="btn btn-outline btn-xs">View</a></td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
   {% else %}
-  <div class="empty-state"><p>No revenue data for the selected period.</p></div>
+  <div class="empty-state"><p>No revenue or cost data for the selected period.</p></div>
   {% endif %}
 </div>
 {% endblock %}

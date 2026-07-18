@@ -48,11 +48,20 @@
           <tr><td><strong>Net book value</strong></td><td class="text-right"><strong>{{ total_nbv|currency }}</strong></td></tr>
           <tr><td colspan="2">&nbsp;</td></tr>
           <tr><td colspan="2"><strong>Current Assets</strong></td></tr>
-          <tr><td>Cash &amp; cash equivalents</td><td class="text-right">{{ cash_and_equivalents|currency }}</td></tr>
+          <tr><td>Cash &amp; cash equivalents</td>
+              <td class="text-right {% if cash_and_equivalents < 0 %}text-danger{% endif %}">{{ cash_and_equivalents|currency }}</td></tr>
+          <tr><td>Receivables outstanding</td><td class="text-right">{{ receivables_outstanding|currency }}</td></tr>
           <tr class="summary-row"><td>TOTAL ASSETS</td><td class="text-right">{{ total_assets|currency }}</td></tr>
         </tbody>
       </table>
     </div>
+    {% if cash_and_equivalents < 0 %}
+    <div style="padding:12px 16px; background:#fef2f2; border-top:1px solid var(--border); font-size:0.85rem; color:#991b1b;">
+      Cash is negative — this usually means vehicles were purchased with cash that was never recorded as a
+      <a href="{{ url_for('capital_contribution_add') }}">Capital Contribution</a> or <a href="{{ url_for('loan_add') }}">Loan</a>.
+      Add one for the amount that funded the fleet before this system was tracking it.
+    </div>
+    {% endif %}
   </div>
 
   <div class="card">
@@ -61,7 +70,9 @@
       <table>
         <tbody>
           <tr><td colspan="2"><strong>Liabilities</strong></td></tr>
-          <tr><td>None recorded</td><td class="text-right">{{ total_liabilities|currency }}</td></tr>
+          <tr><td>Loans outstanding</td><td class="text-right">{{ loans_outstanding|currency }}</td></tr>
+          <tr><td>Payables outstanding</td><td class="text-right">{{ payables_outstanding|currency }}</td></tr>
+          <tr><td>Commission payable (accrued, unpaid)</td><td class="text-right">{{ commission_payable|currency }}</td></tr>
           <tr><td><strong>Total liabilities</strong></td><td class="text-right"><strong>{{ total_liabilities|currency }}</strong></td></tr>
           <tr><td colspan="2">&nbsp;</td></tr>
           <tr><td colspan="2"><strong>Equity</strong></td></tr>
@@ -111,11 +122,12 @@
   <div class="card-header"><h3>Notes &amp; Assumptions</h3></div>
   <div style="padding:16px; font-size:0.9rem; color:var(--text-secondary,#64748b); line-height:1.6;">
     <ul style="margin:0; padding-left:20px;">
-      <li>This is a simplified statement, not a bookkeeping-grade financial position — the system has no cash/bank ledger and no loan or accounts-payable tracking.</li>
+      <li>This is a simplified statement, not a bookkeeping-grade financial position — there's no real bank reconciliation behind the cash figure.</li>
+      <li>Vehicle purchases are treated as a pure asset swap (cash down, fixed asset up) — <strong>not</strong> assumed to be capital-funded. If cash shows negative, it usually means a vehicle was bought before any Capital Contribution or Loan was recorded to explain where the money came from.</li>
       <li>Vehicles are depreciated straight-line over {{ useful_life }} years, dated from when each vehicle was added to the fleet (no separate acquisition-date field exists).</li>
-      <li>Cash &amp; cash equivalents is cumulative net profit (revenue minus fuel minus maintenance) since inception — the same definition used on the Income Statement. It excludes driver/conductor commissions, which are not currently posted as an expense.</li>
-      <li>Owner's Capital is inferred as the total historical cost of vehicles, since no capital-contribution or loan records exist to say otherwise.</li>
-      <li>Liabilities will remain zero until loans or payables are tracked in the system.</li>
+      <li>Commission is accrued on all revenue earned (same calculation as the Payroll report), not just what's been paid — the gap between accrued and paid sits as "Commission payable" above.</li>
+      <li>Payables and Receivables are accrual-based: recognized as an expense/revenue when created, not when settled.</li>
+      <li>Loan repayments are treated as pure principal reduction — interest is not separately expensed.</li>
     </ul>
   </div>
 </div>

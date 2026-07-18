@@ -24,12 +24,16 @@
 
 <div class="kpi-grid">
   <div class="kpi-card kpi-blue">
-    <div class="kpi-label">Total Commissions Payable</div>
+    <div class="kpi-label">Commission Accrued (this period)</div>
     <div class="kpi-value">{{ total_commissions|currency }}</div>
   </div>
-  <div class="kpi-card kpi-teal">
-    <div class="kpi-label">Crew Members Paid</div>
-    <div class="kpi-value">{{ earnings|length }}</div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Paid (this period)</div>
+    <div class="kpi-value">{{ total_paid|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Outstanding (this period)</div>
+    <div class="kpi-value">{{ total_outstanding|currency }}</div>
   </div>
 </div>
 
@@ -39,7 +43,8 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Crew Member</th><th>Role</th><th>Days Worked</th><th>Revenue Generated</th><th>Rate</th><th class="text-right">Commission Due</th></tr>
+        <tr><th>Crew Member</th><th>Role</th><th>Days Worked</th><th>Revenue Generated</th><th>Rate</th>
+            <th class="text-right">Accrued</th><th class="text-right">Paid</th><th class="text-right">Outstanding</th><th></th></tr>
       </thead>
       <tbody>
         {% for e in earnings %}
@@ -49,14 +54,31 @@
           <td>{{ e.days_worked }}</td>
           <td>{{ e.total_revenue|currency }}</td>
           <td>{{ e.rate_pct|round(1) }}%</td>
-          <td class="text-right"><strong class="text-success">{{ e.commission|currency }}</strong></td>
+          <td class="text-right">{{ e.commission|currency }}</td>
+          <td class="text-right text-success">{{ e.paid|currency }}</td>
+          <td class="text-right {% if e.outstanding > 0 %}text-warning{% endif %}"><strong>{{ e.outstanding|currency }}</strong></td>
+          <td>
+            <form method="POST" action="{{ url_for('commission_payment_add') }}" style="display:flex;gap:4px;align-items:center;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="driver_id" value="{{ e.driver.id }}">
+              <input type="hidden" name="payment_date" value="{{ date_to }}">
+              <input type="hidden" name="period_start" value="{{ date_from }}">
+              <input type="hidden" name="period_end" value="{{ date_to }}">
+              <input type="number" name="amount" step="0.01" min="0" placeholder="Amount"
+                     value="{{ '%.2f'|format(e.outstanding) if e.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
+              <button class="btn btn-outline btn-xs">Pay</button>
+            </form>
+          </td>
         </tr>
         {% endfor %}
       </tbody>
       <tfoot>
         <tr class="summary-row">
-          <td colspan="5">TOTAL PAYABLE</td>
+          <td colspan="5">TOTAL</td>
           <td class="text-right">{{ total_commissions|currency }}</td>
+          <td class="text-right">{{ total_paid|currency }}</td>
+          <td class="text-right">{{ total_outstanding|currency }}</td>
+          <td></td>
         </tr>
       </tfoot>
     </table>

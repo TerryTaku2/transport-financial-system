@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}Cash Flow Statement{% endblock %}
+{% block page_title %}Finance — Cash Flow Statement{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Cash Flow Statement</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }}</div>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Opening Cash</div>
+    <div class="kpi-value">{{ opening_cash|currency }}</div>
+  </div>
+  <div class="kpi-card {% if net_change >= 0 %}kpi-green{% else %}kpi-red{% endif %}">
+    <div class="kpi-label">Net Change in Cash</div>
+    <div class="kpi-value">{{ net_change|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-teal">
+    <div class="kpi-label">Closing Cash</div>
+    <div class="kpi-value">{{ closing_cash|currency }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        <tr><td colspan="2"><strong>Operating Activities</strong></td></tr>
+        <tr><td>Revenue collected</td><td class="text-right">{{ operating_in|currency }}</td></tr>
+        <tr><td>Receivables collected</td><td class="text-right">{{ receivables_in|currency }}</td></tr>
+        <tr><td>Fuel paid</td><td class="text-right text-warning">({{ fuel_out|currency }})</td></tr>
+        <tr><td>Maintenance paid</td><td class="text-right text-warning">({{ maint_out|currency }})</td></tr>
+        <tr><td>Other expenses paid</td><td class="text-right text-warning">({{ expenses_out|currency }})</td></tr>
+        <tr><td>Commissions paid</td><td class="text-right text-warning">({{ commission_out|currency }})</td></tr>
+        <tr><td>Payables paid</td><td class="text-right text-warning">({{ payables_out|currency }})</td></tr>
+        <tr><td><strong>Net cash from operating activities</strong></td><td class="text-right"><strong>{{ net_operating|currency }}</strong></td></tr>
+        <tr><td colspan="2">&nbsp;</td></tr>
+
+        <tr><td colspan="2"><strong>Investing Activities</strong></td></tr>
+        <tr><td>Vehicles purchased ({{ vehicles_bought|length }})</td><td class="text-right text-warning">({{ investing_out|currency }})</td></tr>
+        <tr><td><strong>Net cash from investing activities</strong></td><td class="text-right"><strong>{{ net_investing|currency }}</strong></td></tr>
+        <tr><td colspan="2">&nbsp;</td></tr>
+
+        <tr><td colspan="2"><strong>Financing Activities</strong></td></tr>
+        <tr><td>Loan proceeds</td><td class="text-right">{{ loan_proceeds_in|currency }}</td></tr>
+        <tr><td>Loan repayments</td><td class="text-right text-warning">({{ loan_repay_out|currency }})</td></tr>
+        <tr><td>Capital contributions</td><td class="text-right">{{ capital_in|currency }}</td></tr>
+        <tr><td>Owner drawings</td><td class="text-right text-warning">({{ drawings_out|currency }})</td></tr>
+        <tr><td><strong>Net cash from financing activities</strong></td><td class="text-right"><strong>{{ net_financing|currency }}</strong></td></tr>
+        <tr><td colspan="2">&nbsp;</td></tr>
+
+        <tr class="summary-row"><td>NET CHANGE IN CASH</td><td class="text-right">{{ net_change|currency }}</td></tr>
+        <tr><td>Opening cash</td><td class="text-right">{{ opening_cash|currency }}</td></tr>
+        <tr class="summary-row"><td>CLOSING CASH</td><td class="text-right">{{ closing_cash|currency }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}Add Receivable{% endblock %}
+{% block page_title %}Add Receivable{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Add Receivable</h1>
+    <div class="subtitle">Revenue earned but not yet collected (e.g. an invoiced charter client)</div>
+  </div>
+  <a href="{{ url_for('receivables_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Receivables</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Client<span class="req">*</span></label>
+          <input type="text" name="client_name" required>
+        </div>
+        <div class="form-group">
+          <label>Amount (USD)<span class="req">*</span></label>
+          <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Invoice Date<span class="req">*</span></label>
+          <input type="date" name="invoice_date" required value="{{ today }}">
+        </div>
+        <div class="form-group">
+          <label>Due Date</label>
+          <input type="date" name="due_date">
+        </div>
+      </div>
+      <div class="form-group mb-16">
+        <label>Description</label>
+        <textarea name="description" rows="2"></textarea>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Receivable</button>
+        <a href="{{ url_for('receivables_list') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

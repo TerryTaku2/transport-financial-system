@@ -53,6 +53,15 @@
             <option value="inactive" {% if driver and driver.status=='inactive' %}selected{% endif %}>Inactive</option>
           </select>
         </div>
+        <div class="form-group">
+          <label>Depot</label>
+          <select name="depot_id">
+            <option value="">Unassigned</option>
+            {% for dep in depots %}
+            <option value="{{ dep.id }}" {% if driver and driver.depot_id==dep.id %}selected{% endif %}>{{ dep.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
       </div>
       {% if not driver %}
       <hr style="margin:20px 0;border:none;border-top:1px solid var(--border);">

@@ -1,0 +1,69 @@
+{% extends 'base.html' %}
+{% block title %}Payables{% endblock %}
+{% block page_title %}Finance — Accounts Payable{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Accounts Payable</h1>
+    <div class="subtitle">{{ payables|length }} payable(s) recorded — amounts owed to suppliers outside fuel/maintenance logs</div>
+  </div>
+  <a href="{{ url_for('payable_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Payable</a>
+</div>
+
+<div class="card">
+  {% if payables %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Supplier</th>
+          <th>Description</th>
+          <th>Amount</th>
+          <th>Invoice Date</th>
+          <th>Due Date</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in payables %}
+        <tr>
+          <td><strong>{{ p.supplier_name }}</strong></td>
+          <td>{{ p.description or '—' }}</td>
+          <td>{{ p.amount|currency }}</td>
+          <td>{{ p.invoice_date }}</td>
+          <td>{{ p.due_date or '—' }}</td>
+          <td>
+            {% if p.status == 'paid' %}<span class="badge badge-green">Paid {{ p.paid_date }}</span>
+            {% else %}<span class="badge badge-amber">Unpaid</span>{% endif %}
+          </td>
+          <td>
+            <div class="actions">
+              {% if p.status != 'paid' %}
+              <form method="POST" action="{{ url_for('payable_mark_paid', pid=p.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-outline btn-xs">Mark Paid</button>
+              </form>
+              {% endif %}
+              {% if current_user.role == 'admin' %}
+              <form method="POST" action="{{ url_for('payable_delete', pid=p.id) }}" data-confirm="Delete this payable?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">📄</div>
+    <p>No payables recorded yet. <a href="{{ url_for('payable_add') }}">Add the first one</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

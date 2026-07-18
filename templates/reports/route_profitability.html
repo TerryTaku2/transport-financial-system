@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+{% block title %}Route Profitability{% endblock %}
+{% block page_title %}Finance — Route Profitability{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Route Profitability</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; fuel &amp; maintenance allocated by revenue share</div>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="card">
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Route</th><th>Trips</th><th>Days Logged</th><th class="text-right">Revenue</th><th class="text-right">Allocated Cost</th><th class="text-right">Net Profit</th></tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td><strong>{{ row.route.name }}</strong><div class="form-hint">{{ row.route.start_point }} → {{ row.route.end_point }}</div></td>
+          <td>{{ row.trips }}</td>
+          <td>{{ row.log_days }}</td>
+          <td class="text-right">{{ row.revenue|currency }}</td>
+          <td class="text-right text-warning">({{ row.allocated_cost|currency }})</td>
+          <td class="text-right {% if row.net_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ row.net_profit|currency }}</strong></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="summary-row">
+          <td colspan="3">TOTAL</td>
+          <td class="text-right">{{ total_revenue|currency }}</td>
+          <td class="text-right">({{ total_costs|currency }})</td>
+          <td class="text-right">{{ (total_revenue - total_costs)|currency }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No route data for the selected period.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

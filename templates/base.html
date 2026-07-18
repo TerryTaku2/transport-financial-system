@@ -81,6 +81,9 @@
       <a href="{{ url_for('maintenance_logs') }}" class="nav-item {% if 'maintenance_log' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="tool"></i> Maintenance
       </a>
+      <a href="{{ url_for('maintenance_schedules') }}" class="nav-item {% if 'maintenance_schedule' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="calendar"></i> Service Schedules
+      </a>
       {% endif %}
     </div>
     {% endif %}
@@ -91,11 +94,44 @@
       <a href="{{ url_for('report_income') }}" class="nav-item {% if request.endpoint == 'report_income' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Income Statement
       </a>
+      <a href="{{ url_for('report_cash_flow') }}" class="nav-item {% if request.endpoint == 'report_cash_flow' %}active{% endif %}">
+        <i data-feather="repeat"></i> Cash Flow
+      </a>
       <a href="{{ url_for('report_payroll') }}" class="nav-item {% if request.endpoint == 'report_payroll' %}active{% endif %}">
         <i data-feather="dollar-sign"></i> Payroll
       </a>
       <a href="{{ url_for('report_financial_position') }}" class="nav-item {% if request.endpoint == 'report_financial_position' %}active{% endif %}">
         <i data-feather="pie-chart"></i> Financial Position
+      </a>
+      <a href="{{ url_for('report_budget') }}" class="nav-item {% if request.endpoint == 'report_budget' %}active{% endif %}">
+        <i data-feather="target"></i> Budget vs Actual
+      </a>
+      <a href="{{ url_for('report_fuel_efficiency') }}" class="nav-item {% if request.endpoint == 'report_fuel_efficiency' %}active{% endif %}">
+        <i data-feather="trending-up"></i> Fuel Efficiency
+      </a>
+      <a href="{{ url_for('report_route_profitability') }}" class="nav-item {% if request.endpoint == 'report_route_profitability' %}active{% endif %}">
+        <i data-feather="map"></i> Route Profitability
+      </a>
+    </div>
+    {% endif %}
+
+    {% if current_user.has_permission('finance') %}
+    <div class="nav-section">
+      <div class="nav-section-label">Finance Ledger</div>
+      <a href="{{ url_for('loans_list') }}" class="nav-item {% if 'loan' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="briefcase"></i> Loans
+      </a>
+      <a href="{{ url_for('payables_list') }}" class="nav-item {% if 'payable' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="file-minus"></i> Payables
+      </a>
+      <a href="{{ url_for('receivables_list') }}" class="nav-item {% if 'receivable' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="file-plus"></i> Receivables
+      </a>
+      <a href="{{ url_for('capital_list') }}" class="nav-item {% if 'capital' in (request.endpoint or '') or 'drawing' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="user-check"></i> Capital &amp; Drawings
+      </a>
+      <a href="{{ url_for('expenses_list') }}" class="nav-item {% if 'expense' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="credit-card"></i> Expenses
       </a>
     </div>
     {% endif %}
@@ -116,6 +152,9 @@
       <div class="nav-section-label">Admin</div>
       <a href="{{ url_for('users') }}" class="nav-item {% if 'user' in (request.endpoint or '') and request.endpoint != 'logout' %}active{% endif %}">
         <i data-feather="settings"></i> User Management
+      </a>
+      <a href="{{ url_for('depots') }}" class="nav-item {% if 'depot' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="map-pin"></i> Depots
       </a>
       <a href="{{ url_for('audit_log') }}" class="nav-item {% if request.endpoint == 'audit_log' %}active{% endif %}">
         <i data-feather="activity"></i> Audit Log

@@ -11,6 +11,20 @@
   <a href="{{ url_for('route_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Route</a>
 </div>
 
+{% if depots %}
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>Depot</label>
+    <select name="depot_id" onchange="this.form.submit()">
+      <option value="">All Depots</option>
+      {% for dep in depots %}
+      <option value="{{ dep.id }}" {% if depot_id|string == dep.id|string %}selected{% endif %}>{{ dep.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</form>
+{% endif %}
+
 <div class="card">
   {% if routes %}
   <div class="table-wrap">
@@ -20,6 +34,7 @@
           <th>Route Name</th>
           <th>From</th>
           <th>To</th>
+          <th>Depot</th>
           <th>Distance (km)</th>
           <th>Fare Rate</th>
           <th>Status</th>
@@ -32,6 +47,7 @@
           <td><strong>{{ r.name }}</strong></td>
           <td>{{ r.start_point }}</td>
           <td>{{ r.end_point }}</td>
+          <td>{{ r.depot.name if r.depot else '—' }}</td>
           <td>{{ r.distance_km or '—' }}</td>
           <td>{{ r.fare_rate|currency }}</td>
           <td>

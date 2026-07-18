@@ -11,6 +11,20 @@
   <a href="{{ url_for('driver_add') }}" class="btn btn-primary"><i data-feather="user-plus"></i> Register Crew Member</a>
 </div>
 
+{% if depots %}
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>Depot</label>
+    <select name="depot_id" onchange="this.form.submit()">
+      <option value="">All Depots</option>
+      {% for dep in depots %}
+      <option value="{{ dep.id }}" {% if depot_id|string == dep.id|string %}selected{% endif %}>{{ dep.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</form>
+{% endif %}
+
 <div class="card">
   {% if drivers %}
   <div class="table-wrap">
@@ -20,6 +34,7 @@
           <th>Name</th>
           <th>License No.</th>
           <th>Role</th>
+          <th>Depot</th>
           <th>Phone</th>
           <th>Commission Rate</th>
           <th>Status</th>
@@ -32,6 +47,7 @@
           <td><strong>{{ d.name }}</strong></td>
           <td>{{ d.license_number }}</td>
           <td><span class="badge badge-blue">{{ d.role|title }}</span></td>
+          <td>{{ d.depot.name if d.depot else '—' }}</td>
           <td>{{ d.phone or '—' }}</td>
           <td>{% if d.commission_rate %}{{ (d.commission_rate*100)|round(1) }}% (custom){% else %}Default{% endif %}</td>
           <td>

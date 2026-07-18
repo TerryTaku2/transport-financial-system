@@ -1,0 +1,69 @@
+{% extends 'base.html' %}
+{% block title %}Receivables{% endblock %}
+{% block page_title %}Finance — Accounts Receivable{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Accounts Receivable</h1>
+    <div class="subtitle">{{ receivables|length }} receivable(s) recorded — revenue invoiced but not yet collected</div>
+  </div>
+  <a href="{{ url_for('receivable_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Receivable</a>
+</div>
+
+<div class="card">
+  {% if receivables %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Client</th>
+          <th>Description</th>
+          <th>Amount</th>
+          <th>Invoice Date</th>
+          <th>Due Date</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in receivables %}
+        <tr>
+          <td><strong>{{ r.client_name }}</strong></td>
+          <td>{{ r.description or '—' }}</td>
+          <td>{{ r.amount|currency }}</td>
+          <td>{{ r.invoice_date }}</td>
+          <td>{{ r.due_date or '—' }}</td>
+          <td>
+            {% if r.status == 'collected' %}<span class="badge badge-green">Collected {{ r.collected_date }}</span>
+            {% else %}<span class="badge badge-amber">Outstanding</span>{% endif %}
+          </td>
+          <td>
+            <div class="actions">
+              {% if r.status != 'collected' %}
+              <form method="POST" action="{{ url_for('receivable_mark_collected', rid=r.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-outline btn-xs">Mark Collected</button>
+              </form>
+              {% endif %}
+              {% if current_user.role == 'admin' %}
+              <form method="POST" action="{{ url_for('receivable_delete', rid=r.id) }}" data-confirm="Delete this receivable?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🧾</div>
+    <p>No receivables recorded yet. <a href="{{ url_for('receivable_add') }}">Add the first one</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

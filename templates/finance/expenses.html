@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+{% block title %}Expenses{% endblock %}
+{% block page_title %}Finance — Expenses{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Expenses</h1>
+    <div class="subtitle">Overhead not covered by fuel or maintenance logs — insurance, licensing, salaries, rent, etc.</div>
+  </div>
+  <a href="{{ url_for('expense_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Expense</a>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Categories</h3></div>
+  <div style="padding:12px 16px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+    {% for c in categories %}
+    <span class="badge badge-gray">{{ c.name }}</span>
+    {% endfor %}
+    <form method="POST" action="{{ url_for('expense_category_add') }}" style="display:flex;gap:6px;margin-left:auto;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="text" name="name" placeholder="New category" style="padding:6px;" required>
+      <button type="submit" class="btn btn-outline btn-xs">Add Category</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  {% if expenses.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Category</th><th>Vehicle</th><th>Description</th><th class="text-right">Amount</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for e in expenses.items %}
+        <tr>
+          <td>{{ e.expense_date }}</td>
+          <td><span class="badge badge-blue">{{ e.category.name }}</span></td>
+          <td>{{ e.vehicle.registration if e.vehicle else '—' }}</td>
+          <td>{{ e.description or '—' }}</td>
+          <td class="text-right">{{ e.amount|currency }}</td>
+          <td>
+            {% if current_user.role == 'admin' %}
+            <form method="POST" action="{{ url_for('expense_delete', eid=e.id) }}" data-confirm="Delete this expense?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if expenses.pages > 1 %}
+  <div class="pagination">
+    {% if expenses.has_prev %}<a href="{{ url_for('expenses_list', page=expenses.prev_num) }}">&laquo; Prev</a>{% endif %}
+    <span>Page {{ expenses.page }} of {{ expenses.pages }}</span>
+    {% if expenses.has_next %}<a href="{{ url_for('expenses_list', page=expenses.next_num) }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🧾</div>
+    <p>No expenses recorded yet. <a href="{{ url_for('expense_add') }}">Add the first one</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

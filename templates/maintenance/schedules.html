@@ -1,0 +1,80 @@
+{% extends 'base.html' %}
+{% block title %}Maintenance Schedules{% endblock %}
+{% block page_title %}Maintenance — Preventive Schedules{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Preventive Maintenance</h1>
+    <div class="subtitle">{{ rows|length }} active schedule(s)</div>
+  </div>
+  <a href="{{ url_for('maintenance_schedule_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Schedule</a>
+</div>
+
+<div class="card">
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Vehicle</th>
+          <th>Service</th>
+          <th>Interval</th>
+          <th>Last Done</th>
+          <th>Next Due</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set s = row.schedule %}
+        <tr>
+          <td><strong>{{ s.vehicle.registration }}</strong></td>
+          <td>{{ s.description }}</td>
+          <td>
+            {% if s.interval_days %}{{ s.interval_days }} days{% endif %}
+            {% if s.interval_days and s.interval_km %} / {% endif %}
+            {% if s.interval_km %}{{ s.interval_km }} km{% endif %}
+          </td>
+          <td>{{ s.last_done_date or '—' }}{% if s.last_done_odometer %} @ {{ s.last_done_odometer }}km{% endif %}</td>
+          <td>
+            {{ s.next_due_date or '—' }}
+            {% if s.next_due_odometer %}<div class="form-hint">or {{ s.next_due_odometer }}km (currently {{ row.odometer or '?' }}km)</div>{% endif %}
+          </td>
+          <td>
+            {% if row.status == 'overdue' %}<span class="badge badge-red">Overdue</span>
+            {% elif row.status == 'due_soon' %}<span class="badge badge-amber">Due Soon</span>
+            {% else %}<span class="badge badge-green">OK</span>{% endif %}
+          </td>
+          <td>
+            <div class="actions">
+              <form method="POST" action="{{ url_for('maintenance_schedule_done', sid=s.id) }}" style="display:flex;gap:4px;align-items:center;" data-confirm="Mark '{{ s.description }}' as done today?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="done_date" value="{{ today }}">
+                {% if s.interval_km %}
+                <input type="number" name="done_odometer" placeholder="Odometer" style="width:90px;padding:4px;">
+                {% endif %}
+                <button class="btn btn-outline btn-xs">Mark Done</button>
+              </form>
+              {% if current_user.role == 'admin' %}
+              <form method="POST" action="{{ url_for('maintenance_schedule_delete', sid=s.id) }}" data-confirm="Delete this schedule?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🔧</div>
+    <p>No maintenance schedules yet. <a href="{{ url_for('maintenance_schedule_add') }}">Add the first one</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

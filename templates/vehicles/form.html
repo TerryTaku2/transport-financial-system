@@ -49,6 +49,15 @@
             <option value="inactive" {% if vehicle and vehicle.status=='inactive' %}selected{% endif %}>Inactive</option>
           </select>
         </div>
+        <div class="form-group">
+          <label>Depot</label>
+          <select name="depot_id">
+            <option value="">Unassigned</option>
+            {% for dep in depots %}
+            <option value="{{ dep.id }}" {% if vehicle and vehicle.depot_id==dep.id %}selected{% endif %}>{{ dep.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
       </div>
       <div class="btn-group">
         <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Vehicle</button>

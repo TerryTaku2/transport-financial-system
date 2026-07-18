@@ -113,7 +113,10 @@ class Vehicle(db.Model):
     year = db.Column(db.Integer, nullable=False)
     acquisition_cost = db.Column(db.Float, default=0.0)
     status = db.Column(db.String(20), default='active')
+    depot_id = db.Column(db.Integer, db.ForeignKey('depots.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    depot = db.relationship('Depot', backref='vehicles')
 
     documents = db.relationship('VehicleDocument', backref='vehicle',
                                 lazy=True, cascade='all, delete-orphan')
@@ -169,8 +172,10 @@ class Driver(db.Model):
     role = db.Column(db.String(20), default='driver')
     commission_rate = db.Column(db.Float)
     status = db.Column(db.String(20), default='active')
+    depot_id = db.Column(db.Integer, db.ForeignKey('depots.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+    depot = db.relationship('Depot', backref='drivers')
     driven_logs = db.relationship('DailyLog', foreign_keys='DailyLog.driver_id',
                                   backref='driver', lazy=True)
     conducted_logs = db.relationship('DailyLog', foreign_keys='DailyLog.conductor_id',
@@ -186,8 +191,10 @@ class Route(db.Model):
     distance_km = db.Column(db.Float)
     fare_rate = db.Column(db.Float, nullable=False)
     status = db.Column(db.String(20), default='active')
+    depot_id = db.Column(db.Integer, db.ForeignKey('depots.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
+    depot = db.relationship('Depot', backref='routes')
     logs = db.relationship('DailyLog', backref='route', lazy=True)
 
 
@@ -260,6 +267,181 @@ class AuditLog(db.Model):
 
 
 # ─────────────────────────────────────────────────────────────
+# Multi-depot
+# ─────────────────────────────────────────────────────────────
+class Depot(db.Model):
+    __tablename__ = 'depots'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), unique=True, nullable=False)
+    location = db.Column(db.String(150))
+    status = db.Column(db.String(20), default='active')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+# ─────────────────────────────────────────────────────────────
+# Finance: loans, payables, receivables, capital, expenses, budget
+# ─────────────────────────────────────────────────────────────
+class Loan(db.Model):
+    __tablename__ = 'loans'
+    id = db.Column(db.Integer, primary_key=True)
+    lender = db.Column(db.String(100), nullable=False)
+    principal = db.Column(db.Float, nullable=False)
+    interest_rate = db.Column(db.Float, default=0.0)
+    start_date = db.Column(db.Date, nullable=False)
+    term_months = db.Column(db.Integer)
+    status = db.Column(db.String(20), default='active')
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    payments = db.relationship('LoanPayment', backref='loan', lazy=True,
+                               cascade='all, delete-orphan')
+
+    @property
+    def total_repaid(self):
+        return sum(p.amount for p in self.payments)
+
+    @property
+    def outstanding_balance(self):
+        return self.principal - self.total_repaid
+
+
+class LoanPayment(db.Model):
+    __tablename__ = 'loan_payments'
+    id = db.Column(db.Integer, primary_key=True)
+    loan_id = db.Column(db.Integer, db.ForeignKey('loans.id'), nullable=False)
+    payment_date = db.Column(db.Date, nullable=False, default=date.today)
+    amount = db.Column(db.Float, nullable=False)
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Payable(db.Model):
+    """Accounts payable — amounts owed to suppliers OUTSIDE the fuel/maintenance
+    logs (e.g. an insurance premium invoice), tracked on an accrual basis:
+    the expense is recognized when the payable is created, not when it's paid."""
+    __tablename__ = 'payables'
+    id = db.Column(db.Integer, primary_key=True)
+    supplier_name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text)
+    amount = db.Column(db.Float, nullable=False)
+    invoice_date = db.Column(db.Date, nullable=False, default=date.today)
+    due_date = db.Column(db.Date)
+    status = db.Column(db.String(20), default='unpaid')
+    paid_date = db.Column(db.Date)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Receivable(db.Model):
+    """Accounts receivable — revenue earned but not yet collected (e.g. an
+    invoiced corporate/charter client), tracked on an accrual basis: revenue
+    is recognized when the receivable is created, not when it's collected."""
+    __tablename__ = 'receivables'
+    id = db.Column(db.Integer, primary_key=True)
+    client_name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text)
+    amount = db.Column(db.Float, nullable=False)
+    invoice_date = db.Column(db.Date, nullable=False, default=date.today)
+    due_date = db.Column(db.Date)
+    status = db.Column(db.String(20), default='outstanding')
+    collected_date = db.Column(db.Date)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class CommissionPayment(db.Model):
+    """An actual cash payout of driver/conductor commission. Kept separate
+    from the accrued commission figure (computed live from revenue, as the
+    payroll report already does) so the two can be reconciled — accrued
+    minus paid is the outstanding commission liability."""
+    __tablename__ = 'commission_payments'
+    id = db.Column(db.Integer, primary_key=True)
+    driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=False)
+    payment_date = db.Column(db.Date, nullable=False, default=date.today)
+    amount = db.Column(db.Float, nullable=False)
+    period_start = db.Column(db.Date)
+    period_end = db.Column(db.Date)
+    method = db.Column(db.String(30))
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    driver = db.relationship('Driver')
+
+
+class CapitalContribution(db.Model):
+    __tablename__ = 'capital_contributions'
+    id = db.Column(db.Integer, primary_key=True)
+    contributor = db.Column(db.String(100), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    contribution_date = db.Column(db.Date, nullable=False, default=date.today)
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class OwnerDrawing(db.Model):
+    __tablename__ = 'owner_drawings'
+    id = db.Column(db.Integer, primary_key=True)
+    amount = db.Column(db.Float, nullable=False)
+    drawing_date = db.Column(db.Date, nullable=False, default=date.today)
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class ExpenseCategory(db.Model):
+    __tablename__ = 'expense_categories'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(60), unique=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Expense(db.Model):
+    __tablename__ = 'expenses'
+    id = db.Column(db.Integer, primary_key=True)
+    category_id = db.Column(db.Integer, db.ForeignKey('expense_categories.id'), nullable=False)
+    vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=True)
+    expense_date = db.Column(db.Date, nullable=False, default=date.today)
+    description = db.Column(db.Text)
+    amount = db.Column(db.Float, nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    category = db.relationship('ExpenseCategory')
+    vehicle = db.relationship('Vehicle')
+
+
+class Budget(db.Model):
+    __tablename__ = 'budgets'
+    id = db.Column(db.Integer, primary_key=True)
+    category = db.Column(db.String(60), nullable=False)
+    month = db.Column(db.Date, nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class MaintenanceSchedule(db.Model):
+    __tablename__ = 'maintenance_schedules'
+    id = db.Column(db.Integer, primary_key=True)
+    vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
+    description = db.Column(db.String(150), nullable=False)
+    interval_days = db.Column(db.Integer)
+    interval_km = db.Column(db.Float)
+    last_done_date = db.Column(db.Date)
+    last_done_odometer = db.Column(db.Float)
+    next_due_date = db.Column(db.Date)
+    next_due_odometer = db.Column(db.Float)
+    status = db.Column(db.String(20), default='active')
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    vehicle = db.relationship('Vehicle')
+
+
+# ─────────────────────────────────────────────────────────────
 # Auth helpers
 # ─────────────────────────────────────────────────────────────
 @login_manager.user_loader
@@ -278,6 +460,7 @@ PERMISSIONS = {
     'maintenance':  'Maintenance — view & record maintenance logs',
     'reports':      'Finance & Reports — income statement, payroll, CSV exports',
     'compliance':   'Compliance — vehicle documents & expiry tracker',
+    'finance':      'Finance Ledger — loans, payables, receivables, capital, expenses, budget',
 }
 
 PERMISSION_REDIRECTS = [
@@ -291,6 +474,7 @@ PERMISSION_REDIRECTS = [
     ('maintenance', 'maintenance_logs'),
     ('reports',     'report_income'),
     ('compliance',  'compliance'),
+    ('finance',     'loans_list'),
 ]
 
 
@@ -439,28 +623,53 @@ def query_single_date(param='as_of', default=None):
         return default
 
 
+def compute_commission_accrued(as_of):
+    """Total driver/conductor commission earned (accrued) on all revenue
+    up to as_of, using the same per-driver rate logic as the payroll report,
+    but over the driver's entire history rather than one filter period."""
+    dr_rate = app.config['COMMISSION_DRIVER_RATE']
+    co_rate = app.config['COMMISSION_CONDUCTOR_RATE']
+    total = 0.0
+    for d in Driver.query.all():
+        driven = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+            DailyLog.driver_id == d.id, DailyLog.log_date <= as_of).scalar() or 0
+        conducted = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+            DailyLog.conductor_id == d.id, DailyLog.log_date <= as_of).scalar() or 0
+        rate = d.commission_rate if d.commission_rate is not None else (
+            dr_rate if d.role == 'driver' else co_rate)
+        total += (driven + conducted) * rate
+    return total
+
+
 def compute_financial_position(as_of):
     """Simplified statement of financial position as at a given date.
 
-    There is no cash/bank ledger or loan tracking in this system, so this
-    is an approximation, not a bookkeeping-grade statement:
-      - Vehicles are depreciated straight-line over VEHICLE_USEFUL_LIFE_YEARS,
-        dated from when each vehicle was added to the fleet (no separate
-        acquisition-date field exists).
-      - Cash & equivalents = cumulative net profit (revenue - fuel -
-        maintenance) since inception, same definition as the income
-        statement. It does not net out cash spent acquiring vehicles —
-        that spend is assumed funded by owner's capital (see below) so
-        the statement still balances.
-      - Owner's Capital is backed into as the total historical cost of
-        vehicles, since no capital-contribution or loan records exist to
-        say otherwise.
-      - Liabilities are always zero until loans/payables are tracked.
+    This is built on real records (loans, payables, receivables, capital
+    contributions, owner drawings, commission payments, expenses) rather
+    than a single inferred "cash" figure, but it's still an approximation,
+    not bookkeeping-grade — there's no real cash/bank reconciliation.
+    Key modelling choices:
+      - Vehicle purchases are a pure asset swap (cash down, fixed asset up)
+        — they are NOT assumed to be capital-funded. If vehicles were
+        bought before any Capital Contribution or Loan was recorded to
+        explain the cash, Cash will legitimately show negative here. That's
+        the system being honest about a genuine gap in what's recorded —
+        fix it by adding an opening Capital Contribution or Loan entry.
+      - Vehicles are depreciated straight-line over VEHICLE_USEFUL_LIFE_YEARS
+        from when each was added to the fleet (no acquisition-date field
+        exists separately from that).
+      - Commission is accrued on all revenue earned (matching the payroll
+        report's calculation), not just what's been paid out — the
+        difference sits as a Commission Payable liability.
+      - Payables/Receivables are accrual-based: recognized as an
+        expense/revenue when created, not when settled.
+      - Loan repayments are treated as pure principal reduction (interest
+        is not separately expensed) — a deliberate simplification.
     """
     useful_life = app.config['VEHICLE_USEFUL_LIFE_YEARS']
 
     vehicle_rows = []
-    total_cost = 0.0
+    total_vehicle_cost = 0.0
     total_accum_dep = 0.0
     for v in Vehicle.query.order_by(Vehicle.registration).all():
         acquired = v.created_at.date()
@@ -477,10 +686,10 @@ def compute_financial_position(as_of):
             'net_book_value': nbv,
             'years_in_service': years_in_service,
         })
-        total_cost += v.acquisition_cost
+        total_vehicle_cost += v.acquisition_cost
         total_accum_dep += accum_dep
 
-    total_nbv = total_cost - total_accum_dep
+    total_nbv = total_vehicle_cost - total_accum_dep
 
     total_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
         DailyLog.log_date <= as_of).scalar() or 0
@@ -488,24 +697,71 @@ def compute_financial_position(as_of):
         FuelLog.log_date <= as_of).scalar() or 0
     total_maintenance = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
         MaintenanceLog.log_date <= as_of).scalar() or 0
+    total_expenses = db.session.query(func.sum(Expense.amount)).filter(
+        Expense.expense_date <= as_of).scalar() or 0
 
-    net_operating_profit = total_revenue - total_fuel - total_maintenance
-    cash_and_equivalents = net_operating_profit
-    retained_earnings = net_operating_profit - total_accum_dep
-    owners_capital = total_cost
+    commission_accrued = compute_commission_accrued(as_of)
+    commission_paid = db.session.query(func.sum(CommissionPayment.amount)).filter(
+        CommissionPayment.payment_date <= as_of).scalar() or 0
+    commission_payable = commission_accrued - commission_paid
+
+    loan_proceeds = db.session.query(func.sum(Loan.principal)).filter(
+        Loan.start_date <= as_of).scalar() or 0
+    loan_repayments = db.session.query(func.sum(LoanPayment.amount)).filter(
+        LoanPayment.payment_date <= as_of).scalar() or 0
+    loans_outstanding = loan_proceeds - loan_repayments
+
+    payables_total = db.session.query(func.sum(Payable.amount)).filter(
+        Payable.invoice_date <= as_of).scalar() or 0
+    payables_paid = db.session.query(func.sum(Payable.amount)).filter(
+        Payable.status == 'paid', Payable.paid_date.isnot(None), Payable.paid_date <= as_of).scalar() or 0
+    payables_outstanding = payables_total - payables_paid
+
+    receivables_total = db.session.query(func.sum(Receivable.amount)).filter(
+        Receivable.invoice_date <= as_of).scalar() or 0
+    receivables_collected = db.session.query(func.sum(Receivable.amount)).filter(
+        Receivable.status == 'collected', Receivable.collected_date.isnot(None),
+        Receivable.collected_date <= as_of).scalar() or 0
+    receivables_outstanding = receivables_total - receivables_collected
+
+    capital_contributions = db.session.query(func.sum(CapitalContribution.amount)).filter(
+        CapitalContribution.contribution_date <= as_of).scalar() or 0
+    owner_drawings = db.session.query(func.sum(OwnerDrawing.amount)).filter(
+        OwnerDrawing.drawing_date <= as_of).scalar() or 0
+
+    cash_and_equivalents = (
+        total_revenue - total_fuel - total_maintenance - total_expenses
+        - commission_paid - total_vehicle_cost
+        + loan_proceeds - loan_repayments
+        + capital_contributions - owner_drawings
+        + receivables_collected - payables_paid
+    )
+
+    retained_earnings = (
+        (total_revenue + receivables_total)
+        - (total_fuel + total_maintenance + total_expenses + payables_total)
+        - total_accum_dep - commission_accrued
+    )
+    owners_capital = capital_contributions - owner_drawings
+
+    total_assets = total_nbv + cash_and_equivalents + receivables_outstanding
+    total_liabilities = loans_outstanding + payables_outstanding + commission_payable
     total_equity = owners_capital + retained_earnings
-    total_assets = total_nbv + cash_and_equivalents
 
     return {
         'as_of': as_of,
         'useful_life': useful_life,
         'vehicle_rows': vehicle_rows,
-        'total_cost': total_cost,
+        'total_cost': total_vehicle_cost,
         'total_accum_dep': total_accum_dep,
         'total_nbv': total_nbv,
         'cash_and_equivalents': cash_and_equivalents,
+        'receivables_outstanding': receivables_outstanding,
         'total_assets': total_assets,
-        'total_liabilities': 0.0,
+        'loans_outstanding': loans_outstanding,
+        'payables_outstanding': payables_outstanding,
+        'commission_payable': commission_payable,
+        'total_liabilities': total_liabilities,
         'owners_capital': owners_capital,
         'retained_earnings': retained_earnings,
         'total_equity': total_equity,
@@ -635,8 +891,13 @@ def dashboard():
 @login_required
 @permission_required('vehicles')
 def vehicles():
-    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
-    return render_template('vehicles/index.html', vehicles=all_vehicles)
+    depot_id = request.args.get('depot_id', '')
+    q = Vehicle.query
+    if depot_id:
+        q = q.filter(Vehicle.depot_id == depot_id)
+    all_vehicles = q.order_by(Vehicle.registration).all()
+    all_depots = Depot.query.order_by(Depot.name).all()
+    return render_template('vehicles/index.html', vehicles=all_vehicles, depots=all_depots, depot_id=depot_id)
 
 
 @app.route('/vehicles/add', methods=['GET', 'POST'])
@@ -652,6 +913,7 @@ def vehicle_add():
             year=form_int(request.form, 'year', min_value=1980),
             acquisition_cost=form_float(request.form, 'acquisition_cost', required=False, default=0, min_value=0),
             status=request.form.get('status', 'active'),
+            depot_id=form_int(request.form, 'depot_id', required=False),
         )
         db.session.add(v)
         db.session.flush()
@@ -659,7 +921,8 @@ def vehicle_add():
         db.session.commit()
         flash(f'Vehicle {v.registration} registered successfully.', 'success')
         return redirect(url_for('vehicles'))
-    return render_template('vehicles/form.html', vehicle=None, action='Register')
+    all_depots = Depot.query.order_by(Depot.name).all()
+    return render_template('vehicles/form.html', vehicle=None, action='Register', depots=all_depots)
 
 
 @app.route('/vehicles/<int:vid>')
@@ -689,11 +952,13 @@ def vehicle_edit(vid):
         v.year = form_int(request.form, 'year', min_value=1980)
         v.acquisition_cost = form_float(request.form, 'acquisition_cost', required=False, default=0, min_value=0)
         v.status = request.form.get('status', 'active')
+        v.depot_id = form_int(request.form, 'depot_id', required=False)
         log_audit('UPDATE', 'vehicles', v.id, f'Updated vehicle {v.registration}')
         db.session.commit()
         flash(f'Vehicle {v.registration} updated.', 'success')
         return redirect(url_for('vehicle_detail', vid=vid))
-    return render_template('vehicles/form.html', vehicle=v, action='Edit')
+    all_depots = Depot.query.order_by(Depot.name).all()
+    return render_template('vehicles/form.html', vehicle=v, action='Edit', depots=all_depots)
 
 
 @app.route('/vehicles/<int:vid>/delete', methods=['POST'])
@@ -753,8 +1018,13 @@ def document_delete(did):
 @login_required
 @permission_required('drivers')
 def drivers():
-    all_drivers = Driver.query.order_by(Driver.name).all()
-    return render_template('drivers/index.html', drivers=all_drivers)
+    depot_id = request.args.get('depot_id', '')
+    q = Driver.query
+    if depot_id:
+        q = q.filter(Driver.depot_id == depot_id)
+    all_drivers = q.order_by(Driver.name).all()
+    all_depots = Depot.query.order_by(Depot.name).all()
+    return render_template('drivers/index.html', drivers=all_drivers, depots=all_depots, depot_id=depot_id)
 
 
 @app.route('/drivers/add', methods=['GET', 'POST'])
@@ -772,6 +1042,7 @@ def driver_add():
             role=request.form.get('role', 'driver'),
             commission_rate=rate_input / 100 if rate_input is not None else None,
             status=request.form.get('status', 'active'),
+            depot_id=form_int(request.form, 'depot_id', required=False),
         )
         db.session.add(d)
         db.session.flush()
@@ -798,7 +1069,8 @@ def driver_add():
         db.session.commit()
         flash(f'Driver {d.name} registered.', 'success')
         return redirect(url_for('drivers'))
-    return render_template('drivers/form.html', driver=None, action='Register')
+    all_depots = Depot.query.order_by(Depot.name).all()
+    return render_template('drivers/form.html', driver=None, action='Register', depots=all_depots)
 
 
 @app.route('/drivers/<int:did>/edit', methods=['GET', 'POST'])
@@ -816,11 +1088,13 @@ def driver_edit(did):
         d.role = request.form.get('role', 'driver')
         d.commission_rate = rate_input / 100 if rate_input is not None else None
         d.status = request.form.get('status', 'active')
+        d.depot_id = form_int(request.form, 'depot_id', required=False)
         log_audit('UPDATE', 'drivers', d.id, f'Updated driver {d.name}')
         db.session.commit()
         flash(f'Driver {d.name} updated.', 'success')
         return redirect(url_for('drivers'))
-    return render_template('drivers/form.html', driver=d, action='Edit')
+    all_depots = Depot.query.order_by(Depot.name).all()
+    return render_template('drivers/form.html', driver=d, action='Edit', depots=all_depots)
 
 
 @app.route('/drivers/<int:did>/delete', methods=['POST'])
@@ -843,8 +1117,13 @@ def driver_delete(did):
 @login_required
 @permission_required('routes')
 def routes_list():
-    all_routes = Route.query.order_by(Route.name).all()
-    return render_template('routes/index.html', routes=all_routes)
+    depot_id = request.args.get('depot_id', '')
+    q = Route.query
+    if depot_id:
+        q = q.filter(Route.depot_id == depot_id)
+    all_routes = q.order_by(Route.name).all()
+    all_depots = Depot.query.order_by(Depot.name).all()
+    return render_template('routes/index.html', routes=all_routes, depots=all_depots, depot_id=depot_id)
 
 
 @app.route('/routes/add', methods=['GET', 'POST'])
@@ -860,6 +1139,7 @@ def route_add():
             distance_km=form_float(request.form, 'distance_km', required=False, min_value=0),
             fare_rate=form_float(request.form, 'fare_rate', min_value=0),
             status=request.form.get('status', 'active'),
+            depot_id=form_int(request.form, 'depot_id', required=False),
         )
         db.session.add(r)
         db.session.flush()
@@ -867,7 +1147,8 @@ def route_add():
         db.session.commit()
         flash(f'Route "{r.name}" added.', 'success')
         return redirect(url_for('routes_list'))
-    return render_template('routes/form.html', route=None, action='Add')
+    all_depots = Depot.query.order_by(Depot.name).all()
+    return render_template('routes/form.html', route=None, action='Add', depots=all_depots)
 
 
 @app.route('/routes/<int:rid>/edit', methods=['GET', 'POST'])
@@ -883,11 +1164,13 @@ def route_edit(rid):
         r.distance_km = form_float(request.form, 'distance_km', required=False, min_value=0)
         r.fare_rate = form_float(request.form, 'fare_rate', min_value=0)
         r.status = request.form.get('status', 'active')
+        r.depot_id = form_int(request.form, 'depot_id', required=False)
         log_audit('UPDATE', 'routes', r.id, f'Updated route {r.name}')
         db.session.commit()
         flash(f'Route "{r.name}" updated.', 'success')
         return redirect(url_for('routes_list'))
-    return render_template('routes/form.html', route=r, action='Edit')
+    all_depots = Depot.query.order_by(Depot.name).all()
+    return render_template('routes/form.html', route=r, action='Edit', depots=all_depots)
 
 
 @app.route('/routes/<int:rid>/delete', methods=['POST'])
@@ -1136,6 +1419,111 @@ def maintenance_log_delete(lid):
     return redirect(url_for('maintenance_logs'))
 
 
+def latest_odometer(vehicle_id):
+    latest_fuel = FuelLog.query.filter_by(vehicle_id=vehicle_id).filter(
+        FuelLog.odometer.isnot(None)).order_by(FuelLog.log_date.desc()).first()
+    return latest_fuel.odometer if latest_fuel else None
+
+
+def schedule_status(sched):
+    today = date.today()
+    odometer = latest_odometer(sched.vehicle_id)
+    due_by_date = sched.next_due_date is not None and sched.next_due_date <= today
+    due_by_km = (sched.next_due_odometer is not None and odometer is not None
+                 and odometer >= sched.next_due_odometer)
+    if due_by_date or due_by_km:
+        return 'overdue'
+    soon_by_date = sched.next_due_date is not None and (sched.next_due_date - today).days <= 14
+    soon_by_km = (sched.next_due_odometer is not None and odometer is not None
+                  and sched.next_due_odometer - odometer <= 500)
+    if soon_by_date or soon_by_km:
+        return 'due_soon'
+    return 'ok'
+
+
+# ─────────────────────────────────────────────────────────────
+# Preventive Maintenance Scheduling
+# ─────────────────────────────────────────────────────────────
+@app.route('/maintenance/schedules')
+@login_required
+@permission_required('maintenance')
+def maintenance_schedules():
+    schedules = MaintenanceSchedule.query.filter_by(status='active').join(Vehicle).order_by(
+        Vehicle.registration).all()
+    rows = [{'schedule': s, 'status': schedule_status(s), 'odometer': latest_odometer(s.vehicle_id)}
+            for s in schedules]
+    rows.sort(key=lambda r: {'overdue': 0, 'due_soon': 1, 'ok': 2}[r['status']])
+    all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
+    return render_template('maintenance/schedules.html', rows=rows, vehicles=all_vehicles,
+                           today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/maintenance/schedules/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('maintenance')
+@handle_form_errors
+def maintenance_schedule_add():
+    if request.method == 'POST':
+        interval_days = form_int(request.form, 'interval_days', required=False, min_value=1)
+        interval_km = form_float(request.form, 'interval_km', required=False, min_value=1)
+        last_done_date = parse_date(request.form.get('last_done_date')) or date.today()
+        last_done_odometer = form_float(request.form, 'last_done_odometer', required=False, min_value=0)
+
+        sched = MaintenanceSchedule(
+            vehicle_id=form_int(request.form, 'vehicle_id'),
+            description=request.form['description'].strip(),
+            interval_days=interval_days,
+            interval_km=interval_km,
+            last_done_date=last_done_date,
+            last_done_odometer=last_done_odometer,
+            next_due_date=(last_done_date + timedelta(days=interval_days)) if interval_days else None,
+            next_due_odometer=(last_done_odometer + interval_km)
+                if (interval_km and last_done_odometer is not None) else None,
+        )
+        db.session.add(sched)
+        db.session.flush()
+        log_audit('CREATE', 'maintenance_schedules', sched.id, f'Added maintenance schedule: {sched.description}')
+        db.session.commit()
+        flash('Maintenance schedule added.', 'success')
+        return redirect(url_for('maintenance_schedules'))
+    all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
+    return render_template('maintenance/schedule_form.html', vehicles=all_vehicles,
+                           today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/maintenance/schedules/<int:sid>/done', methods=['POST'])
+@login_required
+@permission_required('maintenance')
+@handle_form_errors
+def maintenance_schedule_done(sid):
+    sched = MaintenanceSchedule.query.get_or_404(sid)
+    done_date = parse_date(request.form.get('done_date')) or date.today()
+    done_odometer = form_float(request.form, 'done_odometer', required=False, min_value=0)
+
+    sched.last_done_date = done_date
+    sched.last_done_odometer = done_odometer if done_odometer is not None else sched.last_done_odometer
+    sched.next_due_date = (done_date + timedelta(days=sched.interval_days)) if sched.interval_days else None
+    sched.next_due_odometer = (sched.last_done_odometer + sched.interval_km) \
+        if (sched.interval_km and sched.last_done_odometer is not None) else None
+
+    log_audit('UPDATE', 'maintenance_schedules', sid, f'Marked "{sched.description}" as done')
+    db.session.commit()
+    flash('Marked as done — next due date recalculated.', 'success')
+    return redirect(url_for('maintenance_schedules'))
+
+
+@app.route('/maintenance/schedules/<int:sid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def maintenance_schedule_delete(sid):
+    sched = MaintenanceSchedule.query.get_or_404(sid)
+    log_audit('DELETE', 'maintenance_schedules', sid, f'Deleted maintenance schedule: {sched.description}')
+    db.session.delete(sched)
+    db.session.commit()
+    flash('Maintenance schedule deleted.', 'warning')
+    return redirect(url_for('maintenance_schedules'))
+
+
 # ─────────────────────────────────────────────────────────────
 # Reports
 # ─────────────────────────────────────────────────────────────
@@ -1238,6 +1626,31 @@ def crew_leaderboard():
                            date_from=date_from_str, date_to=date_to_str, today=today)
 
 
+def vehicle_income_totals(df, dt, vehicle_id=None):
+    """Revenue/fuel/maintenance/expense totals for one vehicle (or the whole
+    fleet if vehicle_id is None) over [df, dt]. Only expenses explicitly
+    tagged to a vehicle count toward that vehicle's statement — general
+    overhead (untagged expenses) only appears in the consolidated total."""
+    rev_q = db.session.query(func.sum(DailyLog.gross_revenue)).filter(DailyLog.log_date.between(df, dt))
+    fuel_q = db.session.query(func.sum(FuelLog.total_cost)).filter(FuelLog.log_date.between(df, dt))
+    maint_q = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(MaintenanceLog.log_date.between(df, dt))
+    exp_q = db.session.query(func.sum(Expense.amount)).filter(Expense.expense_date.between(df, dt))
+
+    if vehicle_id:
+        rev_q = rev_q.filter(DailyLog.vehicle_id == vehicle_id)
+        fuel_q = fuel_q.filter(FuelLog.vehicle_id == vehicle_id)
+        maint_q = maint_q.filter(MaintenanceLog.vehicle_id == vehicle_id)
+        exp_q = exp_q.filter(Expense.vehicle_id == vehicle_id)
+    else:
+        exp_q = exp_q.filter(Expense.vehicle_id.is_(None))
+
+    revenue = rev_q.scalar() or 0
+    fuel = fuel_q.scalar() or 0
+    maintenance = maint_q.scalar() or 0
+    expenses = exp_q.scalar() or 0
+    return revenue, fuel, maintenance, expenses
+
+
 @app.route('/reports/income')
 @login_required
 @permission_required('reports')
@@ -1246,39 +1659,40 @@ def report_income():
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
 
-    rev_q = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
-        DailyLog.log_date.between(df, dt))
-    fuel_q = db.session.query(func.sum(FuelLog.total_cost)).filter(
-        FuelLog.log_date.between(df, dt))
-    maint_q = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
-        MaintenanceLog.log_date.between(df, dt))
-
     if vehicle_id:
-        rev_q = rev_q.filter(DailyLog.vehicle_id == vehicle_id)
-        fuel_q = fuel_q.filter(FuelLog.vehicle_id == vehicle_id)
-        maint_q = maint_q.filter(MaintenanceLog.vehicle_id == vehicle_id)
+        # Per-vehicle statement: only costs directly attributable to this vehicle.
+        gross_revenue, fuel_cost, maintenance_cost, vehicle_expenses = vehicle_income_totals(df, dt, vehicle_id)
+        general_expenses = 0
+    else:
+        # Consolidated statement: fleet-wide fuel/maintenance plus ALL expenses
+        # (both vehicle-tagged and general overhead).
+        gross_revenue, fuel_cost, maintenance_cost, general_expenses = vehicle_income_totals(df, dt, None)
+        vehicle_expenses = db.session.query(func.sum(Expense.amount)).filter(
+            Expense.expense_date.between(df, dt), Expense.vehicle_id.isnot(None)).scalar() or 0
 
-    gross_revenue = rev_q.scalar() or 0
-    fuel_cost = fuel_q.scalar() or 0
-    maintenance_cost = maint_q.scalar() or 0
-    total_expenses = fuel_cost + maintenance_cost
+    total_expenses = fuel_cost + maintenance_cost + vehicle_expenses + general_expenses
     net_profit = gross_revenue - total_expenses
     profit_margin = (net_profit / gross_revenue * 100) if gross_revenue else 0
 
-    vehicle_breakdown = db.session.query(
-        Vehicle.registration,
-        Vehicle.make,
-        Vehicle.model,
-        func.sum(DailyLog.gross_revenue).label('revenue'),
-        func.count(DailyLog.id).label('log_days'),
-    ).join(DailyLog, Vehicle.id == DailyLog.vehicle_id).filter(
-        DailyLog.log_date.between(df, dt)
-    ).group_by(Vehicle.id).all()
+    vehicle_breakdown = []
+    for v in Vehicle.query.order_by(Vehicle.registration).all():
+        v_rev, v_fuel, v_maint, v_exp = vehicle_income_totals(df, dt, v.id)
+        if v_rev == 0 and v_fuel == 0 and v_maint == 0 and v_exp == 0:
+            continue
+        v_total_cost = v_fuel + v_maint + v_exp
+        v_net = v_rev - v_total_cost
+        vehicle_breakdown.append({
+            'vehicle': v, 'revenue': v_rev, 'fuel': v_fuel, 'maintenance': v_maint,
+            'expenses': v_exp, 'net_profit': v_net,
+            'margin': (v_net / v_rev * 100) if v_rev else 0,
+        })
+    vehicle_breakdown.sort(key=lambda r: r['net_profit'], reverse=True)
 
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     return render_template('reports/income.html',
         gross_revenue=gross_revenue, fuel_cost=fuel_cost,
-        maintenance_cost=maintenance_cost, total_expenses=total_expenses,
+        maintenance_cost=maintenance_cost, vehicle_expenses=vehicle_expenses,
+        general_expenses=general_expenses, total_expenses=total_expenses,
         net_profit=net_profit, profit_margin=profit_margin,
         vehicle_breakdown=vehicle_breakdown,
         vehicles=all_vehicles,
@@ -1312,17 +1726,271 @@ def report_payroll():
             continue
         rate = d.commission_rate if d.commission_rate is not None else (
             dr_rate if d.role == 'driver' else co_rate)
+        commission = rev * rate
+        paid = db.session.query(func.sum(CommissionPayment.amount)).filter(
+            CommissionPayment.driver_id == d.id,
+            CommissionPayment.payment_date.between(df, dt)).scalar() or 0
         earnings.append({
             'driver': d,
             'total_revenue': rev,
             'days_worked': days,
             'rate_pct': rate * 100,
-            'commission': rev * rate,
+            'commission': commission,
+            'paid': paid,
+            'outstanding': commission - paid,
         })
 
     total_commissions = sum(e['commission'] for e in earnings)
+    total_paid = sum(e['paid'] for e in earnings)
+    total_outstanding = sum(e['outstanding'] for e in earnings)
     return render_template('reports/payroll.html',
         earnings=earnings, total_commissions=total_commissions,
+        total_paid=total_paid, total_outstanding=total_outstanding,
+        date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/finance/commission-payments/add', methods=['POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def commission_payment_add():
+    payment = CommissionPayment(
+        driver_id=form_int(request.form, 'driver_id'),
+        payment_date=parse_date(request.form['payment_date']),
+        amount=form_float(request.form, 'amount', min_value=0),
+        period_start=parse_date(request.form.get('period_start')),
+        period_end=parse_date(request.form.get('period_end')),
+        method=request.form.get('method', '').strip(),
+        notes=request.form.get('notes', '').strip(),
+        created_by=current_user.id,
+    )
+    db.session.add(payment)
+    db.session.flush()
+    log_audit('CREATE', 'commission_payments', payment.id,
+              f'Commission payment of {payment.amount} to driver #{payment.driver_id}')
+    db.session.commit()
+    flash('Commission payment recorded.', 'success')
+    return redirect(request.referrer or url_for('report_payroll'))
+
+
+@app.route('/finance/commission-payments/<int:pid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def commission_payment_delete(pid):
+    payment = CommissionPayment.query.get_or_404(pid)
+    log_audit('DELETE', 'commission_payments', pid, f'Deleted commission payment of {payment.amount}')
+    db.session.delete(payment)
+    db.session.commit()
+    flash('Commission payment deleted.', 'warning')
+    return redirect(request.referrer or url_for('report_payroll'))
+
+
+@app.route('/reports/cash-flow')
+@login_required
+@permission_required('reports')
+def report_cash_flow():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    def in_range(col):
+        return col.between(df, dt)
+
+    operating_in = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+        in_range(DailyLog.log_date)).scalar() or 0
+    receivables_in = db.session.query(func.sum(Receivable.amount)).filter(
+        Receivable.status == 'collected', in_range(Receivable.collected_date)).scalar() or 0
+
+    fuel_out = db.session.query(func.sum(FuelLog.total_cost)).filter(
+        in_range(FuelLog.log_date)).scalar() or 0
+    maint_out = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
+        in_range(MaintenanceLog.log_date)).scalar() or 0
+    expenses_out = db.session.query(func.sum(Expense.amount)).filter(
+        in_range(Expense.expense_date)).scalar() or 0
+    commission_out = db.session.query(func.sum(CommissionPayment.amount)).filter(
+        in_range(CommissionPayment.payment_date)).scalar() or 0
+    payables_out = db.session.query(func.sum(Payable.amount)).filter(
+        Payable.status == 'paid', in_range(Payable.paid_date)).scalar() or 0
+
+    net_operating = operating_in + receivables_in - fuel_out - maint_out - expenses_out - commission_out - payables_out
+
+    vehicles_bought = [v for v in Vehicle.query.all() if df <= v.created_at.date() <= dt]
+    investing_out = sum(v.acquisition_cost for v in vehicles_bought)
+    net_investing = -investing_out
+
+    loan_proceeds_in = db.session.query(func.sum(Loan.principal)).filter(
+        in_range(Loan.start_date)).scalar() or 0
+    loan_repay_out = db.session.query(func.sum(LoanPayment.amount)).filter(
+        in_range(LoanPayment.payment_date)).scalar() or 0
+    capital_in = db.session.query(func.sum(CapitalContribution.amount)).filter(
+        in_range(CapitalContribution.contribution_date)).scalar() or 0
+    drawings_out = db.session.query(func.sum(OwnerDrawing.amount)).filter(
+        in_range(OwnerDrawing.drawing_date)).scalar() or 0
+    net_financing = loan_proceeds_in - loan_repay_out + capital_in - drawings_out
+
+    net_change = net_operating + net_investing + net_financing
+
+    opening_cash = compute_financial_position(df - timedelta(days=1))['cash_and_equivalents']
+    closing_cash = compute_financial_position(dt)['cash_and_equivalents']
+
+    return render_template('reports/cash_flow.html',
+        date_from=date_from_str, date_to=date_to_str,
+        operating_in=operating_in, receivables_in=receivables_in,
+        fuel_out=fuel_out, maint_out=maint_out, expenses_out=expenses_out,
+        commission_out=commission_out, payables_out=payables_out, net_operating=net_operating,
+        investing_out=investing_out, net_investing=net_investing, vehicles_bought=vehicles_bought,
+        loan_proceeds_in=loan_proceeds_in, loan_repay_out=loan_repay_out,
+        capital_in=capital_in, drawings_out=drawings_out, net_financing=net_financing,
+        net_change=net_change, opening_cash=opening_cash, closing_cash=closing_cash)
+
+
+@app.route('/reports/budget')
+@login_required
+@permission_required('reports')
+def report_budget():
+    today = date.today()
+    month_str = request.args.get('month', today.strftime('%Y-%m'))
+    try:
+        month_start = datetime.strptime(month_str, '%Y-%m').date().replace(day=1)
+    except ValueError:
+        flash(f'"{month_str}" is not a valid month — showing {today.strftime("%Y-%m")} instead.', 'warning')
+        month_start = today.replace(day=1)
+        month_str = month_start.strftime('%Y-%m')
+    month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+
+    actuals = {
+        'Revenue': db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+            DailyLog.log_date.between(month_start, month_end)).scalar() or 0,
+        'Fuel': db.session.query(func.sum(FuelLog.total_cost)).filter(
+            FuelLog.log_date.between(month_start, month_end)).scalar() or 0,
+        'Maintenance': db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
+            MaintenanceLog.log_date.between(month_start, month_end)).scalar() or 0,
+    }
+    for cat in ExpenseCategory.query.all():
+        actuals[cat.name] = db.session.query(func.sum(Expense.amount)).filter(
+            Expense.category_id == cat.id,
+            Expense.expense_date.between(month_start, month_end)).scalar() or 0
+
+    budgets = {b.category: b.amount for b in Budget.query.filter_by(month=month_start).all()}
+    all_categories = sorted(set(list(actuals.keys()) + list(budgets.keys())))
+    rows = []
+    for cat in all_categories:
+        budget_amt = budgets.get(cat, 0)
+        actual_amt = actuals.get(cat, 0)
+        variance = actual_amt - budget_amt if cat != 'Revenue' else actual_amt - budget_amt
+        rows.append({'category': cat, 'budget': budget_amt, 'actual': actual_amt, 'variance': variance})
+
+    categories_available = ['Revenue', 'Fuel', 'Maintenance'] + [c.name for c in ExpenseCategory.query.all()]
+    return render_template('reports/budget.html', rows=rows, month=month_str,
+        month_label=month_start.strftime('%B %Y'), categories=categories_available)
+
+
+@app.route('/reports/budget/set', methods=['POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def budget_set():
+    month_str = request.form.get('month', '')
+    month_start = datetime.strptime(month_str, '%Y-%m').date().replace(day=1)
+    category = request.form['category'].strip()
+    amount = form_float(request.form, 'amount', min_value=0)
+
+    existing = Budget.query.filter_by(category=category, month=month_start).first()
+    if existing:
+        existing.amount = amount
+    else:
+        db.session.add(Budget(category=category, month=month_start, amount=amount, created_by=current_user.id))
+    log_audit('UPDATE', 'budgets', None, f'Set budget for {category} in {month_str}: {amount}')
+    db.session.commit()
+    flash(f'Budget for {category} set.', 'success')
+    return redirect(url_for('report_budget', month=month_str))
+
+
+@app.route('/reports/fuel-efficiency')
+@login_required
+@permission_required('reports')
+def report_fuel_efficiency():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    rows = []
+    for v in Vehicle.query.order_by(Vehicle.registration).all():
+        logs = FuelLog.query.filter(
+            FuelLog.vehicle_id == v.id, FuelLog.log_date.between(df, dt),
+            FuelLog.odometer.isnot(None)).order_by(FuelLog.odometer).all()
+        if len(logs) < 2:
+            continue
+        segments = []
+        for prev, curr in zip(logs, logs[1:]):
+            distance = curr.odometer - prev.odometer
+            if distance <= 0:
+                continue
+            # Fuel burned to cover this segment is the fill-up that ends it.
+            l_per_100km = (curr.liters / distance) * 100
+            segments.append({'from_date': prev.log_date, 'to_date': curr.log_date,
+                             'distance': distance, 'liters': curr.liters,
+                             'cost': curr.total_cost, 'l_per_100km': l_per_100km})
+        if not segments:
+            continue
+        total_distance = sum(s['distance'] for s in segments)
+        total_liters = sum(s['liters'] for s in segments)
+        total_cost = sum(s['cost'] for s in segments)
+        # Aggregate consumption over the whole period (distance-weighted), which
+        # is more accurate than averaging each segment's ratio equally.
+        overall_l_per_100km = (total_liters / total_distance) * 100 if total_distance else 0
+        km_per_liter = (total_distance / total_liters) if total_liters else 0
+        cost_per_km = (total_cost / total_distance) if total_distance else 0
+        rows.append({'vehicle': v, 'segments': segments,
+                     'avg_l_per_100km': overall_l_per_100km,
+                     'total_distance': total_distance, 'total_liters': total_liters,
+                     'total_cost': total_cost, 'km_per_liter': km_per_liter,
+                     'cost_per_km': cost_per_km})
+
+    # Fleet-wide figures aggregated across all measured distance/fuel.
+    fleet_distance = sum(r['total_distance'] for r in rows)
+    fleet_liters = sum(r['total_liters'] for r in rows)
+    fleet_cost = sum(r['total_cost'] for r in rows)
+    fleet_avg = (fleet_liters / fleet_distance) * 100 if fleet_distance else 0
+    return render_template('reports/fuel_efficiency.html', rows=rows, fleet_avg=fleet_avg,
+        fleet_distance=fleet_distance, fleet_liters=fleet_liters, fleet_cost=fleet_cost,
+        date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/reports/route-profitability')
+@login_required
+@permission_required('reports')
+def report_route_profitability():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    total_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+        DailyLog.log_date.between(df, dt)).scalar() or 0
+    total_fuel = db.session.query(func.sum(FuelLog.total_cost)).filter(
+        FuelLog.log_date.between(df, dt)).scalar() or 0
+    total_maintenance = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
+        MaintenanceLog.log_date.between(df, dt)).scalar() or 0
+    total_costs = total_fuel + total_maintenance
+
+    route_data = db.session.query(
+        Route.id, Route.name, Route.start_point, Route.end_point,
+        func.sum(DailyLog.gross_revenue).label('revenue'),
+        func.sum(DailyLog.trips_completed).label('trips'),
+        func.count(DailyLog.id).label('log_days'),
+    ).join(DailyLog, Route.id == DailyLog.route_id).filter(
+        DailyLog.log_date.between(df, dt)
+    ).group_by(Route.id).all()
+
+    rows = []
+    for r in route_data:
+        revenue = r.revenue or 0
+        allocated_cost = (revenue / total_revenue * total_costs) if total_revenue else 0
+        rows.append({
+            'route': r, 'revenue': revenue, 'trips': r.trips or 0, 'log_days': r.log_days,
+            'allocated_cost': allocated_cost, 'net_profit': revenue - allocated_cost,
+        })
+    rows.sort(key=lambda x: x['net_profit'], reverse=True)
+
+    return render_template('reports/route_profitability.html', rows=rows,
+        total_revenue=total_revenue, total_costs=total_costs,
         date_from=date_from_str, date_to=date_to_str)
 
 
@@ -1377,17 +2045,33 @@ def export_daily_logs():
 @login_required
 @permission_required('reports')
 def export_income():
+    vehicle_id = request.args.get('vehicle_id', '')
     df, dt = query_date_range()
     df_str, dt_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
 
-    daily = DailyLog.query.filter(DailyLog.log_date.between(df, dt)).order_by(DailyLog.log_date).all()
-    fuel = FuelLog.query.filter(FuelLog.log_date.between(df, dt)).order_by(FuelLog.log_date).all()
-    maintenance = MaintenanceLog.query.filter(
-        MaintenanceLog.log_date.between(df, dt)).order_by(MaintenanceLog.log_date).all()
+    daily_q = DailyLog.query.filter(DailyLog.log_date.between(df, dt))
+    fuel_q = FuelLog.query.filter(FuelLog.log_date.between(df, dt))
+    maint_q = MaintenanceLog.query.filter(MaintenanceLog.log_date.between(df, dt))
+    exp_q = Expense.query.filter(Expense.expense_date.between(df, dt))
+
+    vehicle_label = 'Consolidated (fleet-wide)'
+    if vehicle_id:
+        v = Vehicle.query.get(vehicle_id)
+        vehicle_label = f'{v.registration} — {v.make} {v.model}' if v else f'Vehicle #{vehicle_id}'
+        daily_q = daily_q.filter(DailyLog.vehicle_id == vehicle_id)
+        fuel_q = fuel_q.filter(FuelLog.vehicle_id == vehicle_id)
+        maint_q = maint_q.filter(MaintenanceLog.vehicle_id == vehicle_id)
+        exp_q = exp_q.filter(Expense.vehicle_id == vehicle_id)
+
+    daily = daily_q.order_by(DailyLog.log_date).all()
+    fuel = fuel_q.order_by(FuelLog.log_date).all()
+    maintenance = maint_q.order_by(MaintenanceLog.log_date).all()
+    expenses = exp_q.order_by(Expense.expense_date).all()
 
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(['TRANSPORT FLEET INCOME STATEMENT (ZIMRA COMPLIANT)'])
+    w.writerow([f'Scope: {vehicle_label}'])
     w.writerow([f'Period: {df_str} to {dt_str}'])
     w.writerow([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
     w.writerow([])
@@ -1421,12 +2105,23 @@ def export_income():
         total_maint += m.total_cost
     w.writerow(['', '', '', '', 'TOTAL MAINTENANCE', f'{total_maint:.2f}'])
     w.writerow([])
-    w.writerow(['NET PROFIT', f'{total_rev - total_fuel - total_maint:.2f}'])
+
+    w.writerow(['OTHER EXPENSES'])
+    w.writerow(['Date', 'Category', 'Vehicle', 'Description', 'Amount (USD)'])
+    total_exp = 0
+    for e in expenses:
+        w.writerow([e.expense_date, e.category.name, e.vehicle.registration if e.vehicle else '(general)',
+                    e.description or '', f'{e.amount:.2f}'])
+        total_exp += e.amount
+    w.writerow(['', '', '', 'TOTAL OTHER EXPENSES', f'{total_exp:.2f}'])
+    w.writerow([])
+    w.writerow(['NET PROFIT', f'{total_rev - total_fuel - total_maint - total_exp:.2f}'])
 
     out.seek(0)
     resp = make_response(out.getvalue())
     resp.headers['Content-Type'] = 'text/csv'
-    resp.headers['Content-Disposition'] = f'attachment; filename=income_{df_str}_to_{dt_str}.csv'
+    scope_suffix = f'_vehicle{vehicle_id}' if vehicle_id else '_consolidated'
+    resp.headers['Content-Disposition'] = f'attachment; filename=income{scope_suffix}_{df_str}_to_{dt_str}.csv'
     return resp
 
 
@@ -1454,11 +2149,15 @@ def export_financial_position():
     w.writerow([])
     w.writerow(['Current Assets'])
     w.writerow(['Cash & Cash Equivalents', f"{fp['cash_and_equivalents']:.2f}"])
+    w.writerow(['Receivables Outstanding', f"{fp['receivables_outstanding']:.2f}"])
     w.writerow([])
     w.writerow(['TOTAL ASSETS', f"{fp['total_assets']:.2f}"])
     w.writerow([])
 
     w.writerow(['LIABILITIES'])
+    w.writerow(['Loans Outstanding', f"{fp['loans_outstanding']:.2f}"])
+    w.writerow(['Payables Outstanding', f"{fp['payables_outstanding']:.2f}"])
+    w.writerow(['Commission Payable (accrued, unpaid)', f"{fp['commission_payable']:.2f}"])
     w.writerow(['TOTAL LIABILITIES', f"{fp['total_liabilities']:.2f}"])
     w.writerow([])
 
@@ -1469,15 +2168,363 @@ def export_financial_position():
     w.writerow([])
     w.writerow(['TOTAL LIABILITIES + EQUITY', f"{fp['total_liabilities'] + fp['total_equity']:.2f}"])
     w.writerow([])
-    w.writerow(['NOTE: Simplified statement — no cash/bank ledger or loan tracking exists in this '
-                 'system. Vehicles are assumed owner-funded and straight-line depreciated over '
-                 f"{fp['useful_life']} years from the date each was added to the fleet."])
+    w.writerow(['NOTE: Simplified statement. Vehicle purchases are a pure asset swap, not assumed '
+                 'capital-funded — negative cash means a vehicle was bought before a Capital '
+                 'Contribution or Loan was recorded to explain the funding. Vehicles are '
+                 f"straight-line depreciated over {fp['useful_life']} years from the date each was "
+                 'added to the fleet. Commission is accrued on all revenue earned, not just what has '
+                 'been paid. Loan repayments are treated as pure principal reduction.'])
 
     out.seek(0)
     resp = make_response(out.getvalue())
     resp.headers['Content-Type'] = 'text/csv'
     resp.headers['Content-Disposition'] = f'attachment; filename=financial_position_{as_of}.csv'
     return resp
+
+
+# ─────────────────────────────────────────────────────────────
+# Finance Ledger: Loans
+# ─────────────────────────────────────────────────────────────
+@app.route('/finance/loans')
+@login_required
+@permission_required('finance')
+def loans_list():
+    all_loans = Loan.query.order_by(Loan.start_date.desc()).all()
+    return render_template('finance/loans.html', loans=all_loans, today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/finance/loans/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def loan_add():
+    if request.method == 'POST':
+        loan = Loan(
+            lender=request.form['lender'].strip(),
+            principal=form_float(request.form, 'principal', min_value=0),
+            interest_rate=form_float(request.form, 'interest_rate', required=False, default=0, min_value=0),
+            start_date=parse_date(request.form['start_date']),
+            term_months=form_int(request.form, 'term_months', required=False),
+            status='active',
+            notes=request.form.get('notes', '').strip(),
+            created_by=current_user.id,
+        )
+        db.session.add(loan)
+        db.session.flush()
+        log_audit('CREATE', 'loans', loan.id, f'Added loan from {loan.lender} for {loan.principal}')
+        db.session.commit()
+        flash('Loan recorded.', 'success')
+        return redirect(url_for('loans_list'))
+    return render_template('finance/loan_form.html', today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/finance/loans/<int:lid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def loan_delete(lid):
+    loan = Loan.query.get_or_404(lid)
+    log_audit('DELETE', 'loans', lid, f'Deleted loan from {loan.lender}')
+    db.session.delete(loan)
+    db.session.commit()
+    flash('Loan deleted.', 'warning')
+    return redirect(url_for('loans_list'))
+
+
+@app.route('/finance/loans/<int:lid>/payment', methods=['POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def loan_payment_add(lid):
+    loan = Loan.query.get_or_404(lid)
+    payment = LoanPayment(
+        loan_id=lid,
+        payment_date=parse_date(request.form['payment_date']),
+        amount=form_float(request.form, 'amount', min_value=0),
+        notes=request.form.get('notes', '').strip(),
+        created_by=current_user.id,
+    )
+    db.session.add(payment)
+    log_audit('CREATE', 'loan_payments', None, f'Repayment of {payment.amount} on loan from {loan.lender}')
+    db.session.commit()
+    flash('Loan repayment recorded.', 'success')
+    return redirect(url_for('loans_list'))
+
+
+@app.route('/finance/loan-payments/<int:pid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def loan_payment_delete(pid):
+    payment = LoanPayment.query.get_or_404(pid)
+    log_audit('DELETE', 'loan_payments', pid, f'Deleted loan repayment of {payment.amount}')
+    db.session.delete(payment)
+    db.session.commit()
+    flash('Loan repayment deleted.', 'warning')
+    return redirect(url_for('loans_list'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Finance Ledger: Payables (Accounts Payable)
+# ─────────────────────────────────────────────────────────────
+@app.route('/finance/payables')
+@login_required
+@permission_required('finance')
+def payables_list():
+    all_payables = Payable.query.order_by(Payable.invoice_date.desc()).all()
+    return render_template('finance/payables.html', payables=all_payables)
+
+
+@app.route('/finance/payables/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def payable_add():
+    if request.method == 'POST':
+        p = Payable(
+            supplier_name=request.form['supplier_name'].strip(),
+            description=request.form.get('description', '').strip(),
+            amount=form_float(request.form, 'amount', min_value=0),
+            invoice_date=parse_date(request.form['invoice_date']),
+            due_date=parse_date(request.form.get('due_date')),
+            created_by=current_user.id,
+        )
+        db.session.add(p)
+        db.session.flush()
+        log_audit('CREATE', 'payables', p.id, f'Payable to {p.supplier_name}: {p.amount}')
+        db.session.commit()
+        flash('Payable recorded.', 'success')
+        return redirect(url_for('payables_list'))
+    return render_template('finance/payable_form.html', today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/finance/payables/<int:pid>/mark-paid', methods=['POST'])
+@login_required
+@permission_required('finance')
+def payable_mark_paid(pid):
+    p = Payable.query.get_or_404(pid)
+    p.status = 'paid'
+    p.paid_date = date.today()
+    log_audit('UPDATE', 'payables', pid, f'Marked payable to {p.supplier_name} as paid')
+    db.session.commit()
+    flash('Payable marked as paid.', 'success')
+    return redirect(url_for('payables_list'))
+
+
+@app.route('/finance/payables/<int:pid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def payable_delete(pid):
+    p = Payable.query.get_or_404(pid)
+    log_audit('DELETE', 'payables', pid, f'Deleted payable to {p.supplier_name}')
+    db.session.delete(p)
+    db.session.commit()
+    flash('Payable deleted.', 'warning')
+    return redirect(url_for('payables_list'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Finance Ledger: Receivables (Accounts Receivable)
+# ─────────────────────────────────────────────────────────────
+@app.route('/finance/receivables')
+@login_required
+@permission_required('finance')
+def receivables_list():
+    all_receivables = Receivable.query.order_by(Receivable.invoice_date.desc()).all()
+    return render_template('finance/receivables.html', receivables=all_receivables)
+
+
+@app.route('/finance/receivables/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def receivable_add():
+    if request.method == 'POST':
+        r = Receivable(
+            client_name=request.form['client_name'].strip(),
+            description=request.form.get('description', '').strip(),
+            amount=form_float(request.form, 'amount', min_value=0),
+            invoice_date=parse_date(request.form['invoice_date']),
+            due_date=parse_date(request.form.get('due_date')),
+            created_by=current_user.id,
+        )
+        db.session.add(r)
+        db.session.flush()
+        log_audit('CREATE', 'receivables', r.id, f'Receivable from {r.client_name}: {r.amount}')
+        db.session.commit()
+        flash('Receivable recorded.', 'success')
+        return redirect(url_for('receivables_list'))
+    return render_template('finance/receivable_form.html', today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/finance/receivables/<int:rid>/mark-collected', methods=['POST'])
+@login_required
+@permission_required('finance')
+def receivable_mark_collected(rid):
+    r = Receivable.query.get_or_404(rid)
+    r.status = 'collected'
+    r.collected_date = date.today()
+    log_audit('UPDATE', 'receivables', rid, f'Marked receivable from {r.client_name} as collected')
+    db.session.commit()
+    flash('Receivable marked as collected.', 'success')
+    return redirect(url_for('receivables_list'))
+
+
+@app.route('/finance/receivables/<int:rid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def receivable_delete(rid):
+    r = Receivable.query.get_or_404(rid)
+    log_audit('DELETE', 'receivables', rid, f'Deleted receivable from {r.client_name}')
+    db.session.delete(r)
+    db.session.commit()
+    flash('Receivable deleted.', 'warning')
+    return redirect(url_for('receivables_list'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Finance Ledger: Owner's Capital & Drawings
+# ─────────────────────────────────────────────────────────────
+@app.route('/finance/capital')
+@login_required
+@permission_required('finance')
+def capital_list():
+    contributions = CapitalContribution.query.order_by(CapitalContribution.contribution_date.desc()).all()
+    drawings = OwnerDrawing.query.order_by(OwnerDrawing.drawing_date.desc()).all()
+    return render_template('finance/capital.html', contributions=contributions, drawings=drawings)
+
+
+@app.route('/finance/capital/contributions/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def capital_contribution_add():
+    if request.method == 'POST':
+        c = CapitalContribution(
+            contributor=request.form['contributor'].strip(),
+            amount=form_float(request.form, 'amount', min_value=0),
+            contribution_date=parse_date(request.form['contribution_date']),
+            notes=request.form.get('notes', '').strip(),
+            created_by=current_user.id,
+        )
+        db.session.add(c)
+        db.session.flush()
+        log_audit('CREATE', 'capital_contributions', c.id, f'Capital contribution from {c.contributor}: {c.amount}')
+        db.session.commit()
+        flash('Capital contribution recorded.', 'success')
+        return redirect(url_for('capital_list'))
+    return render_template('finance/capital_contribution_form.html', today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/finance/capital/contributions/<int:cid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def capital_contribution_delete(cid):
+    c = CapitalContribution.query.get_or_404(cid)
+    log_audit('DELETE', 'capital_contributions', cid, f'Deleted capital contribution from {c.contributor}')
+    db.session.delete(c)
+    db.session.commit()
+    flash('Capital contribution deleted.', 'warning')
+    return redirect(url_for('capital_list'))
+
+
+@app.route('/finance/capital/drawings/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def owner_drawing_add():
+    if request.method == 'POST':
+        d = OwnerDrawing(
+            amount=form_float(request.form, 'amount', min_value=0),
+            drawing_date=parse_date(request.form['drawing_date']),
+            notes=request.form.get('notes', '').strip(),
+            created_by=current_user.id,
+        )
+        db.session.add(d)
+        db.session.flush()
+        log_audit('CREATE', 'owner_drawings', d.id, f'Owner drawing: {d.amount}')
+        db.session.commit()
+        flash('Owner drawing recorded.', 'success')
+        return redirect(url_for('capital_list'))
+    return render_template('finance/owner_drawing_form.html', today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/finance/capital/drawings/<int:did>/delete', methods=['POST'])
+@login_required
+@admin_required
+def owner_drawing_delete(did):
+    d = OwnerDrawing.query.get_or_404(did)
+    log_audit('DELETE', 'owner_drawings', did, f'Deleted owner drawing of {d.amount}')
+    db.session.delete(d)
+    db.session.commit()
+    flash('Owner drawing deleted.', 'warning')
+    return redirect(url_for('capital_list'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Finance Ledger: Expense Categories & Expenses
+# ─────────────────────────────────────────────────────────────
+@app.route('/finance/expenses')
+@login_required
+@permission_required('finance')
+def expenses_list():
+    page = request.args.get('page', 1, type=int)
+    expenses = Expense.query.order_by(Expense.expense_date.desc()).paginate(page=page, per_page=20)
+    categories = ExpenseCategory.query.order_by(ExpenseCategory.name).all()
+    return render_template('finance/expenses.html', expenses=expenses, categories=categories)
+
+
+@app.route('/finance/expenses/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def expense_add():
+    if request.method == 'POST':
+        e = Expense(
+            category_id=form_int(request.form, 'category_id'),
+            vehicle_id=form_int(request.form, 'vehicle_id', required=False),
+            expense_date=parse_date(request.form['expense_date']),
+            description=request.form.get('description', '').strip(),
+            amount=form_float(request.form, 'amount', min_value=0),
+            created_by=current_user.id,
+        )
+        db.session.add(e)
+        db.session.flush()
+        log_audit('CREATE', 'expenses', e.id, f'Expense of {e.amount}')
+        db.session.commit()
+        flash('Expense recorded.', 'success')
+        return redirect(url_for('expenses_list'))
+    categories = ExpenseCategory.query.order_by(ExpenseCategory.name).all()
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    return render_template('finance/expense_form.html', categories=categories, vehicles=all_vehicles,
+                           today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/finance/expenses/<int:eid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def expense_delete(eid):
+    e = Expense.query.get_or_404(eid)
+    log_audit('DELETE', 'expenses', eid, f'Deleted expense of {e.amount}')
+    db.session.delete(e)
+    db.session.commit()
+    flash('Expense deleted.', 'warning')
+    return redirect(url_for('expenses_list'))
+
+
+@app.route('/finance/expense-categories/add', methods=['POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def expense_category_add():
+    name = request.form.get('name', '').strip()
+    if not name:
+        raise ValueError('Category name is required.')
+    if ExpenseCategory.query.filter_by(name=name).first():
+        flash(f'Category "{name}" already exists.', 'warning')
+    else:
+        db.session.add(ExpenseCategory(name=name))
+        db.session.commit()
+        flash(f'Category "{name}" added.', 'success')
+    return redirect(url_for('expenses_list'))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1499,6 +2546,71 @@ def compliance():
         VehicleDocument.expiry_date).all()
     return render_template('compliance/index.html',
         expired=expired, expiring=expiring, valid=valid, today=today)
+
+
+# ─────────────────────────────────────────────────────────────
+# Depots (Admin)
+# ─────────────────────────────────────────────────────────────
+@app.route('/depots')
+@login_required
+@admin_required
+def depots():
+    all_depots = Depot.query.order_by(Depot.name).all()
+    return render_template('depots/index.html', depots=all_depots)
+
+
+@app.route('/depots/add', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def depot_add():
+    if request.method == 'POST':
+        d = Depot(
+            name=request.form['name'].strip(),
+            location=request.form.get('location', '').strip(),
+            status=request.form.get('status', 'active'),
+        )
+        db.session.add(d)
+        db.session.flush()
+        log_audit('CREATE', 'depots', d.id, f'Added depot {d.name}')
+        db.session.commit()
+        flash(f'Depot "{d.name}" added.', 'success')
+        return redirect(url_for('depots'))
+    return render_template('depots/form.html', depot=None, action='Add')
+
+
+@app.route('/depots/<int:did>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def depot_edit(did):
+    d = Depot.query.get_or_404(did)
+    if request.method == 'POST':
+        d.name = request.form['name'].strip()
+        d.location = request.form.get('location', '').strip()
+        d.status = request.form.get('status', 'active')
+        log_audit('UPDATE', 'depots', d.id, f'Updated depot {d.name}')
+        db.session.commit()
+        flash(f'Depot "{d.name}" updated.', 'success')
+        return redirect(url_for('depots'))
+    return render_template('depots/form.html', depot=d, action='Edit')
+
+
+@app.route('/depots/<int:did>/delete', methods=['POST'])
+@login_required
+@admin_required
+def depot_delete(did):
+    d = Depot.query.get_or_404(did)
+    if Vehicle.query.filter_by(depot_id=did).first() or Driver.query.filter_by(depot_id=did).first() \
+            or Route.query.filter_by(depot_id=did).first():
+        flash(f'Cannot delete "{d.name}" — vehicles, drivers or routes are still assigned to it.', 'danger')
+        return redirect(url_for('depots'))
+    name = d.name
+    log_audit('DELETE', 'depots', did, f'Deleted depot {name}')
+    db.session.delete(d)
+    db.session.commit()
+    flash(f'Depot "{name}" removed.', 'warning')
+    return redirect(url_for('depots'))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1694,13 +2806,38 @@ def pct_filter(value):
 def migrate_db():
     from sqlalchemy import inspect, text
     inspector = inspect(db.engine)
-    cols = [c['name'] for c in inspector.get_columns('users')]
+    user_cols = [c['name'] for c in inspector.get_columns('users')]
     with db.engine.connect() as conn:
-        if 'permissions' not in cols:
+        if 'permissions' not in user_cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN permissions TEXT DEFAULT '[]'"))
-        if 'driver_id' not in cols:
+        if 'driver_id' not in user_cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN driver_id INTEGER REFERENCES drivers(id)"))
+
+        for table in ('vehicles', 'drivers', 'routes'):
+            cols = [c['name'] for c in inspector.get_columns(table)]
+            if 'depot_id' not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN depot_id INTEGER REFERENCES depots(id)"))
+
         conn.commit()
+
+
+def create_default_depot():
+    depot = Depot.query.first()
+    if not depot:
+        depot = Depot(name='Main Depot', location='', status='active')
+        db.session.add(depot)
+        db.session.commit()
+    Vehicle.query.filter_by(depot_id=None).update({'depot_id': depot.id})
+    Driver.query.filter_by(depot_id=None).update({'depot_id': depot.id})
+    Route.query.filter_by(depot_id=None).update({'depot_id': depot.id})
+    db.session.commit()
+
+
+def create_default_expense_categories():
+    if not ExpenseCategory.query.first():
+        for name in ('Insurance', 'Licensing & Permits', 'Salaries & Wages', 'Rent & Utilities', 'Other Overhead'):
+            db.session.add(ExpenseCategory(name=name))
+        db.session.commit()
 
 
 def create_default_admin():
@@ -1719,6 +2856,8 @@ if __name__ == '__main__':
         db.create_all()
         migrate_db()
         create_default_admin()
+        create_default_depot()
+        create_default_expense_categories()
     debug_mode = not IS_PRODUCTION
     host = os.environ.get('HOST', '127.0.0.1' if IS_PRODUCTION else '0.0.0.0')
     app.run(debug=debug_mode, host=host, port=int(os.environ.get('PORT', 5000)))

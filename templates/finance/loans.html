@@ -1,0 +1,84 @@
+{% extends 'base.html' %}
+{% block title %}Loans{% endblock %}
+{% block page_title %}Finance — Loans{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Loans</h1>
+    <div class="subtitle">{{ loans|length }} loan(s) recorded</div>
+  </div>
+  <a href="{{ url_for('loan_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Loan</a>
+</div>
+
+<div class="card">
+  {% if loans %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Lender</th>
+          <th>Principal</th>
+          <th>Interest Rate</th>
+          <th>Start Date</th>
+          <th>Repaid</th>
+          <th>Outstanding</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for loan in loans %}
+        <tr>
+          <td><strong>{{ loan.lender }}</strong>{% if loan.notes %}<div class="form-hint">{{ loan.notes }}</div>{% endif %}</td>
+          <td>{{ loan.principal|currency }}</td>
+          <td>{{ loan.interest_rate }}%</td>
+          <td>{{ loan.start_date }}</td>
+          <td>{{ loan.total_repaid|currency }}</td>
+          <td class="{% if loan.outstanding_balance > 0 %}text-warning{% endif %}"><strong>{{ loan.outstanding_balance|currency }}</strong></td>
+          <td>
+            {% if loan.outstanding_balance <= 0 %}<span class="badge badge-green">Paid Off</span>
+            {% else %}<span class="badge badge-amber">Active</span>{% endif %}
+          </td>
+          <td>
+            <div class="actions">
+              {% if current_user.role == 'admin' %}
+              <form method="POST" action="{{ url_for('loan_delete', lid=loan.id) }}" data-confirm="Delete loan from {{ loan.lender }}? This also deletes its repayment history.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        <tr>
+          <td colspan="8" style="padding:8px 12px;background:#f8fafc;">
+            <form method="POST" action="{{ url_for('loan_payment_add', lid=loan.id) }}" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <div class="form-group" style="margin-bottom:0;">
+                <label style="font-size:0.75rem;">Repayment Date</label>
+                <input type="date" name="payment_date" required value="{{ today }}" style="padding:6px;">
+              </div>
+              <div class="form-group" style="margin-bottom:0;">
+                <label style="font-size:0.75rem;">Amount</label>
+                <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00" style="padding:6px;width:120px;">
+              </div>
+              <button type="submit" class="btn btn-outline btn-xs">Record Repayment</button>
+              {% if loan.payments %}
+              <span class="form-hint">{{ loan.payments|length }} repayment(s) recorded</span>
+              {% endif %}
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🏦</div>
+    <p>No loans recorded yet. <a href="{{ url_for('loan_add') }}">Add the first loan</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
