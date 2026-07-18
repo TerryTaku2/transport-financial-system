@@ -80,6 +80,40 @@
   </div>
 </div>
 
+{% if expense_breakdown %}
+<div class="card mb-24">
+  <div class="card-header"><h3>Expense Breakdown</h3></div>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        {% for h in expense_breakdown %}
+        <tr>
+          <td><strong>{{ h.name }}</strong>{% if h.direct and h.children %} <span class="form-hint">(general, excl. sub-headings)</span>{% endif %}</td>
+          <td class="text-right"><strong>({{ h.total|currency }})</strong></td>
+        </tr>
+        {% if h.direct and h.children %}
+        <tr>
+          <td style="padding-left:28px;">{{ h.name }} (general)</td>
+          <td class="text-right text-warning">({{ h.direct|currency }})</td>
+        </tr>
+        {% endif %}
+        {% for c in h.children %}
+        <tr>
+          <td style="padding-left:28px;">{{ c.name }}</td>
+          <td class="text-right text-warning">({{ c.amount|currency }})</td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+        <tr class="summary-row">
+          <td>TOTAL OTHER EXPENSES{% if not vehicle_id %} (fleet-wide + vehicle-tagged){% endif %}</td>
+          <td class="text-right">({{ (vehicle_expenses + general_expenses)|currency }})</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 <div class="card">
   <div class="card-header"><h3>{% if vehicle_id %}Other Vehicles This Period{% else %}Income Statement by Vehicle{% endif %}</h3></div>
   {% if vehicle_breakdown %}

@@ -1662,6 +1662,33 @@ def vehicle_income_totals(df, dt, vehicle_id=None):
     return revenue, fuel, maintenance, expenses
 
 
+def expense_breakdown_by_category(df, dt, vehicle_id=None):
+    """Group Expense amounts by heading/sub-heading for the period and scope,
+    for the itemized breakdown on the income statement. Consolidated scope
+    (vehicle_id=None) includes both vehicle-tagged and general expenses,
+    matching the consolidated statement's total; per-vehicle scope only
+    includes that vehicle's tagged expenses."""
+    q = db.session.query(Expense.category_id, func.sum(Expense.amount)).filter(
+        Expense.expense_date.between(df, dt))
+    if vehicle_id:
+        q = q.filter(Expense.vehicle_id == vehicle_id)
+    totals_by_cat = dict(q.group_by(Expense.category_id).all())
+
+    rows = []
+    for h in ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all():
+        h_direct = totals_by_cat.get(h.id, 0)
+        children = []
+        for c in sorted(h.children, key=lambda x: x.name):
+            amt = totals_by_cat.get(c.id, 0)
+            if amt:
+                children.append({'name': c.name, 'amount': amt})
+        heading_total = h_direct + sum(c['amount'] for c in children)
+        if heading_total:
+            rows.append({'name': h.name, 'direct': h_direct, 'children': children, 'total': heading_total})
+    rows.sort(key=lambda r: r['total'], reverse=True)
+    return rows
+
+
 @app.route('/reports/income')
 @login_required
 @permission_required('reports')
@@ -1698,6 +1725,7 @@ def report_income():
             'margin': (v_net / v_rev * 100) if v_rev else 0,
         })
     vehicle_breakdown.sort(key=lambda r: r['net_profit'], reverse=True)
+    expense_breakdown = expense_breakdown_by_category(df, dt, vehicle_id or None)
 
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     return render_template('reports/income.html',
@@ -1705,7 +1733,7 @@ def report_income():
         maintenance_cost=maintenance_cost, vehicle_expenses=vehicle_expenses,
         general_expenses=general_expenses, total_expenses=total_expenses,
         net_profit=net_profit, profit_margin=profit_margin,
-        vehicle_breakdown=vehicle_breakdown,
+        vehicle_breakdown=vehicle_breakdown, expense_breakdown=expense_breakdown,
         vehicles=all_vehicles,
         date_from=date_from_str, date_to=date_to_str, vehicle_id=vehicle_id)
 
