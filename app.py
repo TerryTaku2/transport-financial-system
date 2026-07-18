@@ -571,6 +571,17 @@ def form_int(form, field, label=None, required=True, default=None, min_value=Non
     return value
 
 
+def check_unique(model, field_name, value, label=None, exclude_id=None):
+    """Raise a friendly ValueError if another row already has this value,
+    instead of letting the DB's UNIQUE constraint crash with a 500."""
+    label = label or field_name.replace('_', ' ').capitalize()
+    q = model.query.filter(getattr(model, field_name) == value)
+    if exclude_id is not None:
+        q = q.filter(model.id != exclude_id)
+    if q.first():
+        raise ValueError(f'{label} "{value}" is already in use.')
+
+
 def handle_form_errors(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -917,8 +928,10 @@ def vehicles():
 @handle_form_errors
 def vehicle_add():
     if request.method == 'POST':
+        registration = request.form['registration'].upper().strip()
+        check_unique(Vehicle, 'registration', registration)
         v = Vehicle(
-            registration=request.form['registration'].upper().strip(),
+            registration=registration,
             make=request.form['make'].strip(),
             model=request.form['model'].strip(),
             year=form_int(request.form, 'year', min_value=1980),
@@ -957,7 +970,9 @@ def vehicle_detail(vid):
 def vehicle_edit(vid):
     v = Vehicle.query.get_or_404(vid)
     if request.method == 'POST':
-        v.registration = request.form['registration'].upper().strip()
+        registration = request.form['registration'].upper().strip()
+        check_unique(Vehicle, 'registration', registration, exclude_id=v.id)
+        v.registration = registration
         v.make = request.form['make'].strip()
         v.model = request.form['model'].strip()
         v.year = form_int(request.form, 'year', min_value=1980)
@@ -1045,9 +1060,11 @@ def drivers():
 def driver_add():
     if request.method == 'POST':
         rate_input = form_float(request.form, 'commission_rate', required=False, min_value=0)
+        license_number = request.form['license_number'].strip()
+        check_unique(Driver, 'license_number', license_number, label='License number')
         d = Driver(
             name=request.form['name'].strip(),
-            license_number=request.form['license_number'].strip(),
+            license_number=license_number,
             phone=request.form.get('phone', '').strip(),
             email=request.form.get('email', '').strip(),
             role=request.form.get('role', 'driver'),
@@ -1071,11 +1088,15 @@ def driver_add():
                 if driver_email and User.query.filter_by(email=driver_email).first():
                     driver_email = ''
                 email = driver_email or f'{login_username}@transport.local'
-                u = User(username=login_username, email=email, role='manager', driver_id=d.id)
-                u.set_password(login_password)
-                db.session.add(u)
-                log_audit('CREATE', 'users', None, f'Created login "{login_username}" for driver {d.name}')
-                flash(f'System login created — username: {login_username}', 'info')
+                if User.query.filter_by(email=email).first():
+                    flash(f'Could not create a login — "{email}" is already in use. '
+                          'Set a different email on this driver and try again from Edit.', 'warning')
+                else:
+                    u = User(username=login_username, email=email, role='manager', driver_id=d.id)
+                    u.set_password(login_password)
+                    db.session.add(u)
+                    log_audit('CREATE', 'users', None, f'Created login "{login_username}" for driver {d.name}')
+                    flash(f'System login created — username: {login_username}', 'info')
 
         db.session.commit()
         flash(f'Driver {d.name} registered.', 'success')
@@ -1092,8 +1113,10 @@ def driver_edit(did):
     d = Driver.query.get_or_404(did)
     if request.method == 'POST':
         rate_input = form_float(request.form, 'commission_rate', required=False, min_value=0)
+        license_number = request.form['license_number'].strip()
+        check_unique(Driver, 'license_number', license_number, label='License number', exclude_id=d.id)
         d.name = request.form['name'].strip()
-        d.license_number = request.form['license_number'].strip()
+        d.license_number = license_number
         d.phone = request.form.get('phone', '').strip()
         d.email = request.form.get('email', '').strip()
         d.role = request.form.get('role', 'driver')
@@ -2676,8 +2699,10 @@ def depots():
 @handle_form_errors
 def depot_add():
     if request.method == 'POST':
+        name = request.form['name'].strip()
+        check_unique(Depot, 'name', name)
         d = Depot(
-            name=request.form['name'].strip(),
+            name=name,
             location=request.form.get('location', '').strip(),
             status=request.form.get('status', 'active'),
         )
@@ -2697,7 +2722,9 @@ def depot_add():
 def depot_edit(did):
     d = Depot.query.get_or_404(did)
     if request.method == 'POST':
-        d.name = request.form['name'].strip()
+        name = request.form['name'].strip()
+        check_unique(Depot, 'name', name, exclude_id=d.id)
+        d.name = name
         d.location = request.form.get('location', '').strip()
         d.status = request.form.get('status', 'active')
         log_audit('UPDATE', 'depots', d.id, f'Updated depot {d.name}')
@@ -2744,9 +2771,13 @@ def user_add():
         password = request.form.get('password', '')
         if len(password) < 6:
             raise ValueError('Password must be at least 6 characters.')
+        username = request.form['username'].strip().lower()
+        email = request.form['email'].strip().lower()
+        check_unique(User, 'username', username)
+        check_unique(User, 'email', email)
         u = User(
-            username=request.form['username'].strip().lower(),
-            email=request.form['email'].strip().lower(),
+            username=username,
+            email=email,
             role=request.form.get('role', 'manager'),
         )
         u.set_password(password)
