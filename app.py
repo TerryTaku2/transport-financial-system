@@ -2510,7 +2510,9 @@ def expense_add():
         return redirect(url_for('expenses_list'))
     headings = ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all()
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    selected_category_id = request.args.get('new_category_id', '')
     return render_template('finance/expense_form.html', headings=headings, vehicles=all_vehicles,
+                           selected_category_id=selected_category_id,
                            today=date.today().strftime('%Y-%m-%d'))
 
 
@@ -2528,7 +2530,7 @@ def expense_delete(eid):
 
 @app.route('/finance/expense-categories/add', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('finance')
 @handle_form_errors
 def expense_category_add():
     name = request.form.get('name', '').strip()
@@ -2539,34 +2541,73 @@ def expense_category_add():
     if parent_id and not parent:
         raise ValueError('Selected heading does not exist.')
 
+    redirect_to = request.form.get('redirect_to') or request.referrer or url_for('expenses_list')
+
     existing = ExpenseCategory.query.filter_by(name=name, parent_id=parent_id).first()
     if existing:
         flash(f'"{name}" already exists under {parent.name if parent else "top-level headings"}.', 'warning')
     else:
-        db.session.add(ExpenseCategory(name=name, parent_id=parent_id))
+        new_cat = ExpenseCategory(name=name, parent_id=parent_id)
+        db.session.add(new_cat)
+        db.session.flush()
+        log_audit('CREATE', 'expense_categories', new_cat.id, f'Added expense category {new_cat.display_name}')
         db.session.commit()
-        label = f'{parent.name} — {name}' if parent else name
-        flash(f'"{label}" added.', 'success')
-    return redirect(url_for('expenses_list'))
+        flash(f'"{new_cat.display_name}" added.', 'success')
+        sep = '&' if '?' in redirect_to else '?'
+        redirect_to = f'{redirect_to}{sep}new_category_id={new_cat.id}'
+    return redirect(redirect_to)
+
+
+@app.route('/finance/expense-categories/<int:cid>/edit', methods=['GET', 'POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def expense_category_edit(cid):
+    cat = ExpenseCategory.query.get_or_404(cid)
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        if not name:
+            raise ValueError('Category name is required.')
+        parent_id = form_int(request.form, 'parent_id', required=False)
+        if parent_id == cat.id:
+            raise ValueError('A category cannot be its own heading.')
+        if parent_id and any(child.id == parent_id for child in cat.children):
+            raise ValueError('Cannot move a heading under one of its own sub-headings.')
+        parent = ExpenseCategory.query.get(parent_id) if parent_id else None
+        if parent_id and not parent:
+            raise ValueError('Selected heading does not exist.')
+        if parent_id and cat.children:
+            raise ValueError('This category has sub-headings under it, so it cannot also become a sub-heading itself.')
+
+        old_label = cat.display_name
+        cat.name = name
+        cat.parent_id = parent_id
+        log_audit('UPDATE', 'expense_categories', cid, f'Renamed expense category {old_label} to {cat.display_name}')
+        db.session.commit()
+        flash(f'"{cat.display_name}" updated.', 'success')
+        return redirect(url_for('expenses_list'))
+
+    headings = ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all()
+    return render_template('finance/expense_category_form.html', category=cat, headings=headings)
 
 
 @app.route('/finance/expense-categories/<int:cid>/delete', methods=['POST'])
 @login_required
-@admin_required
+@permission_required('finance')
 def expense_category_delete(cid):
     cat = ExpenseCategory.query.get_or_404(cid)
     if cat.children:
         flash(f'Cannot delete "{cat.name}" — it has sub-headings under it. Delete those first.', 'danger')
-        return redirect(url_for('expenses_list'))
+        return redirect(request.referrer or url_for('expenses_list'))
     if Expense.query.filter_by(category_id=cid).first():
         flash(f'Cannot delete "{cat.display_name}" — expenses are recorded against it.', 'danger')
-        return redirect(url_for('expenses_list'))
+        return redirect(request.referrer or url_for('expenses_list'))
     name = cat.display_name
     log_audit('DELETE', 'expense_categories', cid, f'Deleted expense category {name}')
     db.session.delete(cat)
     db.session.commit()
     flash(f'"{name}" deleted.', 'warning')
-    return redirect(url_for('expenses_list'))
+    return redirect(request.referrer or url_for('expenses_list'))
 
 
 # ─────────────────────────────────────────────────────────────

@@ -22,16 +22,31 @@
             {% for h in headings %}
             {% if h.children %}
             <optgroup label="{{ h.name }}">
-              <option value="{{ h.id }}">{{ h.name }} (general)</option>
+              <option value="{{ h.id }}" {% if selected_category_id|string == h.id|string %}selected{% endif %}>{{ h.name }} (general)</option>
               {% for c in h.children|sort(attribute='name') %}
-              <option value="{{ c.id }}">{{ c.name }}</option>
+              <option value="{{ c.id }}" {% if selected_category_id|string == c.id|string %}selected{% endif %}>{{ c.name }}</option>
               {% endfor %}
             </optgroup>
             {% else %}
-            <option value="{{ h.id }}">{{ h.name }}</option>
+            <option value="{{ h.id }}" {% if selected_category_id|string == h.id|string %}selected{% endif %}>{{ h.name }}</option>
             {% endif %}
             {% endfor %}
           </select>
+          <details style="margin-top:6px;">
+            <summary class="form-hint" style="cursor:pointer;">Category not listed? Add it</summary>
+            <form method="POST" action="{{ url_for('expense_category_add') }}" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="redirect_to" value="{{ url_for('expense_add') }}">
+              <select name="parent_id" style="padding:6px;">
+                <option value="">New Heading (top-level)</option>
+                {% for h in headings %}
+                <option value="{{ h.id }}">Sub-heading under: {{ h.name }}</option>
+                {% endfor %}
+              </select>
+              <input type="text" name="name" placeholder="Name" style="padding:6px;" required>
+              <button type="submit" class="btn btn-outline btn-xs">Create &amp; Use</button>
+            </form>
+          </details>
         </div>
         <div class="form-group">
           <label>Amount (USD)<span class="req">*</span></label>

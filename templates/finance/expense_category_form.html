@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+{% block title %}Edit Category{% endblock %}
+{% block page_title %}Edit Expense Category{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Edit Expense Category</h1>
+    <div class="subtitle">{{ category.display_name }}</div>
+  </div>
+  <a href="{{ url_for('expenses_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Expenses</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Name<span class="req">*</span></label>
+          <input type="text" name="name" required value="{{ category.name }}">
+        </div>
+        <div class="form-group">
+          <label>Heading</label>
+          <select name="parent_id" {% if category.children %}disabled{% endif %}>
+            <option value="">Top-level heading (no parent)</option>
+            {% for h in headings %}
+            {% if h.id != category.id %}
+            <option value="{{ h.id }}" {% if category.parent_id == h.id %}selected{% endif %}>{{ h.name }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+          {% if category.children %}
+          <div class="form-hint">This category has sub-headings under it, so it must stay a top-level heading.</div>
+          {% endif %}
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save</button>
+        <a href="{{ url_for('expenses_list') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
