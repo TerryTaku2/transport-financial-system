@@ -40,7 +40,7 @@
         </div>
         <div class="form-group">
           <label>Driver<span class="req">*</span></label>
-          <select name="driver_id" required>
+          <select name="driver_id" id="driver-select" required onchange="autoSelectConductor()">
             <option value="">Select driver</option>
             {% for d in drivers if d.role == 'driver' %}
             <option value="{{ d.id }}" {% if log and log.driver_id==d.id %}selected{% endif %}>{{ d.name }}</option>
@@ -49,10 +49,10 @@
         </div>
         <div class="form-group">
           <label>Conductor</label>
-          <select name="conductor_id">
+          <select name="conductor_id" id="conductor-select">
             <option value="">None</option>
             {% for d in drivers if d.role == 'conductor' %}
-            <option value="{{ d.id }}" {% if log and log.conductor_id==d.id %}selected{% endif %}>{{ d.name }}</option>
+            <option value="{{ d.id }}" {% if log and log.conductor_id==d.id %}selected{% endif %}>{{ d.name }}{% if d.paired_driver %} (usually with {{ d.paired_driver.name }}){% endif %}</option>
             {% endfor %}
           </select>
         </div>
@@ -77,4 +77,19 @@
     </form>
   </div>
 </div>
+
+<script>
+var driverConductorMap = {
+  {% for d in drivers if d.role == 'conductor' and d.paired_driver_id %}
+  '{{ d.paired_driver_id }}': '{{ d.id }}',
+  {% endfor %}
+};
+function autoSelectConductor() {
+  var driverId = document.getElementById('driver-select').value;
+  var conductorId = driverConductorMap[driverId];
+  if (conductorId) {
+    document.getElementById('conductor-select').value = conductorId;
+  }
+}
+</script>
 {% endblock %}

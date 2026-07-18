@@ -21,15 +21,28 @@
           <input type="text" name="name" required value="{{ driver.name if driver else '' }}">
         </div>
         <div class="form-group">
-          <label>License Number<span class="req">*</span></label>
-          <input type="text" name="license_number" required value="{{ driver.license_number if driver else '' }}">
-        </div>
-        <div class="form-group">
           <label>Role<span class="req">*</span></label>
-          <select name="role">
+          <select name="role" id="role-select" onchange="toggleCrewFields()">
             <option value="driver" {% if driver and driver.role=='driver' %}selected{% endif %}>Driver</option>
             <option value="conductor" {% if driver and driver.role=='conductor' %}selected{% endif %}>Conductor</option>
           </select>
+        </div>
+        <div class="form-group" id="license-group">
+          <label>License Number<span class="req" id="license-req">*</span></label>
+          <input type="text" name="license_number" id="license-input" value="{{ driver.license_number if driver else '' }}">
+          <div class="form-hint">Required for drivers. Conductors don't drive, so this can be left blank.</div>
+        </div>
+        <div class="form-group" id="paired-driver-group">
+          <label>Works Under Driver</label>
+          <select name="paired_driver_id">
+            <option value="">Not paired to a specific driver</option>
+            {% for drv in eligible_drivers %}
+            {% if not driver or drv.id != driver.id %}
+            <option value="{{ drv.id }}" {% if driver and driver.paired_driver_id==drv.id %}selected{% endif %}>{{ drv.name }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+          <div class="form-hint">Which driver this conductor normally works with — used to auto-select them when logging a trip for that driver.</div>
         </div>
         <div class="form-group">
           <label>Phone</label>
@@ -44,7 +57,7 @@
           <input type="number" name="commission_rate" step="0.1" min="0" max="100"
                  placeholder="Leave blank for system default"
                  value="{{ (driver.commission_rate*100)|round(1) if driver and driver.commission_rate else '' }}">
-          <div class="form-hint">Default: 15% for drivers, 10% for conductors</div>
+          <div class="form-hint">Default: 15% for drivers, 8% for conductors</div>
         </div>
         <div class="form-group">
           <label>Status</label>
@@ -88,4 +101,14 @@
     </form>
   </div>
 </div>
+
+<script>
+function toggleCrewFields() {
+  var isDriver = document.getElementById('role-select').value === 'driver';
+  document.getElementById('license-input').required = isDriver;
+  document.getElementById('license-req').style.display = isDriver ? 'inline' : 'none';
+  document.getElementById('paired-driver-group').style.display = isDriver ? 'none' : '';
+}
+toggleCrewFields();
+</script>
 {% endblock %}

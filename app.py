@@ -48,7 +48,7 @@ app.config.update(
     SQLALCHEMY_DATABASE_URI=os.environ.get('DATABASE_URL', 'sqlite:///transport_erp.db'),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     COMMISSION_DRIVER_RATE=0.15,
-    COMMISSION_CONDUCTOR_RATE=0.10,
+    COMMISSION_CONDUCTOR_RATE=0.08,
     VEHICLE_USEFUL_LIFE_YEARS=5,
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
@@ -166,16 +166,22 @@ class Driver(db.Model):
     __tablename__ = 'drivers'
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(100), nullable=False)
-    license_number = db.Column(db.String(50), unique=True, nullable=False)
+    # Only drivers need a license — conductors don't drive, so this is
+    # optional and only enforced as required at the form level for role='driver'.
+    license_number = db.Column(db.String(50), unique=True, nullable=True)
     phone = db.Column(db.String(20))
     email = db.Column(db.String(120))
     role = db.Column(db.String(20), default='driver')
     commission_rate = db.Column(db.Float)
     status = db.Column(db.String(20), default='active')
     depot_id = db.Column(db.Integer, db.ForeignKey('depots.id'), nullable=True)
+    # For a conductor, the driver they normally work under — informational,
+    # and used to auto-select the conductor when logging a trip for that driver.
+    paired_driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     depot = db.relationship('Depot', backref='drivers')
+    paired_driver = db.relationship('Driver', remote_side=[id], backref='paired_conductors')
     driven_logs = db.relationship('DailyLog', foreign_keys='DailyLog.driver_id',
                                   backref='driver', lazy=True)
     conducted_logs = db.relationship('DailyLog', foreign_keys='DailyLog.conductor_id',
@@ -1060,17 +1066,23 @@ def drivers():
 def driver_add():
     if request.method == 'POST':
         rate_input = form_float(request.form, 'commission_rate', required=False, min_value=0)
-        license_number = request.form['license_number'].strip()
-        check_unique(Driver, 'license_number', license_number, label='License number')
+        role = request.form.get('role', 'driver')
+        license_number = request.form.get('license_number', '').strip() or None
+        if role == 'driver' and not license_number:
+            raise ValueError('License number is required for drivers.')
+        if license_number:
+            check_unique(Driver, 'license_number', license_number, label='License number')
+        paired_driver_id = form_int(request.form, 'paired_driver_id', required=False) if role == 'conductor' else None
         d = Driver(
             name=request.form['name'].strip(),
             license_number=license_number,
             phone=request.form.get('phone', '').strip(),
             email=request.form.get('email', '').strip(),
-            role=request.form.get('role', 'driver'),
+            role=role,
             commission_rate=rate_input / 100 if rate_input is not None else None,
             status=request.form.get('status', 'active'),
             depot_id=form_int(request.form, 'depot_id', required=False),
+            paired_driver_id=paired_driver_id,
         )
         db.session.add(d)
         db.session.flush()
@@ -1102,7 +1114,9 @@ def driver_add():
         flash(f'Driver {d.name} registered.', 'success')
         return redirect(url_for('drivers'))
     all_depots = Depot.query.order_by(Depot.name).all()
-    return render_template('drivers/form.html', driver=None, action='Register', depots=all_depots)
+    eligible_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
+    return render_template('drivers/form.html', driver=None, action='Register', depots=all_depots,
+                           eligible_drivers=eligible_drivers)
 
 
 @app.route('/drivers/<int:did>/edit', methods=['GET', 'POST'])
@@ -1113,22 +1127,32 @@ def driver_edit(did):
     d = Driver.query.get_or_404(did)
     if request.method == 'POST':
         rate_input = form_float(request.form, 'commission_rate', required=False, min_value=0)
-        license_number = request.form['license_number'].strip()
-        check_unique(Driver, 'license_number', license_number, label='License number', exclude_id=d.id)
+        role = request.form.get('role', 'driver')
+        license_number = request.form.get('license_number', '').strip() or None
+        if role == 'driver' and not license_number:
+            raise ValueError('License number is required for drivers.')
+        if license_number:
+            check_unique(Driver, 'license_number', license_number, label='License number', exclude_id=d.id)
+        paired_driver_id = form_int(request.form, 'paired_driver_id', required=False) if role == 'conductor' else None
+        if paired_driver_id == d.id:
+            raise ValueError('A conductor cannot be paired with themself.')
         d.name = request.form['name'].strip()
         d.license_number = license_number
         d.phone = request.form.get('phone', '').strip()
         d.email = request.form.get('email', '').strip()
-        d.role = request.form.get('role', 'driver')
+        d.role = role
         d.commission_rate = rate_input / 100 if rate_input is not None else None
         d.status = request.form.get('status', 'active')
         d.depot_id = form_int(request.form, 'depot_id', required=False)
+        d.paired_driver_id = paired_driver_id
         log_audit('UPDATE', 'drivers', d.id, f'Updated driver {d.name}')
         db.session.commit()
         flash(f'Driver {d.name} updated.', 'success')
         return redirect(url_for('drivers'))
     all_depots = Depot.query.order_by(Depot.name).all()
-    return render_template('drivers/form.html', driver=d, action='Edit', depots=all_depots)
+    eligible_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
+    return render_template('drivers/form.html', driver=d, action='Edit', depots=all_depots,
+                           eligible_drivers=eligible_drivers)
 
 
 @app.route('/drivers/<int:did>/delete', methods=['POST'])
@@ -2965,6 +2989,39 @@ def migrate_db():
             if 'parent_id' not in exp_cat_cols:
                 conn.execute(text(
                     "ALTER TABLE expense_categories ADD COLUMN parent_id INTEGER REFERENCES expense_categories(id)"))
+
+        driver_cols = inspector.get_columns('drivers')
+        driver_col_names = [c['name'] for c in driver_cols]
+        if 'paired_driver_id' not in driver_col_names:
+            conn.execute(text("ALTER TABLE drivers ADD COLUMN paired_driver_id INTEGER REFERENCES drivers(id)"))
+
+        license_col = next((c for c in driver_cols if c['name'] == 'license_number'), None)
+        if license_col is not None and not license_col['nullable']:
+            # SQLite can't relax a NOT NULL constraint with ALTER TABLE — rebuild the table.
+            # Conductors don't need a license number, so this must become optional.
+            conn.execute(text("""
+                CREATE TABLE drivers_new (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    license_number VARCHAR(50) UNIQUE,
+                    phone VARCHAR(20),
+                    email VARCHAR(120),
+                    role VARCHAR(20),
+                    commission_rate FLOAT,
+                    status VARCHAR(20),
+                    depot_id INTEGER REFERENCES depots(id),
+                    paired_driver_id INTEGER REFERENCES drivers(id),
+                    created_at DATETIME
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO drivers_new (id, name, license_number, phone, email, role,
+                    commission_rate, status, depot_id, paired_driver_id, created_at)
+                SELECT id, name, license_number, phone, email, role,
+                    commission_rate, status, depot_id, paired_driver_id, created_at FROM drivers
+            """))
+            conn.execute(text("DROP TABLE drivers"))
+            conn.execute(text("ALTER TABLE drivers_new RENAME TO drivers"))
 
         conn.commit()
 

@@ -44,8 +44,8 @@
       <tbody>
         {% for d in drivers %}
         <tr>
-          <td><strong>{{ d.name }}</strong></td>
-          <td>{{ d.license_number }}</td>
+          <td><strong>{{ d.name }}</strong>{% if d.role == 'conductor' and d.paired_driver %}<div class="form-hint">under {{ d.paired_driver.name }}</div>{% endif %}</td>
+          <td>{{ d.license_number or '—' }}</td>
           <td><span class="badge badge-blue">{{ d.role|title }}</span></td>
           <td>{{ d.depot.name if d.depot else '—' }}</td>
           <td>{{ d.phone or '—' }}</td>
