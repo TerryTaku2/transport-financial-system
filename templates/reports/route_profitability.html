@@ -32,7 +32,13 @@
       <tbody>
         {% for row in rows %}
         <tr>
-          <td><strong>{{ row.route.name }}</strong><div class="form-hint">{{ row.route.start_point }} → {{ row.route.end_point }}</div></td>
+          <td>
+            {% if row.route %}
+            <strong>{{ row.route.name }}</strong><div class="form-hint">{{ row.route.start_point }} → {{ row.route.end_point }}</div>
+            {% else %}
+            <strong>Unspecified</strong><div class="form-hint">Logged without a route (e.g. via the Vehicle Ledger)</div>
+            {% endif %}
+          </td>
           <td>{{ row.trips }}</td>
           <td>{{ row.log_days }}</td>
           <td class="text-right">{{ row.revenue|currency }}</td>

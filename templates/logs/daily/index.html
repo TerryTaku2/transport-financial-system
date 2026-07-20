@@ -53,7 +53,7 @@
           <td><a href="{{ url_for('vehicle_detail', vid=log.vehicle_id) }}">{{ log.vehicle.registration }}</a></td>
           <td>{{ log.driver.name }}</td>
           <td>{{ log.conductor.name if log.conductor else '—' }}</td>
-          <td>{{ log.route.name }}</td>
+          <td>{{ log.route.name if log.route else '—' }}</td>
           <td>{{ log.trips_completed }}</td>
           <td class="text-right"><strong>{{ log.gross_revenue|currency }}</strong></td>
           <td>

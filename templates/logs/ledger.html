@@ -65,18 +65,9 @@
           </select>
         </div>
         <div class="form-group">
-          <label>Route</label>
-          <select name="route_id">
-            <option value="">— Select route —</option>
-            {% for r in routes %}
-            <option value="{{ r.id }}">{{ r.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="form-group">
           <label>Daily Fare (USD)</label>
           <input type="number" name="fare" step="0.01" min="0" placeholder="0.00">
-          <div class="form-hint">Needs driver &amp; route selected.</div>
+          <div class="form-hint">Needs a driver selected.</div>
         </div>
         <div class="form-group">
           <label>Diesel (USD)</label>

@@ -104,7 +104,7 @@
         <tr>
           <td>{{ l.log_date.strftime('%d %b %Y') }}</td>
           <td>{{ l.driver.name }}</td>
-          <td>{{ l.route.name }}</td>
+          <td>{{ l.route.name if l.route else '—' }}</td>
           <td>{{ l.trips_completed }}</td>
           <td class="text-right"><strong>{{ l.gross_revenue|currency }}</strong></td>
         </tr>

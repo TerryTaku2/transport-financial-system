@@ -209,7 +209,10 @@ class DailyLog(db.Model):
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
     driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=False)
     conductor_id = db.Column(db.Integer, db.ForeignKey('drivers.id'))
-    route_id = db.Column(db.Integer, db.ForeignKey('routes.id'), nullable=False)
+    # Nullable because the Vehicle Ledger doesn't track a route per entry
+    # (it mirrors a plain date/driver/fare/diesel/mileage logbook) — the
+    # more detailed Daily Log form still requires one at the form level.
+    route_id = db.Column(db.Integer, db.ForeignKey('routes.id'), nullable=True)
     log_date = db.Column(db.Date, nullable=False, default=date.today)
     trips_completed = db.Column(db.Integer, default=0)
     gross_revenue = db.Column(db.Float, nullable=False, default=0.0)
@@ -1407,9 +1410,8 @@ def driver_ledger():
         rows, total_fare, total_diesel = vehicle_ledger_rows(vehicle.id, df, dt)
 
     all_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
-    all_routes = Route.query.filter_by(status='active').order_by(Route.name).all()
     return render_template('logs/ledger.html', vehicles=all_vehicles, vehicle=vehicle,
-        drivers=all_drivers, routes=all_routes,
+        drivers=all_drivers,
         rows=rows, total_fare=total_fare, total_diesel=total_diesel,
         net=total_fare - total_diesel,
         period=period, date_from=date_from_str, date_to=date_to_str,
@@ -1433,7 +1435,6 @@ def driver_ledger_add():
 
         log_date = parse_date(request.form['log_date'])
         driver_id = form_int(request.form, 'driver_id', required=False)
-        route_id = form_int(request.form, 'route_id', required=False)
         fare = form_float(request.form, 'fare', required=False, min_value=0)
         diesel_liters = form_float(request.form, 'diesel_liters', required=False, min_value=0)
         diesel_cost = form_float(request.form, 'diesel_cost', required=False, min_value=0)
@@ -1442,10 +1443,8 @@ def driver_ledger_add():
         if fare is not None:
             if not driver_id:
                 raise ValueError('Select a driver to record fare against.')
-            if not route_id:
-                raise ValueError('Select a route to record fare against.')
-        elif driver_id or route_id:
-            raise ValueError('Fare is required when a driver or route is selected.')
+        elif driver_id:
+            raise ValueError('Fare is required when a driver is selected.')
 
         if diesel_liters is not None and diesel_cost is None:
             raise ValueError('Enter the diesel cost as well as the liters.')
@@ -1458,7 +1457,7 @@ def driver_ledger_add():
             conductor = driver.paired_conductors[0] if driver and driver.paired_conductors else None
             daily = DailyLog(
                 vehicle_id=vehicle_id, driver_id=driver_id, conductor_id=conductor.id if conductor else None,
-                route_id=route_id, log_date=log_date, gross_revenue=fare, created_by=current_user.id,
+                log_date=log_date, gross_revenue=fare, created_by=current_user.id,
             )
             db.session.add(daily)
             log_audit('CREATE', 'daily_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: fare {fare}')
@@ -2184,6 +2183,23 @@ def report_route_profitability():
             'route': r, 'revenue': revenue, 'trips': r.trips or 0, 'log_days': r.log_days,
             'allocated_cost': allocated_cost, 'net_profit': revenue - allocated_cost,
         })
+
+    # Entries with no route (e.g. from the Vehicle Ledger, which doesn't ask
+    # for one) would otherwise be silently dropped by the INNER JOIN above,
+    # leaving the per-route rows short of the fleet-wide total shown.
+    unrouted = db.session.query(
+        func.sum(DailyLog.gross_revenue).label('revenue'),
+        func.sum(DailyLog.trips_completed).label('trips'),
+        func.count(DailyLog.id).label('log_days'),
+    ).filter(DailyLog.route_id.is_(None), DailyLog.log_date.between(df, dt)).first()
+    if unrouted and unrouted.log_days:
+        revenue = unrouted.revenue or 0
+        allocated_cost = (revenue / total_revenue * total_costs) if total_revenue else 0
+        rows.append({
+            'route': None, 'revenue': revenue, 'trips': unrouted.trips or 0, 'log_days': unrouted.log_days,
+            'allocated_cost': allocated_cost, 'net_profit': revenue - allocated_cost,
+        })
+
     rows.sort(key=lambda x: x['net_profit'], reverse=True)
 
     return render_template('reports/route_profitability.html', rows=rows,
@@ -2227,7 +2243,7 @@ def export_daily_logs():
     for log in q.all():
         w.writerow([log.log_date, log.vehicle.registration, log.driver.name,
                     log.conductor.name if log.conductor else '',
-                    log.route.name, log.trips_completed,
+                    log.route.name if log.route else '', log.trips_completed,
                     f'{log.gross_revenue:.2f}',
                     log.creator.username if log.creator else '',
                     log.notes or ''])
@@ -2277,7 +2293,7 @@ def export_income():
     w.writerow(['Date', 'Vehicle', 'Route', 'Trips', 'Gross Revenue (USD)'])
     total_rev = 0
     for l in daily:
-        w.writerow([l.log_date, l.vehicle.registration, l.route.name,
+        w.writerow([l.log_date, l.vehicle.registration, l.route.name if l.route else '',
                     l.trips_completed, f'{l.gross_revenue:.2f}'])
         total_rev += l.gross_revenue
     w.writerow(['', '', '', 'TOTAL REVENUE', f'{total_rev:.2f}'])
@@ -3071,6 +3087,39 @@ def migrate_db():
             """))
             conn.execute(text("DROP TABLE drivers"))
             conn.execute(text("ALTER TABLE drivers_new RENAME TO drivers"))
+
+        daily_log_cols = inspector.get_columns('daily_logs')
+        route_col = next((c for c in daily_log_cols if c['name'] == 'route_id'), None)
+        if route_col is not None and not route_col['nullable']:
+            # Same story as license_number above — the Vehicle Ledger doesn't
+            # track a route per entry, so this must become optional.
+            conn.execute(text("""
+                CREATE TABLE daily_logs_new (
+                    id INTEGER PRIMARY KEY,
+                    vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+                    driver_id INTEGER NOT NULL REFERENCES drivers(id),
+                    conductor_id INTEGER REFERENCES drivers(id),
+                    route_id INTEGER REFERENCES routes(id),
+                    log_date DATE NOT NULL,
+                    trips_completed INTEGER,
+                    gross_revenue FLOAT NOT NULL,
+                    notes TEXT,
+                    created_by INTEGER REFERENCES users(id),
+                    updated_by INTEGER REFERENCES users(id),
+                    created_at DATETIME,
+                    updated_at DATETIME
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO daily_logs_new (id, vehicle_id, driver_id, conductor_id, route_id,
+                    log_date, trips_completed, gross_revenue, notes, created_by, updated_by,
+                    created_at, updated_at)
+                SELECT id, vehicle_id, driver_id, conductor_id, route_id,
+                    log_date, trips_completed, gross_revenue, notes, created_by, updated_by,
+                    created_at, updated_at FROM daily_logs
+            """))
+            conn.execute(text("DROP TABLE daily_logs"))
+            conn.execute(text("ALTER TABLE daily_logs_new RENAME TO daily_logs"))
 
         conn.commit()
 
