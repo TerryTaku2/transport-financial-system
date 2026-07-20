@@ -72,7 +72,7 @@
         <i data-feather="clipboard"></i> Daily Logs
       </a>
       <a href="{{ url_for('driver_ledger') }}" class="nav-item {% if 'ledger' in (request.endpoint or '') %}active{% endif %}">
-        <i data-feather="book-open"></i> Driver Ledger
+        <i data-feather="book-open"></i> Vehicle Ledger
       </a>
       {% endif %}
       {% if current_user.has_permission('fuel_logs') %}

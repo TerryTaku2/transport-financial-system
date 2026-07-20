@@ -1,70 +1,54 @@
 {% extends 'base.html' %}
-{% block title %}Driver Ledger{% endblock %}
-{% block page_title %}Driver Ledger{% endblock %}
+{% block title %}Vehicle Ledger{% endblock %}
+{% block page_title %}Vehicle Ledger{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Driver Ledger</h1>
-    <div class="subtitle">Fare, diesel and mileage in one running sheet
-      {% if not can_pick_any_driver and driver %} — {{ driver.name }}{% endif %}
-    </div>
+    <h1>Vehicle Ledger</h1>
+    <div class="subtitle">Daily transactions — one running sheet per vehicle{% if vehicle %}, {{ vehicle.registration }}{% endif %}</div>
   </div>
 </div>
 
-{% if unassigned_conductor %}
-<div class="card">
-  <div class="empty-state">
-    <div class="empty-icon">🤝</div>
-    <p>Conductors don't log income directly — your commission is calculated from your paired driver's fare. Check the <a href="{{ url_for('crew_leaderboard') }}">Performance</a> page.</p>
-  </div>
-</div>
-{% elif unassigned_vehicle %}
+{% if not vehicles %}
 <div class="card">
   <div class="empty-state">
     <div class="empty-icon">🚌</div>
-    <p>You haven't been assigned to a vehicle yet — ask an admin to set one from your crew profile before you can log income.</p>
-  </div>
-</div>
-{% elif not eligible_drivers %}
-<div class="card">
-  <div class="empty-state">
-    <div class="empty-icon">🧾</div>
-    <p>No drivers with an assigned vehicle yet. <a href="{{ url_for('drivers') }}">Set one from Edit Crew Member</a> to use the ledger.</p>
+    <p>No active vehicles yet. <a href="{{ url_for('vehicle_add') }}">Register one</a> to use the ledger.</p>
   </div>
 </div>
 {% else %}
 
-<form method="GET" class="filter-bar">
-  {% if can_pick_any_driver %}
-  <div class="form-group">
-    <label>Driver</label>
-    <select name="driver_id" onchange="this.form.submit()">
-      {% for d in eligible_drivers %}
-      <option value="{{ d.id }}" {% if driver and driver.id==d.id %}selected{% endif %}>{{ d.name }} — {{ d.assigned_vehicle.registration }}</option>
-      {% endfor %}
-    </select>
+<!-- Vehicle tabs, one per registration — mirrors the per-vehicle sheet layout -->
+<div class="card mb-24" style="padding:10px 14px;">
+  <div style="display:flex;gap:6px;flex-wrap:wrap;">
+    {% for v in vehicles %}
+    <a href="{{ url_for('driver_ledger', vehicle_id=v.id, period=period) }}"
+       class="btn btn-xs {% if vehicle and vehicle.id==v.id %}btn-primary{% else %}btn-outline{% endif %}">{{ v.registration }}</a>
+    {% endfor %}
   </div>
-  <input type="hidden" name="period" value="{{ period }}">
-  {% endif %}
+</div>
+
+{% if vehicle %}
+<form method="GET" class="filter-bar">
+  <input type="hidden" name="vehicle_id" value="{{ vehicle.id }}">
   <div class="form-group">
     <label>Period</label>
     <div class="btn-group">
-      <a href="{{ url_for('driver_ledger', driver_id=driver.id if driver else none, period='today') }}" class="btn btn-xs {% if period=='today' %}btn-primary{% else %}btn-outline{% endif %}">Today</a>
-      <a href="{{ url_for('driver_ledger', driver_id=driver.id if driver else none, period='week') }}" class="btn btn-xs {% if period=='week' %}btn-primary{% else %}btn-outline{% endif %}">This Week</a>
-      <a href="{{ url_for('driver_ledger', driver_id=driver.id if driver else none, period='month') }}" class="btn btn-xs {% if period=='month' %}btn-primary{% else %}btn-outline{% endif %}">This Month</a>
-      <a href="{{ url_for('driver_ledger', driver_id=driver.id if driver else none, period='all') }}" class="btn btn-xs {% if period=='all' %}btn-primary{% else %}btn-outline{% endif %}">All Time</a>
+      <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period='today') }}" class="btn btn-xs {% if period=='today' %}btn-primary{% else %}btn-outline{% endif %}">Today</a>
+      <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period='week') }}" class="btn btn-xs {% if period=='week' %}btn-primary{% else %}btn-outline{% endif %}">This Week</a>
+      <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period='month') }}" class="btn btn-xs {% if period=='month' %}btn-primary{% else %}btn-outline{% endif %}">This Month</a>
+      <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period='all') }}" class="btn btn-xs {% if period=='all' %}btn-primary{% else %}btn-outline{% endif %}">All Time</a>
     </div>
   </div>
 </form>
 
-{% if driver %}
 <div class="card mb-24">
-  <div class="card-header"><h3>New Entry — {{ driver.name }} ({{ driver.assigned_vehicle.registration }})</h3></div>
+  <div class="card-header"><h3>New Entry — {{ vehicle.registration }}</h3></div>
   <div class="card-body">
     <form method="POST" action="{{ url_for('driver_ledger_add') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="driver_id" value="{{ driver.id }}">
+      <input type="hidden" name="vehicle_id" value="{{ vehicle.id }}">
       <input type="hidden" name="period" value="{{ period }}">
       <div class="form-grid mb-16">
         <div class="form-group">
@@ -72,30 +56,39 @@
           <input type="date" name="log_date" required value="{{ today }}">
         </div>
         <div class="form-group">
-          <label>Route<span class="req">*</span></label>
-          <select name="route_id" required>
-            <option value="">Select route</option>
+          <label>Driver</label>
+          <select name="driver_id">
+            <option value="">— None (mileage/diesel only) —</option>
+            {% for d in drivers %}
+            <option value="{{ d.id }}">{{ d.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Route</label>
+          <select name="route_id">
+            <option value="">— Select route —</option>
             {% for r in routes %}
             <option value="{{ r.id }}">{{ r.name }}</option>
             {% endfor %}
           </select>
         </div>
         <div class="form-group">
-          <label>Fare (USD)<span class="req">*</span></label>
-          <input type="number" name="fare" step="0.01" min="0" required placeholder="0.00">
+          <label>Daily Fare (USD)</label>
+          <input type="number" name="fare" step="0.01" min="0" placeholder="0.00">
+          <div class="form-hint">Needs driver &amp; route selected.</div>
         </div>
         <div class="form-group">
-          <label>Diesel Liters</label>
-          <input type="number" name="diesel_liters" step="0.01" min="0" placeholder="Leave blank if none bought today">
-        </div>
-        <div class="form-group">
-          <label>Diesel Cost (USD)</label>
+          <label>Diesel (USD)</label>
           <input type="number" name="diesel_cost" step="0.01" min="0" placeholder="0.00">
         </div>
         <div class="form-group">
-          <label>Mileage (odometer)</label>
-          <input type="number" name="mileage" step="0.1" min="0" placeholder="Current reading">
-          <div class="form-hint">Only saved if diesel liters &amp; cost are also entered.</div>
+          <label>Diesel Liters (optional)</label>
+          <input type="number" name="diesel_liters" step="0.01" min="0" placeholder="Leave blank if unknown">
+        </div>
+        <div class="form-group">
+          <label>Mileage</label>
+          <input type="number" name="mileage" step="0.1" min="0" placeholder="Odometer reading">
         </div>
       </div>
       <button type="submit" class="btn btn-primary"><i data-feather="plus"></i> Add Entry</button>
@@ -119,37 +112,36 @@
 </div>
 
 <div class="card">
-  <div class="card-header"><h3>Ledger — {{ {'today': 'Today', 'week': 'This Week', 'month': 'This Month', 'all': 'All Time'}[period] }}</h3></div>
+  <div class="card-header"><h3>{{ vehicle.registration }} — {{ {'today': 'Today', 'week': 'This Week', 'month': 'This Month', 'all': 'All Time'}[period] }} Transactions</h3></div>
   {% if rows %}
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
           <th>Date</th>
-          <th class="text-right">Fare</th>
-          <th class="text-right">Diesel Liters</th>
-          <th class="text-right">Diesel Cost</th>
+          <th>Driver Name</th>
+          <th class="text-right">Daily Fare</th>
+          <th class="text-right">Diesel</th>
           <th class="text-right">Mileage</th>
-          <th class="text-right">Distance</th>
+          <th class="text-right">Distance Travelled</th>
         </tr>
       </thead>
       <tbody>
         {% for row in rows %}
         <tr>
           <td>{{ row.date }}</td>
-          <td class="text-right">{{ row.fare|currency }}</td>
-          <td class="text-right">{{ row.diesel_liters or '—' }}</td>
+          <td>{{ row.driver_names or '—' }}</td>
+          <td class="text-right">{{ row.fare|currency if row.fare else '—' }}</td>
           <td class="text-right">{{ row.diesel_cost|currency if row.diesel_cost else '—' }}</td>
           <td class="text-right">{{ row.odometer if row.odometer is not none else '—' }}</td>
-          <td class="text-right">{{ '%.0f km'|format(row.distance) if row.distance is not none else '—' }}</td>
+          <td class="text-right">{{ '%.0f'|format(row.distance) if row.distance is not none else '—' }}</td>
         </tr>
         {% endfor %}
       </tbody>
       <tfoot>
         <tr class="summary-row">
-          <td>TOTAL</td>
+          <td colspan="2">TOTALS</td>
           <td class="text-right">{{ total_fare|currency }}</td>
-          <td></td>
           <td class="text-right">{{ total_diesel|currency }}</td>
           <td></td>
           <td></td>
@@ -158,7 +150,7 @@
     </table>
   </div>
   {% else %}
-  <div class="empty-state"><p>No entries for {{ driver.name }} in this period.</p></div>
+  <div class="empty-state"><p>No entries for {{ vehicle.registration }} in this period.</p></div>
   {% endif %}
 </div>
 {% endif %}
