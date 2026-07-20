@@ -1074,25 +1074,6 @@ def driver_add():
         db.session.add(d)
         db.session.flush()
         log_audit('CREATE', 'drivers', d.id, f'Added driver {d.name}')
-
-        login_username = request.form.get('login_username', '').strip().lower()
-        login_password = request.form.get('login_password', '').strip()
-        if login_username and login_password:
-            if len(login_password) < 6:
-                flash('System login password must be at least 6 characters — login not created.', 'warning')
-            elif User.query.filter_by(username=login_username).first():
-                flash(f'Username "{login_username}" is already taken — login not created.', 'warning')
-            else:
-                email = f'{login_username}@transport.local'
-                if User.query.filter_by(email=email).first():
-                    flash(f'Could not create a login — "{email}" is already in use.', 'warning')
-                else:
-                    u = User(username=login_username, email=email, role='manager', driver_id=d.id)
-                    u.set_password(login_password)
-                    db.session.add(u)
-                    log_audit('CREATE', 'users', None, f'Created login "{login_username}" for driver {d.name}')
-                    flash(f'System login created — username: {login_username}', 'info')
-
         db.session.commit()
         flash(f'Driver {d.name} registered.', 'success')
         return redirect(url_for('drivers'))
