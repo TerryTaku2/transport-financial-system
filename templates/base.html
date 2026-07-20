@@ -71,6 +71,9 @@
       <a href="{{ url_for('daily_logs') }}" class="nav-item {% if 'daily_log' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="clipboard"></i> Daily Logs
       </a>
+      <a href="{{ url_for('driver_ledger') }}" class="nav-item {% if 'ledger' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="book-open"></i> Driver Ledger
+      </a>
       {% endif %}
       {% if current_user.has_permission('fuel_logs') %}
       <a href="{{ url_for('fuel_logs') }}" class="nav-item {% if 'fuel_log' in (request.endpoint or '') %}active{% endif %}">
@@ -152,9 +155,6 @@
       <div class="nav-section-label">Admin</div>
       <a href="{{ url_for('users') }}" class="nav-item {% if 'user' in (request.endpoint or '') and request.endpoint != 'logout' %}active{% endif %}">
         <i data-feather="settings"></i> User Management
-      </a>
-      <a href="{{ url_for('depots') }}" class="nav-item {% if 'depot' in (request.endpoint or '') %}active{% endif %}">
-        <i data-feather="map-pin"></i> Depots
       </a>
       <a href="{{ url_for('audit_log') }}" class="nav-item {% if request.endpoint == 'audit_log' %}active{% endif %}">
         <i data-feather="activity"></i> Audit Log

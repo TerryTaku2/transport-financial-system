@@ -22,7 +22,7 @@
         </div>
         <div class="form-group">
           <label>Vehicle<span class="req">*</span></label>
-          <select name="vehicle_id" required>
+          <select name="vehicle_id" id="vehicle-select" required onchange="autoSelectCrew()">
             <option value="">Select vehicle</option>
             {% for v in vehicles %}
             <option value="{{ v.id }}" {% if log and log.vehicle_id==v.id %}selected{% endif %}>{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
@@ -84,11 +84,34 @@ var driverConductorMap = {
   '{{ d.paired_driver_id }}': '{{ d.id }}',
   {% endfor %}
 };
+var vehicleDriverMap = {
+  {% for d in drivers if d.role == 'driver' and d.assigned_vehicle_id %}
+  '{{ d.assigned_vehicle_id }}': '{{ d.id }}',
+  {% endfor %}
+};
+var vehicleConductorMap = {
+  {% for d in drivers if d.role == 'conductor' and d.assigned_vehicle_id %}
+  '{{ d.assigned_vehicle_id }}': '{{ d.id }}',
+  {% endfor %}
+};
 function autoSelectConductor() {
   var driverId = document.getElementById('driver-select').value;
   var conductorId = driverConductorMap[driverId];
   if (conductorId) {
     document.getElementById('conductor-select').value = conductorId;
+  }
+}
+function autoSelectCrew() {
+  var vehicleId = document.getElementById('vehicle-select').value;
+  var driverId = vehicleDriverMap[vehicleId];
+  if (driverId) {
+    document.getElementById('driver-select').value = driverId;
+  }
+  var conductorId = vehicleConductorMap[vehicleId];
+  if (conductorId) {
+    document.getElementById('conductor-select').value = conductorId;
+  } else {
+    autoSelectConductor();
   }
 }
 </script>

@@ -113,10 +113,7 @@ class Vehicle(db.Model):
     year = db.Column(db.Integer, nullable=False)
     acquisition_cost = db.Column(db.Float, default=0.0)
     status = db.Column(db.String(20), default='active')
-    depot_id = db.Column(db.Integer, db.ForeignKey('depots.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
-
-    depot = db.relationship('Depot', backref='vehicles')
 
     documents = db.relationship('VehicleDocument', backref='vehicle',
                                 lazy=True, cascade='all, delete-orphan')
@@ -176,12 +173,16 @@ class Driver(db.Model):
     # For a conductor, the driver they normally work under — informational,
     # and used to auto-select the conductor when logging a trip for that driver.
     paired_driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=True)
+    # The vehicle this driver/conductor is normally assigned to — informational,
+    # and used to auto-select the driver/conductor when logging a trip for that vehicle.
+    assigned_vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=True)
     next_of_kin_name = db.Column(db.String(100))
     next_of_kin_phone = db.Column(db.String(20))
     next_of_kin_relationship = db.Column(db.String(50))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     paired_driver = db.relationship('Driver', remote_side=[id], backref='paired_conductors')
+    assigned_vehicle = db.relationship('Vehicle', backref='assigned_crew')
     driven_logs = db.relationship('DailyLog', foreign_keys='DailyLog.driver_id',
                                   backref='driver', lazy=True)
     conducted_logs = db.relationship('DailyLog', foreign_keys='DailyLog.conductor_id',
@@ -197,10 +198,8 @@ class Route(db.Model):
     distance_km = db.Column(db.Float)
     fare_rate = db.Column(db.Float, nullable=False)
     status = db.Column(db.String(20), default='active')
-    depot_id = db.Column(db.Integer, db.ForeignKey('depots.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
-    depot = db.relationship('Depot', backref='routes')
     logs = db.relationship('DailyLog', backref='route', lazy=True)
 
 
@@ -270,18 +269,6 @@ class AuditLog(db.Model):
     timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = db.relationship('User')
-
-
-# ─────────────────────────────────────────────────────────────
-# Multi-depot
-# ─────────────────────────────────────────────────────────────
-class Depot(db.Model):
-    __tablename__ = 'depots'
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), unique=True, nullable=False)
-    location = db.Column(db.String(150))
-    status = db.Column(db.String(20), default='active')
-    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -919,13 +906,8 @@ def dashboard():
 @login_required
 @permission_required('vehicles')
 def vehicles():
-    depot_id = request.args.get('depot_id', '')
-    q = Vehicle.query
-    if depot_id:
-        q = q.filter(Vehicle.depot_id == depot_id)
-    all_vehicles = q.order_by(Vehicle.registration).all()
-    all_depots = Depot.query.order_by(Depot.name).all()
-    return render_template('vehicles/index.html', vehicles=all_vehicles, depots=all_depots, depot_id=depot_id)
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    return render_template('vehicles/index.html', vehicles=all_vehicles)
 
 
 @app.route('/vehicles/add', methods=['GET', 'POST'])
@@ -943,7 +925,6 @@ def vehicle_add():
             year=form_int(request.form, 'year', min_value=1980),
             acquisition_cost=form_float(request.form, 'acquisition_cost', required=False, default=0, min_value=0),
             status=request.form.get('status', 'active'),
-            depot_id=form_int(request.form, 'depot_id', required=False),
         )
         db.session.add(v)
         db.session.flush()
@@ -951,8 +932,7 @@ def vehicle_add():
         db.session.commit()
         flash(f'Vehicle {v.registration} registered successfully.', 'success')
         return redirect(url_for('vehicles'))
-    all_depots = Depot.query.order_by(Depot.name).all()
-    return render_template('vehicles/form.html', vehicle=None, action='Register', depots=all_depots)
+    return render_template('vehicles/form.html', vehicle=None, action='Register')
 
 
 @app.route('/vehicles/<int:vid>')
@@ -984,13 +964,11 @@ def vehicle_edit(vid):
         v.year = form_int(request.form, 'year', min_value=1980)
         v.acquisition_cost = form_float(request.form, 'acquisition_cost', required=False, default=0, min_value=0)
         v.status = request.form.get('status', 'active')
-        v.depot_id = form_int(request.form, 'depot_id', required=False)
         log_audit('UPDATE', 'vehicles', v.id, f'Updated vehicle {v.registration}')
         db.session.commit()
         flash(f'Vehicle {v.registration} updated.', 'success')
         return redirect(url_for('vehicle_detail', vid=vid))
-    all_depots = Depot.query.order_by(Depot.name).all()
-    return render_template('vehicles/form.html', vehicle=v, action='Edit', depots=all_depots)
+    return render_template('vehicles/form.html', vehicle=v, action='Edit')
 
 
 @app.route('/vehicles/<int:vid>/delete', methods=['POST'])
@@ -1076,6 +1054,7 @@ def driver_add():
             commission_rate=rate_input / 100 if rate_input is not None else None,
             status=request.form.get('status', 'active'),
             paired_driver_id=paired_driver_id,
+            assigned_vehicle_id=form_int(request.form, 'assigned_vehicle_id', required=False),
             next_of_kin_name=request.form.get('next_of_kin_name', '').strip(),
             next_of_kin_phone=request.form.get('next_of_kin_phone', '').strip(),
             next_of_kin_relationship=request.form.get('next_of_kin_relationship', '').strip(),
@@ -1106,8 +1085,9 @@ def driver_add():
         flash(f'Driver {d.name} registered.', 'success')
         return redirect(url_for('drivers'))
     eligible_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
+    all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
     return render_template('drivers/form.html', driver=None, action='Register',
-                           eligible_drivers=eligible_drivers)
+                           eligible_drivers=eligible_drivers, vehicles=all_vehicles)
 
 
 @app.route('/drivers/<int:did>/edit', methods=['GET', 'POST'])
@@ -1134,6 +1114,7 @@ def driver_edit(did):
         d.commission_rate = rate_input / 100 if rate_input is not None else None
         d.status = request.form.get('status', 'active')
         d.paired_driver_id = paired_driver_id
+        d.assigned_vehicle_id = form_int(request.form, 'assigned_vehicle_id', required=False)
         d.next_of_kin_name = request.form.get('next_of_kin_name', '').strip()
         d.next_of_kin_phone = request.form.get('next_of_kin_phone', '').strip()
         d.next_of_kin_relationship = request.form.get('next_of_kin_relationship', '').strip()
@@ -1142,8 +1123,9 @@ def driver_edit(did):
         flash(f'Driver {d.name} updated.', 'success')
         return redirect(url_for('drivers'))
     eligible_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
+    all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
     return render_template('drivers/form.html', driver=d, action='Edit',
-                           eligible_drivers=eligible_drivers)
+                           eligible_drivers=eligible_drivers, vehicles=all_vehicles)
 
 
 @app.route('/drivers/<int:did>/delete', methods=['POST'])
@@ -1166,13 +1148,8 @@ def driver_delete(did):
 @login_required
 @permission_required('routes')
 def routes_list():
-    depot_id = request.args.get('depot_id', '')
-    q = Route.query
-    if depot_id:
-        q = q.filter(Route.depot_id == depot_id)
-    all_routes = q.order_by(Route.name).all()
-    all_depots = Depot.query.order_by(Depot.name).all()
-    return render_template('routes/index.html', routes=all_routes, depots=all_depots, depot_id=depot_id)
+    all_routes = Route.query.order_by(Route.name).all()
+    return render_template('routes/index.html', routes=all_routes)
 
 
 @app.route('/routes/add', methods=['GET', 'POST'])
@@ -1188,7 +1165,6 @@ def route_add():
             distance_km=form_float(request.form, 'distance_km', required=False, min_value=0),
             fare_rate=form_float(request.form, 'fare_rate', min_value=0),
             status=request.form.get('status', 'active'),
-            depot_id=form_int(request.form, 'depot_id', required=False),
         )
         db.session.add(r)
         db.session.flush()
@@ -1196,8 +1172,7 @@ def route_add():
         db.session.commit()
         flash(f'Route "{r.name}" added.', 'success')
         return redirect(url_for('routes_list'))
-    all_depots = Depot.query.order_by(Depot.name).all()
-    return render_template('routes/form.html', route=None, action='Add', depots=all_depots)
+    return render_template('routes/form.html', route=None, action='Add')
 
 
 @app.route('/routes/<int:rid>/edit', methods=['GET', 'POST'])
@@ -1213,13 +1188,11 @@ def route_edit(rid):
         r.distance_km = form_float(request.form, 'distance_km', required=False, min_value=0)
         r.fare_rate = form_float(request.form, 'fare_rate', min_value=0)
         r.status = request.form.get('status', 'active')
-        r.depot_id = form_int(request.form, 'depot_id', required=False)
         log_audit('UPDATE', 'routes', r.id, f'Updated route {r.name}')
         db.session.commit()
         flash(f'Route "{r.name}" updated.', 'success')
         return redirect(url_for('routes_list'))
-    all_depots = Depot.query.order_by(Depot.name).all()
-    return render_template('routes/form.html', route=r, action='Edit', depots=all_depots)
+    return render_template('routes/form.html', route=r, action='Edit')
 
 
 @app.route('/routes/<int:rid>/delete', methods=['POST'])
@@ -1342,6 +1315,120 @@ def daily_log_delete(lid):
     db.session.commit()
     flash('Daily log deleted.', 'warning')
     return redirect(url_for('daily_logs'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Driver Ledger — combined fare + diesel + mileage entry per driver,
+# posting to the same DailyLog/FuelLog tables the rest of the system uses.
+# ─────────────────────────────────────────────────────────────
+def driver_ledger_rows(vehicle_id, driver_id):
+    """Merge DailyLog (fare, for this driver) and FuelLog (diesel/mileage,
+    for their vehicle) by date, with distance computed the same way the
+    Fuel Efficiency report does — delta from the previous odometer reading."""
+    daily_by_date = {}
+    for log in DailyLog.query.filter_by(vehicle_id=vehicle_id, driver_id=driver_id).order_by(DailyLog.log_date).all():
+        daily_by_date.setdefault(log.log_date, []).append(log)
+
+    fuel_by_date = {}
+    for log in FuelLog.query.filter_by(vehicle_id=vehicle_id).order_by(FuelLog.log_date).all():
+        fuel_by_date.setdefault(log.log_date, []).append(log)
+
+    all_dates = sorted(set(daily_by_date) | set(fuel_by_date))
+    rows = []
+    prev_odometer = None
+    total_fare = 0.0
+    total_diesel = 0.0
+    for d in all_dates:
+        fare = sum(l.gross_revenue for l in daily_by_date.get(d, []))
+        fuel_logs = fuel_by_date.get(d, [])
+        diesel_cost = sum(f.total_cost for f in fuel_logs)
+        diesel_liters = sum(f.liters for f in fuel_logs)
+        odometer = max((f.odometer for f in fuel_logs if f.odometer is not None), default=None)
+
+        distance = None
+        if odometer is not None and prev_odometer is not None and odometer > prev_odometer:
+            distance = odometer - prev_odometer
+        if odometer is not None:
+            prev_odometer = odometer
+
+        total_fare += fare
+        total_diesel += diesel_cost
+        rows.append({
+            'date': d, 'fare': fare, 'diesel_cost': diesel_cost, 'diesel_liters': diesel_liters,
+            'odometer': odometer, 'distance': distance,
+        })
+    return rows, total_fare, total_diesel
+
+
+@app.route('/logs/ledger')
+@login_required
+@permission_required('daily_logs')
+def driver_ledger():
+    driver_id = request.args.get('driver_id', '')
+    eligible_drivers = Driver.query.filter_by(role='driver', status='active').filter(
+        Driver.assigned_vehicle_id.isnot(None)).order_by(Driver.name).all()
+
+    driver = None
+    rows, total_fare, total_diesel = [], 0.0, 0.0
+    if driver_id:
+        driver = Driver.query.get(driver_id)
+        if driver and driver.assigned_vehicle_id:
+            rows, total_fare, total_diesel = driver_ledger_rows(driver.assigned_vehicle_id, driver.id)
+    elif eligible_drivers:
+        driver = eligible_drivers[0]
+        rows, total_fare, total_diesel = driver_ledger_rows(driver.assigned_vehicle_id, driver.id)
+
+    all_routes = Route.query.filter_by(status='active').order_by(Route.name).all()
+    return render_template('logs/ledger.html', eligible_drivers=eligible_drivers, driver=driver,
+        rows=rows, total_fare=total_fare, total_diesel=total_diesel,
+        net=total_fare - total_diesel, routes=all_routes, today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/logs/ledger/add', methods=['POST'])
+@login_required
+@permission_required('daily_logs')
+@handle_form_errors
+def driver_ledger_add():
+    driver_id = form_int(request.form, 'driver_id')
+    driver = Driver.query.get(driver_id)
+    if not driver:
+        raise ValueError('Select a driver.')
+    if not driver.assigned_vehicle_id:
+        raise ValueError(f'{driver.name} has no assigned vehicle — set one from Edit Crew Member first.')
+    vehicle_id = driver.assigned_vehicle_id
+
+    log_date = parse_date(request.form['log_date'])
+    route_id = form_int(request.form, 'route_id')
+    fare = form_float(request.form, 'fare', min_value=0)
+    diesel_liters = form_float(request.form, 'diesel_liters', required=False, min_value=0)
+    diesel_cost = form_float(request.form, 'diesel_cost', required=False, min_value=0)
+    mileage = form_float(request.form, 'mileage', required=False, min_value=0)
+
+    if (diesel_liters is None) != (diesel_cost is None):
+        raise ValueError('Enter both diesel liters and diesel cost, or leave both blank.')
+
+    daily = DailyLog(
+        vehicle_id=vehicle_id, driver_id=driver.id, route_id=route_id,
+        log_date=log_date, gross_revenue=fare, created_by=current_user.id,
+    )
+    db.session.add(daily)
+    log_audit('CREATE', 'daily_logs', None, f'Ledger entry for {driver.name} on {log_date}: fare {fare}')
+
+    if diesel_liters:
+        fuel = FuelLog(
+            vehicle_id=vehicle_id, log_date=log_date, liters=diesel_liters,
+            cost_per_liter=diesel_cost / diesel_liters, total_cost=diesel_cost,
+            odometer=mileage, created_by=current_user.id,
+        )
+        db.session.add(fuel)
+        log_audit('CREATE', 'fuel_logs', None, f'Ledger entry for {driver.name} on {log_date}: diesel {diesel_cost}')
+    elif mileage is not None:
+        flash('Mileage needs a diesel purchase to be recorded against — '
+              'fare was saved, but the odometer reading was not.', 'warning')
+
+    db.session.commit()
+    flash('Ledger entry recorded.', 'success')
+    return redirect(url_for('driver_ledger', driver_id=driver.id))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2698,75 +2785,6 @@ def compliance():
 
 
 # ─────────────────────────────────────────────────────────────
-# Depots (Admin)
-# ─────────────────────────────────────────────────────────────
-@app.route('/depots')
-@login_required
-@admin_required
-def depots():
-    all_depots = Depot.query.order_by(Depot.name).all()
-    return render_template('depots/index.html', depots=all_depots)
-
-
-@app.route('/depots/add', methods=['GET', 'POST'])
-@login_required
-@admin_required
-@handle_form_errors
-def depot_add():
-    if request.method == 'POST':
-        name = request.form['name'].strip()
-        check_unique(Depot, 'name', name)
-        d = Depot(
-            name=name,
-            location=request.form.get('location', '').strip(),
-            status=request.form.get('status', 'active'),
-        )
-        db.session.add(d)
-        db.session.flush()
-        log_audit('CREATE', 'depots', d.id, f'Added depot {d.name}')
-        db.session.commit()
-        flash(f'Depot "{d.name}" added.', 'success')
-        return redirect(url_for('depots'))
-    return render_template('depots/form.html', depot=None, action='Add')
-
-
-@app.route('/depots/<int:did>/edit', methods=['GET', 'POST'])
-@login_required
-@admin_required
-@handle_form_errors
-def depot_edit(did):
-    d = Depot.query.get_or_404(did)
-    if request.method == 'POST':
-        name = request.form['name'].strip()
-        check_unique(Depot, 'name', name, exclude_id=d.id)
-        d.name = name
-        d.location = request.form.get('location', '').strip()
-        d.status = request.form.get('status', 'active')
-        log_audit('UPDATE', 'depots', d.id, f'Updated depot {d.name}')
-        db.session.commit()
-        flash(f'Depot "{d.name}" updated.', 'success')
-        return redirect(url_for('depots'))
-    return render_template('depots/form.html', depot=d, action='Edit')
-
-
-@app.route('/depots/<int:did>/delete', methods=['POST'])
-@login_required
-@admin_required
-def depot_delete(did):
-    d = Depot.query.get_or_404(did)
-    if Vehicle.query.filter_by(depot_id=did).first() or Driver.query.filter_by(depot_id=did).first() \
-            or Route.query.filter_by(depot_id=did).first():
-        flash(f'Cannot delete "{d.name}" — vehicles, drivers or routes are still assigned to it.', 'danger')
-        return redirect(url_for('depots'))
-    name = d.name
-    log_audit('DELETE', 'depots', did, f'Deleted depot {name}')
-    db.session.delete(d)
-    db.session.commit()
-    flash(f'Depot "{name}" removed.', 'warning')
-    return redirect(url_for('depots'))
-
-
-# ─────────────────────────────────────────────────────────────
 # Users (Admin)
 # ─────────────────────────────────────────────────────────────
 @app.route('/users')
@@ -2970,10 +2988,13 @@ def migrate_db():
         if 'driver_id' not in user_cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN driver_id INTEGER REFERENCES drivers(id)"))
 
+        # Depots were removed — drop the leftover columns/table from any DB that has them.
         for table in ('vehicles', 'drivers', 'routes'):
             cols = [c['name'] for c in inspector.get_columns(table)]
-            if 'depot_id' not in cols:
-                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN depot_id INTEGER REFERENCES depots(id)"))
+            if 'depot_id' in cols:
+                conn.execute(text(f"ALTER TABLE {table} DROP COLUMN depot_id"))
+        if inspector.has_table('depots'):
+            conn.execute(text("DROP TABLE depots"))
 
         if inspector.has_table('expense_categories'):
             exp_cat_cols = [c['name'] for c in inspector.get_columns('expense_categories')]
@@ -2985,6 +3006,8 @@ def migrate_db():
         driver_col_names = [c['name'] for c in driver_cols]
         if 'paired_driver_id' not in driver_col_names:
             conn.execute(text("ALTER TABLE drivers ADD COLUMN paired_driver_id INTEGER REFERENCES drivers(id)"))
+        if 'assigned_vehicle_id' not in driver_col_names:
+            conn.execute(text("ALTER TABLE drivers ADD COLUMN assigned_vehicle_id INTEGER REFERENCES vehicles(id)"))
         for col in ('next_of_kin_name', 'next_of_kin_phone', 'next_of_kin_relationship'):
             if col not in driver_col_names:
                 conn.execute(text(f"ALTER TABLE drivers ADD COLUMN {col} VARCHAR(100)"))
@@ -2999,36 +3022,29 @@ def migrate_db():
                     name VARCHAR(100) NOT NULL,
                     license_number VARCHAR(50) UNIQUE,
                     phone VARCHAR(20),
-                    email VARCHAR(120),
                     role VARCHAR(20),
                     commission_rate FLOAT,
                     status VARCHAR(20),
-                    depot_id INTEGER REFERENCES depots(id),
                     paired_driver_id INTEGER REFERENCES drivers(id),
+                    assigned_vehicle_id INTEGER REFERENCES vehicles(id),
+                    next_of_kin_name VARCHAR(100),
+                    next_of_kin_phone VARCHAR(100),
+                    next_of_kin_relationship VARCHAR(100),
                     created_at DATETIME
                 )
             """))
             conn.execute(text("""
-                INSERT INTO drivers_new (id, name, license_number, phone, email, role,
-                    commission_rate, status, depot_id, paired_driver_id, created_at)
-                SELECT id, name, license_number, phone, email, role,
-                    commission_rate, status, depot_id, paired_driver_id, created_at FROM drivers
+                INSERT INTO drivers_new (id, name, license_number, phone, role,
+                    commission_rate, status, paired_driver_id, assigned_vehicle_id,
+                    next_of_kin_name, next_of_kin_phone, next_of_kin_relationship, created_at)
+                SELECT id, name, license_number, phone, role,
+                    commission_rate, status, paired_driver_id, assigned_vehicle_id,
+                    next_of_kin_name, next_of_kin_phone, next_of_kin_relationship, created_at FROM drivers
             """))
             conn.execute(text("DROP TABLE drivers"))
             conn.execute(text("ALTER TABLE drivers_new RENAME TO drivers"))
 
         conn.commit()
-
-
-def create_default_depot():
-    depot = Depot.query.first()
-    if not depot:
-        depot = Depot(name='Main Depot', location='', status='active')
-        db.session.add(depot)
-        db.session.commit()
-    Vehicle.query.filter_by(depot_id=None).update({'depot_id': depot.id})
-    Route.query.filter_by(depot_id=None).update({'depot_id': depot.id})
-    db.session.commit()
 
 
 def create_default_expense_categories():
@@ -3065,7 +3081,6 @@ if __name__ == '__main__':
         db.create_all()
         migrate_db()
         create_default_admin()
-        create_default_depot()
         create_default_expense_categories()
     debug_mode = not IS_PRODUCTION
     host = os.environ.get('HOST', '127.0.0.1' if IS_PRODUCTION else '0.0.0.0')

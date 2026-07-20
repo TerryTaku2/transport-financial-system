@@ -20,6 +20,7 @@
           <th>Name</th>
           <th>License No.</th>
           <th>Role</th>
+          <th>Vehicle</th>
           <th>Phone</th>
           <th>Commission Rate</th>
           <th>Status</th>
@@ -32,6 +33,7 @@
           <td><strong>{{ d.name }}</strong>{% if d.role == 'conductor' and d.paired_driver %}<div class="form-hint">under {{ d.paired_driver.name }}</div>{% endif %}</td>
           <td>{{ d.license_number or '—' }}</td>
           <td><span class="badge badge-blue">{{ d.role|title }}</span></td>
+          <td>{{ d.assigned_vehicle.registration if d.assigned_vehicle else '—' }}</td>
           <td>{{ d.phone or '—' }}</td>
           <td>{% if d.commission_rate %}{{ (d.commission_rate*100)|round(1) }}% (custom){% else %}Default{% endif %}</td>
           <td>
