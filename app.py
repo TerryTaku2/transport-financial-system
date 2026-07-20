@@ -1419,64 +1419,75 @@ def driver_ledger():
 @app.route('/logs/ledger/add', methods=['POST'])
 @login_required
 @permission_required_any('daily_logs', 'crew_portal')
-@handle_form_errors
 def driver_ledger_add():
-    vehicle_id = form_int(request.form, 'vehicle_id')
-    vehicle = Vehicle.query.get(vehicle_id)
-    if not vehicle:
-        raise ValueError('Select a vehicle.')
+    # This is a POST-only route with no GET counterpart at the same URL, so
+    # (unlike the other forms in the app) errors can't redirect back to
+    # request.url — that would GET this same POST-only URL and 405. Errors
+    # are handled locally here and always redirect to the GET ledger page.
+    period = request.form.get('period', 'month')
+    vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+    try:
+        vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else None
+        if not vehicle:
+            raise ValueError('Select a vehicle.')
 
-    log_date = parse_date(request.form['log_date'])
-    driver_id = form_int(request.form, 'driver_id', required=False)
-    route_id = form_int(request.form, 'route_id', required=False)
-    fare = form_float(request.form, 'fare', required=False, min_value=0)
-    diesel_liters = form_float(request.form, 'diesel_liters', required=False, min_value=0)
-    diesel_cost = form_float(request.form, 'diesel_cost', required=False, min_value=0)
-    mileage = form_float(request.form, 'mileage', required=False, min_value=0)
+        log_date = parse_date(request.form['log_date'])
+        driver_id = form_int(request.form, 'driver_id', required=False)
+        route_id = form_int(request.form, 'route_id', required=False)
+        fare = form_float(request.form, 'fare', required=False, min_value=0)
+        diesel_liters = form_float(request.form, 'diesel_liters', required=False, min_value=0)
+        diesel_cost = form_float(request.form, 'diesel_cost', required=False, min_value=0)
+        mileage = form_float(request.form, 'mileage', required=False, min_value=0)
 
-    if fare is not None:
-        if not driver_id:
-            raise ValueError('Select a driver to record fare against.')
-        if not route_id:
-            raise ValueError('Select a route to record fare against.')
-    elif driver_id or route_id:
-        raise ValueError('Fare is required when a driver or route is selected.')
+        if fare is not None:
+            if not driver_id:
+                raise ValueError('Select a driver to record fare against.')
+            if not route_id:
+                raise ValueError('Select a route to record fare against.')
+        elif driver_id or route_id:
+            raise ValueError('Fare is required when a driver or route is selected.')
 
-    if diesel_liters is not None and diesel_cost is None:
-        raise ValueError('Enter the diesel cost as well as the liters.')
+        if diesel_liters is not None and diesel_cost is None:
+            raise ValueError('Enter the diesel cost as well as the liters.')
 
-    if fare is None and diesel_cost is None and mileage is None:
-        raise ValueError('Enter at least a fare, diesel cost, or mileage reading.')
+        if fare is None and diesel_cost is None and mileage is None:
+            raise ValueError('Enter at least a fare, diesel cost, or mileage reading.')
 
-    if fare is not None:
-        driver = Driver.query.get(driver_id)
-        conductor = driver.paired_conductors[0] if driver and driver.paired_conductors else None
-        daily = DailyLog(
-            vehicle_id=vehicle_id, driver_id=driver_id, conductor_id=conductor.id if conductor else None,
-            route_id=route_id, log_date=log_date, gross_revenue=fare, created_by=current_user.id,
-        )
-        db.session.add(daily)
-        log_audit('CREATE', 'daily_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: fare {fare}')
+        if fare is not None:
+            driver = Driver.query.get(driver_id)
+            conductor = driver.paired_conductors[0] if driver and driver.paired_conductors else None
+            daily = DailyLog(
+                vehicle_id=vehicle_id, driver_id=driver_id, conductor_id=conductor.id if conductor else None,
+                route_id=route_id, log_date=log_date, gross_revenue=fare, created_by=current_user.id,
+            )
+            db.session.add(daily)
+            log_audit('CREATE', 'daily_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: fare {fare}')
 
-    if diesel_cost is not None:
-        fuel = FuelLog(
-            vehicle_id=vehicle_id, log_date=log_date,
-            liters=diesel_liters or 0, cost_per_liter=(diesel_cost / diesel_liters) if diesel_liters else 0,
-            total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
-        )
-        db.session.add(fuel)
-        log_audit('CREATE', 'fuel_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: diesel {diesel_cost}')
-    elif mileage is not None:
-        fuel = FuelLog(
-            vehicle_id=vehicle_id, log_date=log_date, liters=0, cost_per_liter=0,
-            total_cost=0, odometer=mileage, created_by=current_user.id,
-        )
-        db.session.add(fuel)
+        if diesel_cost is not None:
+            fuel = FuelLog(
+                vehicle_id=vehicle_id, log_date=log_date,
+                liters=diesel_liters or 0, cost_per_liter=(diesel_cost / diesel_liters) if diesel_liters else 0,
+                total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
+            )
+            db.session.add(fuel)
+            log_audit('CREATE', 'fuel_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: diesel {diesel_cost}')
+        elif mileage is not None:
+            fuel = FuelLog(
+                vehicle_id=vehicle_id, log_date=log_date, liters=0, cost_per_liter=0,
+                total_cost=0, odometer=mileage, created_by=current_user.id,
+            )
+            db.session.add(fuel)
 
-    db.session.commit()
-    flash('Ledger entry recorded.', 'success')
-    return redirect(url_for('driver_ledger', vehicle_id=vehicle_id,
-                            period=request.form.get('period', 'month')))
+        db.session.commit()
+        flash('Ledger entry recorded.', 'success')
+    except KeyError as e:
+        db.session.rollback()
+        flash(f'Missing required field: {e}', 'danger')
+    except ValueError as e:
+        db.session.rollback()
+        flash(str(e), 'danger')
+
+    return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
 
 
 # ─────────────────────────────────────────────────────────────
