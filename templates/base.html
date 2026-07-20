@@ -34,7 +34,7 @@
     {% if current_user.has_permission('crew_portal') %}
     <div class="nav-section">
       <div class="nav-section-label">Crew Portal</div>
-      <a href="{{ url_for('crew_log') }}" class="nav-item {% if request.endpoint == 'crew_log' %}active{% endif %}">
+      <a href="{{ url_for('driver_ledger') }}" class="nav-item {% if 'ledger' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="edit-3"></i> Log Income
       </a>
       <a href="{{ url_for('crew_leaderboard') }}" class="nav-item {% if request.endpoint == 'crew_leaderboard' %}active{% endif %}">

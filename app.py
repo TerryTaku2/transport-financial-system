@@ -513,6 +513,18 @@ def permission_required(perm):
     return decorator
 
 
+def permission_required_any(*perms):
+    def decorator(f):
+        @wraps(f)
+        def decorated(*args, **kwargs):
+            if not any(current_user.has_permission(p) for p in perms):
+                flash('You do not have permission to access that section.', 'danger')
+                return redirect(first_permitted_url(current_user))
+            return f(*args, **kwargs)
+        return decorated
+    return decorator
+
+
 def log_audit(action, table_name=None, record_id=None, description=None):
     entry = AuditLog(
         user_id=current_user.id if current_user.is_authenticated else None,
@@ -1320,22 +1332,42 @@ def daily_log_delete(lid):
 # ─────────────────────────────────────────────────────────────
 # Driver Ledger — combined fare + diesel + mileage entry per driver,
 # posting to the same DailyLog/FuelLog tables the rest of the system uses.
+# Replaces the old Crew Portal "Log Income" form; also usable by admins
+# for any driver, filterable by day/week/month.
 # ─────────────────────────────────────────────────────────────
-def driver_ledger_rows(vehicle_id, driver_id):
+def driver_ledger_rows(vehicle_id, driver_id, df=None, dt=None):
     """Merge DailyLog (fare, for this driver) and FuelLog (diesel/mileage,
     for their vehicle) by date, with distance computed the same way the
-    Fuel Efficiency report does — delta from the previous odometer reading."""
+    Fuel Efficiency report does — delta from the previous odometer reading.
+    If df/dt are given, only rows in that range are returned, but the
+    distance baseline still uses the last odometer reading before df so
+    the first visible row isn't wrongly shown as having no distance."""
+    daily_q = DailyLog.query.filter_by(vehicle_id=vehicle_id, driver_id=driver_id)
+    fuel_q = FuelLog.query.filter_by(vehicle_id=vehicle_id)
+    if df:
+        daily_q = daily_q.filter(DailyLog.log_date >= df)
+        fuel_q = fuel_q.filter(FuelLog.log_date >= df)
+    if dt:
+        daily_q = daily_q.filter(DailyLog.log_date <= dt)
+        fuel_q = fuel_q.filter(FuelLog.log_date <= dt)
+
     daily_by_date = {}
-    for log in DailyLog.query.filter_by(vehicle_id=vehicle_id, driver_id=driver_id).order_by(DailyLog.log_date).all():
+    for log in daily_q.order_by(DailyLog.log_date).all():
         daily_by_date.setdefault(log.log_date, []).append(log)
 
     fuel_by_date = {}
-    for log in FuelLog.query.filter_by(vehicle_id=vehicle_id).order_by(FuelLog.log_date).all():
+    for log in fuel_q.order_by(FuelLog.log_date).all():
         fuel_by_date.setdefault(log.log_date, []).append(log)
+
+    prev_odometer = None
+    if df:
+        baseline = FuelLog.query.filter(
+            FuelLog.vehicle_id == vehicle_id, FuelLog.log_date < df,
+            FuelLog.odometer.isnot(None)).order_by(FuelLog.log_date.desc()).first()
+        prev_odometer = baseline.odometer if baseline else None
 
     all_dates = sorted(set(daily_by_date) | set(fuel_by_date))
     rows = []
-    prev_odometer = None
     total_fare = 0.0
     total_diesel = 0.0
     for d in all_dates:
@@ -1362,35 +1394,66 @@ def driver_ledger_rows(vehicle_id, driver_id):
 
 @app.route('/logs/ledger')
 @login_required
-@permission_required('daily_logs')
+@permission_required_any('daily_logs', 'crew_portal')
 def driver_ledger():
-    driver_id = request.args.get('driver_id', '')
-    eligible_drivers = Driver.query.filter_by(role='driver', status='active').filter(
-        Driver.assigned_vehicle_id.isnot(None)).order_by(Driver.name).all()
+    today = date.today()
+    my_driver = current_user.linked_driver
+    can_pick_any_driver = current_user.has_permission('daily_logs')
 
-    driver = None
+    period = request.args.get('period', 'month')
+    if period == 'today':
+        df = dt = today
+    elif period == 'week':
+        df, dt = today - timedelta(days=today.weekday()), today
+    elif period == 'all':
+        df = dt = None
+    else:
+        period = 'month'
+        df, dt = today.replace(day=1), today
+    date_from_str = df.strftime('%Y-%m-%d') if df else ''
+    date_to_str = dt.strftime('%Y-%m-%d') if dt else ''
+
+    if not can_pick_any_driver:
+        # Self-service crew account — locked to their own linked driver record.
+        eligible_drivers = [my_driver] if (my_driver and my_driver.role == 'driver'
+                                            and my_driver.assigned_vehicle_id) else []
+        driver = eligible_drivers[0] if eligible_drivers else None
+        unassigned_conductor = my_driver and my_driver.role == 'conductor'
+        unassigned_vehicle = my_driver and my_driver.role == 'driver' and not my_driver.assigned_vehicle_id
+    else:
+        eligible_drivers = Driver.query.filter_by(role='driver', status='active').filter(
+            Driver.assigned_vehicle_id.isnot(None)).order_by(Driver.name).all()
+        driver_id = request.args.get('driver_id', '')
+        driver = Driver.query.get(driver_id) if driver_id else (eligible_drivers[0] if eligible_drivers else None)
+        unassigned_conductor = False
+        unassigned_vehicle = False
+
     rows, total_fare, total_diesel = [], 0.0, 0.0
-    if driver_id:
-        driver = Driver.query.get(driver_id)
-        if driver and driver.assigned_vehicle_id:
-            rows, total_fare, total_diesel = driver_ledger_rows(driver.assigned_vehicle_id, driver.id)
-    elif eligible_drivers:
-        driver = eligible_drivers[0]
-        rows, total_fare, total_diesel = driver_ledger_rows(driver.assigned_vehicle_id, driver.id)
+    if driver and driver.assigned_vehicle_id:
+        rows, total_fare, total_diesel = driver_ledger_rows(driver.assigned_vehicle_id, driver.id, df, dt)
 
     all_routes = Route.query.filter_by(status='active').order_by(Route.name).all()
     return render_template('logs/ledger.html', eligible_drivers=eligible_drivers, driver=driver,
+        can_pick_any_driver=can_pick_any_driver,
+        unassigned_conductor=unassigned_conductor, unassigned_vehicle=unassigned_vehicle,
         rows=rows, total_fare=total_fare, total_diesel=total_diesel,
-        net=total_fare - total_diesel, routes=all_routes, today=date.today().strftime('%Y-%m-%d'))
+        net=total_fare - total_diesel, routes=all_routes,
+        period=period, date_from=date_from_str, date_to=date_to_str,
+        today=today.strftime('%Y-%m-%d'))
 
 
 @app.route('/logs/ledger/add', methods=['POST'])
 @login_required
-@permission_required('daily_logs')
+@permission_required_any('daily_logs', 'crew_portal')
 @handle_form_errors
 def driver_ledger_add():
-    driver_id = form_int(request.form, 'driver_id')
-    driver = Driver.query.get(driver_id)
+    if current_user.has_permission('daily_logs'):
+        driver_id = form_int(request.form, 'driver_id')
+        driver = Driver.query.get(driver_id)
+    else:
+        # Self-service accounts can only ever log against their own record,
+        # regardless of what the form posted.
+        driver = current_user.linked_driver
     if not driver:
         raise ValueError('Select a driver.')
     if not driver.assigned_vehicle_id:
@@ -1407,9 +1470,11 @@ def driver_ledger_add():
     if (diesel_liters is None) != (diesel_cost is None):
         raise ValueError('Enter both diesel liters and diesel cost, or leave both blank.')
 
+    conductor = driver.paired_conductors[0] if driver.paired_conductors else None
+
     daily = DailyLog(
-        vehicle_id=vehicle_id, driver_id=driver.id, route_id=route_id,
-        log_date=log_date, gross_revenue=fare, created_by=current_user.id,
+        vehicle_id=vehicle_id, driver_id=driver.id, conductor_id=conductor.id if conductor else None,
+        route_id=route_id, log_date=log_date, gross_revenue=fare, created_by=current_user.id,
     )
     db.session.add(daily)
     log_audit('CREATE', 'daily_logs', None, f'Ledger entry for {driver.name} on {log_date}: fare {fare}')
@@ -1428,7 +1493,8 @@ def driver_ledger_add():
 
     db.session.commit()
     flash('Ledger entry recorded.', 'success')
-    return redirect(url_for('driver_ledger', driver_id=driver.id))
+    return redirect(url_for('driver_ledger', driver_id=driver.id,
+                            period=request.form.get('period', 'month')))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1666,45 +1732,8 @@ def maintenance_schedule_delete(sid):
 # ─────────────────────────────────────────────────────────────
 # Crew Portal
 # ─────────────────────────────────────────────────────────────
-@app.route('/crew/log', methods=['GET', 'POST'])
-@login_required
-@permission_required('crew_portal')
-@handle_form_errors
-def crew_log():
-    my_driver = current_user.linked_driver
-    if request.method == 'POST':
-        driver_id = request.form.get('driver_id')
-        if not driver_id:
-            flash('Please select your name as the driver or conductor.', 'danger')
-            return redirect(url_for('crew_log'))
-        log = DailyLog(
-            vehicle_id=form_int(request.form, 'vehicle_id'),
-            driver_id=form_int(request.form, 'driver_id'),
-            conductor_id=form_int(request.form, 'conductor_id', required=False),
-            route_id=form_int(request.form, 'route_id'),
-            log_date=parse_date(request.form['log_date']),
-            trips_completed=form_int(request.form, 'trips_completed', required=False, default=0, min_value=0),
-            gross_revenue=form_float(request.form, 'gross_revenue', min_value=0),
-            notes=request.form.get('notes', '').strip(),
-            created_by=current_user.id,
-        )
-        db.session.add(log)
-        db.session.flush()
-        log_audit('CREATE', 'daily_logs', log.id,
-                  f'Crew log by {current_user.username} for {log.vehicle.registration}')
-        db.session.commit()
-        flash('Income logged successfully.', 'success')
-        return redirect(url_for('crew_leaderboard'))
-
-    all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
-    all_drivers = Driver.query.filter_by(status='active').order_by(Driver.name).all()
-    all_routes = Route.query.filter_by(status='active').order_by(Route.name).all()
-    return render_template('crew/log.html',
-                           my_driver=my_driver,
-                           vehicles=all_vehicles,
-                           drivers=all_drivers,
-                           routes=all_routes,
-                           today=date.today().strftime('%Y-%m-%d'))
+# Income logging moved to the Driver Ledger (see driver_ledger / driver_ledger_add
+# above) — it replaced this page so fare, diesel and mileage are captured together.
 
 
 @app.route('/crew/leaderboard')
