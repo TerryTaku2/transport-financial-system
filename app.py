@@ -170,17 +170,17 @@ class Driver(db.Model):
     # optional and only enforced as required at the form level for role='driver'.
     license_number = db.Column(db.String(50), unique=True, nullable=True)
     phone = db.Column(db.String(20))
-    email = db.Column(db.String(120))
     role = db.Column(db.String(20), default='driver')
     commission_rate = db.Column(db.Float)
     status = db.Column(db.String(20), default='active')
-    depot_id = db.Column(db.Integer, db.ForeignKey('depots.id'), nullable=True)
     # For a conductor, the driver they normally work under — informational,
     # and used to auto-select the conductor when logging a trip for that driver.
     paired_driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=True)
+    next_of_kin_name = db.Column(db.String(100))
+    next_of_kin_phone = db.Column(db.String(20))
+    next_of_kin_relationship = db.Column(db.String(50))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
-    depot = db.relationship('Depot', backref='drivers')
     paired_driver = db.relationship('Driver', remote_side=[id], backref='paired_conductors')
     driven_logs = db.relationship('DailyLog', foreign_keys='DailyLog.driver_id',
                                   backref='driver', lazy=True)
@@ -1050,13 +1050,8 @@ def document_delete(did):
 @login_required
 @permission_required('drivers')
 def drivers():
-    depot_id = request.args.get('depot_id', '')
-    q = Driver.query
-    if depot_id:
-        q = q.filter(Driver.depot_id == depot_id)
-    all_drivers = q.order_by(Driver.name).all()
-    all_depots = Depot.query.order_by(Depot.name).all()
-    return render_template('drivers/index.html', drivers=all_drivers, depots=all_depots, depot_id=depot_id)
+    all_drivers = Driver.query.order_by(Driver.name).all()
+    return render_template('drivers/index.html', drivers=all_drivers)
 
 
 @app.route('/drivers/add', methods=['GET', 'POST'])
@@ -1077,12 +1072,13 @@ def driver_add():
             name=request.form['name'].strip(),
             license_number=license_number,
             phone=request.form.get('phone', '').strip(),
-            email=request.form.get('email', '').strip(),
             role=role,
             commission_rate=rate_input / 100 if rate_input is not None else None,
             status=request.form.get('status', 'active'),
-            depot_id=form_int(request.form, 'depot_id', required=False),
             paired_driver_id=paired_driver_id,
+            next_of_kin_name=request.form.get('next_of_kin_name', '').strip(),
+            next_of_kin_phone=request.form.get('next_of_kin_phone', '').strip(),
+            next_of_kin_relationship=request.form.get('next_of_kin_relationship', '').strip(),
         )
         db.session.add(d)
         db.session.flush()
@@ -1096,13 +1092,9 @@ def driver_add():
             elif User.query.filter_by(username=login_username).first():
                 flash(f'Username "{login_username}" is already taken — login not created.', 'warning')
             else:
-                driver_email = d.email.strip().lower() if d.email else ''
-                if driver_email and User.query.filter_by(email=driver_email).first():
-                    driver_email = ''
-                email = driver_email or f'{login_username}@transport.local'
+                email = f'{login_username}@transport.local'
                 if User.query.filter_by(email=email).first():
-                    flash(f'Could not create a login — "{email}" is already in use. '
-                          'Set a different email on this driver and try again from Edit.', 'warning')
+                    flash(f'Could not create a login — "{email}" is already in use.', 'warning')
                 else:
                     u = User(username=login_username, email=email, role='manager', driver_id=d.id)
                     u.set_password(login_password)
@@ -1113,9 +1105,8 @@ def driver_add():
         db.session.commit()
         flash(f'Driver {d.name} registered.', 'success')
         return redirect(url_for('drivers'))
-    all_depots = Depot.query.order_by(Depot.name).all()
     eligible_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
-    return render_template('drivers/form.html', driver=None, action='Register', depots=all_depots,
+    return render_template('drivers/form.html', driver=None, action='Register',
                            eligible_drivers=eligible_drivers)
 
 
@@ -1139,19 +1130,19 @@ def driver_edit(did):
         d.name = request.form['name'].strip()
         d.license_number = license_number
         d.phone = request.form.get('phone', '').strip()
-        d.email = request.form.get('email', '').strip()
         d.role = role
         d.commission_rate = rate_input / 100 if rate_input is not None else None
         d.status = request.form.get('status', 'active')
-        d.depot_id = form_int(request.form, 'depot_id', required=False)
         d.paired_driver_id = paired_driver_id
+        d.next_of_kin_name = request.form.get('next_of_kin_name', '').strip()
+        d.next_of_kin_phone = request.form.get('next_of_kin_phone', '').strip()
+        d.next_of_kin_relationship = request.form.get('next_of_kin_relationship', '').strip()
         log_audit('UPDATE', 'drivers', d.id, f'Updated driver {d.name}')
         db.session.commit()
         flash(f'Driver {d.name} updated.', 'success')
         return redirect(url_for('drivers'))
-    all_depots = Depot.query.order_by(Depot.name).all()
     eligible_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
-    return render_template('drivers/form.html', driver=d, action='Edit', depots=all_depots,
+    return render_template('drivers/form.html', driver=d, action='Edit',
                            eligible_drivers=eligible_drivers)
 
 
@@ -2994,6 +2985,9 @@ def migrate_db():
         driver_col_names = [c['name'] for c in driver_cols]
         if 'paired_driver_id' not in driver_col_names:
             conn.execute(text("ALTER TABLE drivers ADD COLUMN paired_driver_id INTEGER REFERENCES drivers(id)"))
+        for col in ('next_of_kin_name', 'next_of_kin_phone', 'next_of_kin_relationship'):
+            if col not in driver_col_names:
+                conn.execute(text(f"ALTER TABLE drivers ADD COLUMN {col} VARCHAR(100)"))
 
         license_col = next((c for c in driver_cols if c['name'] == 'license_number'), None)
         if license_col is not None and not license_col['nullable']:
@@ -3033,7 +3027,6 @@ def create_default_depot():
         db.session.add(depot)
         db.session.commit()
     Vehicle.query.filter_by(depot_id=None).update({'depot_id': depot.id})
-    Driver.query.filter_by(depot_id=None).update({'depot_id': depot.id})
     Route.query.filter_by(depot_id=None).update({'depot_id': depot.id})
     db.session.commit()
 

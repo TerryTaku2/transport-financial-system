@@ -49,10 +49,6 @@
           <input type="text" name="phone" value="{{ driver.phone if driver else '' }}">
         </div>
         <div class="form-group">
-          <label>Email</label>
-          <input type="email" name="email" value="{{ driver.email if driver else '' }}">
-        </div>
-        <div class="form-group">
           <label>Commission Rate Override (%)</label>
           <input type="number" name="commission_rate" step="0.1" min="0" max="100"
                  placeholder="Leave blank for system default"
@@ -66,16 +62,29 @@
             <option value="inactive" {% if driver and driver.status=='inactive' %}selected{% endif %}>Inactive</option>
           </select>
         </div>
+      </div>
+
+      <hr style="margin:20px 0;border:none;border-top:1px solid var(--border);">
+      <div style="margin-bottom:12px;">
+        <strong style="font-size:0.9rem;">Next of Kin</strong>
+        <div class="form-hint">Emergency contact for this crew member.</div>
+      </div>
+      <div class="form-grid mb-16">
         <div class="form-group">
-          <label>Depot</label>
-          <select name="depot_id">
-            <option value="">Unassigned</option>
-            {% for dep in depots %}
-            <option value="{{ dep.id }}" {% if driver and driver.depot_id==dep.id %}selected{% endif %}>{{ dep.name }}</option>
-            {% endfor %}
-          </select>
+          <label>Name</label>
+          <input type="text" name="next_of_kin_name" value="{{ driver.next_of_kin_name if driver else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Phone</label>
+          <input type="text" name="next_of_kin_phone" value="{{ driver.next_of_kin_phone if driver else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Relationship</label>
+          <input type="text" name="next_of_kin_relationship" placeholder="e.g. Spouse, Parent, Sibling"
+                 value="{{ driver.next_of_kin_relationship if driver else '' }}">
         </div>
       </div>
+
       {% if not driver %}
       <hr style="margin:20px 0;border:none;border-top:1px solid var(--border);">
       <div style="margin-bottom:12px;">
