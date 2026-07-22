@@ -3153,12 +3153,13 @@ def create_default_admin():
         print('Log in and change this password immediately.')
 
 
+with app.app_context():
+    db.create_all()
+    migrate_db()
+    create_default_admin()
+    create_default_expense_categories()
+
 if __name__ == '__main__':
-    with app.app_context():
-        db.create_all()
-        migrate_db()
-        create_default_admin()
-        create_default_expense_categories()
     debug_mode = not IS_PRODUCTION
     host = os.environ.get('HOST', '127.0.0.1' if IS_PRODUCTION else '0.0.0.0')
     app.run(debug=debug_mode, host=host, port=int(os.environ.get('PORT', 5000)))
