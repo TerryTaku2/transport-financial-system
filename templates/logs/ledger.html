@@ -30,6 +30,24 @@
 </div>
 
 {% if vehicle %}
+<div class="card mb-24" style="padding:10px 14px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+    <div class="form-hint" style="margin:0;">Import or export {{ vehicle.registration }}'s transactions as CSV/Excel</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <a href="{{ url_for('driver_ledger_export', vehicle_id=vehicle.id, period=period) }}" class="btn btn-xs btn-outline">
+        <i data-feather="download"></i> Export CSV
+      </a>
+      <form method="POST" action="{{ url_for('driver_ledger_import') }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin:0;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="vehicle_id" value="{{ vehicle.id }}">
+        <input type="hidden" name="period" value="{{ period }}">
+        <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required style="font-size:12px;">
+        <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload"></i> Import</button>
+      </form>
+    </div>
+  </div>
+</div>
+
 <form method="GET" class="filter-bar">
   <input type="hidden" name="vehicle_id" value="{{ vehicle.id }}">
   <div class="form-group">
@@ -70,11 +88,11 @@
           <div class="form-hint">Needs a driver selected.</div>
         </div>
         <div class="form-group">
-          <label>Diesel (USD)</label>
+          <label>{{ vehicle.fuel_type|capitalize }} (USD)</label>
           <input type="number" name="diesel_cost" step="0.01" min="0" placeholder="0.00">
         </div>
         <div class="form-group">
-          <label>Diesel Liters (optional)</label>
+          <label>{{ vehicle.fuel_type|capitalize }} Liters (optional)</label>
           <input type="number" name="diesel_liters" step="0.01" min="0" placeholder="Leave blank if unknown">
         </div>
         <div class="form-group">
@@ -93,7 +111,7 @@
     <div class="kpi-value">{{ total_fare|currency }}</div>
   </div>
   <div class="kpi-card kpi-amber">
-    <div class="kpi-label">Total Diesel</div>
+    <div class="kpi-label">Total {{ vehicle.fuel_type|capitalize }}</div>
     <div class="kpi-value">{{ total_diesel|currency }}</div>
   </div>
   <div class="kpi-card {% if net >= 0 %}kpi-green{% else %}kpi-red{% endif %}">
@@ -112,7 +130,7 @@
           <th>Date</th>
           <th>Driver Name</th>
           <th class="text-right">Daily Fare</th>
-          <th class="text-right">Diesel</th>
+          <th class="text-right">{{ vehicle.fuel_type|capitalize }}</th>
           <th class="text-right">Mileage</th>
           <th class="text-right">Distance Travelled</th>
         </tr>

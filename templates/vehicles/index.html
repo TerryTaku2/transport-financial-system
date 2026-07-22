@@ -22,6 +22,7 @@
           <th>Registration</th>
           <th>Vehicle</th>
           <th>Year</th>
+          <th>Fuel</th>
           <th>Acquisition Cost</th>
           <th>Total Revenue</th>
           <th>Status</th>
@@ -35,6 +36,7 @@
           <td><a href="{{ url_for('vehicle_detail', vid=v.id) }}"><strong>{{ v.registration }}</strong></a></td>
           <td>{{ v.make }} {{ v.model }}</td>
           <td>{{ v.year }}</td>
+          <td>{{ v.fuel_type|capitalize }}</td>
           <td>{{ v.acquisition_cost|currency }}</td>
           <td><strong class="text-success">{{ v.total_revenue|currency }}</strong></td>
           <td>

@@ -12,6 +12,7 @@ import secrets
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 
+import openpyxl
 from dotenv import load_dotenv
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, jsonify, make_response)
@@ -113,6 +114,7 @@ class Vehicle(db.Model):
     year = db.Column(db.Integer, nullable=False)
     acquisition_cost = db.Column(db.Float, default=0.0)
     status = db.Column(db.String(20), default='active')
+    fuel_type = db.Column(db.String(10), default='diesel')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     documents = db.relationship('VehicleDocument', backref='vehicle',
@@ -547,6 +549,39 @@ def parse_date(s):
         raise ValueError(f'"{s}" is not a valid date (expected YYYY-MM-DD).')
 
 
+def parse_import_date(value):
+    """Parse a date cell from an uploaded CSV/Excel row. Excel cells come
+    through openpyxl as datetime objects already; CSV cells are plain
+    strings, tried against the common formats a logbook might use."""
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    s = str(value).strip()
+    if not s:
+        raise ValueError('Date is required.')
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y'):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError(f'"{s}" is not a recognized date (use YYYY-MM-DD).')
+
+
+def parse_import_number(value, label):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        return float(s)
+    except ValueError:
+        raise ValueError(f'{label} "{s}" is not a number.')
+
+
 def form_float(form, field, label=None, required=True, default=None, min_value=None):
     label = label or field.replace('_', ' ').capitalize()
     raw = (form.get(field) or '').strip()
@@ -933,6 +968,9 @@ def vehicle_add():
     if request.method == 'POST':
         registration = request.form['registration'].upper().strip()
         check_unique(Vehicle, 'registration', registration)
+        fuel_type = request.form.get('fuel_type', 'diesel')
+        if fuel_type not in ('diesel', 'petrol'):
+            raise ValueError('Fuel type must be Diesel or Petrol.')
         v = Vehicle(
             registration=registration,
             make=request.form['make'].strip(),
@@ -940,6 +978,7 @@ def vehicle_add():
             year=form_int(request.form, 'year', min_value=1980),
             acquisition_cost=form_float(request.form, 'acquisition_cost', required=False, default=0, min_value=0),
             status=request.form.get('status', 'active'),
+            fuel_type=fuel_type,
         )
         db.session.add(v)
         db.session.flush()
@@ -979,6 +1018,10 @@ def vehicle_edit(vid):
         v.year = form_int(request.form, 'year', min_value=1980)
         v.acquisition_cost = form_float(request.form, 'acquisition_cost', required=False, default=0, min_value=0)
         v.status = request.form.get('status', 'active')
+        fuel_type = request.form.get('fuel_type', 'diesel')
+        if fuel_type not in ('diesel', 'petrol'):
+            raise ValueError('Fuel type must be Diesel or Petrol.')
+        v.fuel_type = fuel_type
         log_audit('UPDATE', 'vehicles', v.id, f'Updated vehicle {v.registration}')
         db.session.commit()
         flash(f'Vehicle {v.registration} updated.', 'success')
@@ -1367,7 +1410,7 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None):
         odometer = max((f.odometer for f in fuel_logs if f.odometer is not None), default=None)
 
         distance = None
-        if odometer is not None and prev_odometer is not None and odometer > prev_odometer:
+        if odometer is not None and prev_odometer is not None:
             distance = odometer - prev_odometer
         if odometer is not None:
             prev_odometer = odometer
@@ -1382,13 +1425,7 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None):
     return rows, total_fare, total_diesel
 
 
-@app.route('/logs/ledger')
-@login_required
-@permission_required_any('daily_logs', 'crew_portal')
-def driver_ledger():
-    today = date.today()
-
-    period = request.args.get('period', 'month')
+def resolve_ledger_period(period, today):
     if period == 'today':
         df = dt = today
     elif period == 'week':
@@ -1398,6 +1435,16 @@ def driver_ledger():
     else:
         period = 'month'
         df, dt = today.replace(day=1), today
+    return period, df, dt
+
+
+@app.route('/logs/ledger')
+@login_required
+@permission_required_any('daily_logs', 'crew_portal')
+def driver_ledger():
+    today = date.today()
+
+    period, df, dt = resolve_ledger_period(request.args.get('period', 'month'), today)
     date_from_str = df.strftime('%Y-%m-%d') if df else ''
     date_to_str = dt.strftime('%Y-%m-%d') if dt else ''
 
@@ -1485,6 +1532,146 @@ def driver_ledger_add():
     except ValueError as e:
         db.session.rollback()
         flash(str(e), 'danger')
+
+    return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+
+
+@app.route('/logs/ledger/export')
+@login_required
+@permission_required_any('daily_logs', 'crew_portal')
+def driver_ledger_export():
+    vehicle_id = request.args.get('vehicle_id', '')
+    vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else None
+    if not vehicle:
+        flash('Select a vehicle to export.', 'danger')
+        return redirect(url_for('driver_ledger'))
+
+    period, df, dt = resolve_ledger_period(request.args.get('period', 'month'), date.today())
+    rows, _, _ = vehicle_ledger_rows(vehicle.id, df, dt)
+
+    fuel_label = vehicle.fuel_type.capitalize()
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(['Date', 'Driver', 'Fare', f'{fuel_label} Cost', f'{fuel_label} Liters', 'Mileage', 'Distance'])
+    for row in rows:
+        w.writerow([
+            row['date'], row['driver_names'] or '',
+            f"{row['fare']:.2f}" if row['fare'] else '',
+            f"{row['diesel_cost']:.2f}" if row['diesel_cost'] else '',
+            row['diesel_liters'] or '',
+            row['odometer'] if row['odometer'] is not None else '',
+            row['distance'] if row['distance'] is not None else '',
+        ])
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'text/csv'
+    safe_reg = vehicle.registration.replace(' ', '_')
+    resp.headers['Content-Disposition'] = f'attachment; filename={safe_reg}_ledger_{period}_{date.today()}.csv'
+    return resp
+
+
+@app.route('/logs/ledger/import', methods=['POST'])
+@login_required
+@permission_required_any('daily_logs', 'crew_portal')
+def driver_ledger_import():
+    period = request.form.get('period', 'month')
+    vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+    vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else None
+    if not vehicle:
+        flash('Select a vehicle before importing.', 'danger')
+        return redirect(url_for('driver_ledger', period=period))
+
+    file = request.files.get('file')
+    if not file or not file.filename:
+        flash('Choose a CSV or Excel file to import.', 'danger')
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    try:
+        if ext == 'csv':
+            file_rows = list(csv.DictReader(io.StringIO(file.read().decode('utf-8-sig'))))
+        elif ext in ('xlsx', 'xlsm'):
+            ws = openpyxl.load_workbook(file, data_only=True).active
+            rows_iter = ws.iter_rows(values_only=True)
+            header = [str(h).strip().lower() if h else '' for h in next(rows_iter)]
+            file_rows = [dict(zip(header, r)) for r in rows_iter if any(c is not None for c in r)]
+        else:
+            flash('Unsupported file type — upload a .csv or .xlsx file.', 'danger')
+            return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+    except Exception:
+        flash('Could not read that file. Make sure it is a valid CSV or Excel export.', 'danger')
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+
+    driver_by_name = {d.name.strip().lower(): d for d in
+                       Driver.query.filter_by(role='driver', status='active').all()}
+
+    imported = 0
+    errors = []
+    for i, raw_row in enumerate(file_rows, start=2):  # row 1 is the header
+        row = {(k or '').strip().lower(): v for k, v in raw_row.items()}
+        try:
+            date_raw = row.get('date')
+            if date_raw in (None, ''):
+                continue
+            log_date = parse_import_date(date_raw)
+
+            driver_name = str(row.get('driver') or '').strip()
+            driver = driver_by_name.get(driver_name.lower()) if driver_name else None
+            if driver_name and not driver:
+                raise ValueError(f'unknown driver "{driver_name}".')
+
+            cost_key = next((k for k in ('diesel cost', 'petrol cost', 'fuel cost') if k in row), 'diesel cost')
+            liters_key = next((k for k in ('diesel liters', 'petrol liters', 'fuel liters') if k in row), 'diesel liters')
+            fare = parse_import_number(row.get('fare'), 'Fare')
+            diesel_cost = parse_import_number(row.get(cost_key), 'Fuel Cost')
+            diesel_liters = parse_import_number(row.get(liters_key), 'Fuel Liters')
+            mileage = parse_import_number(row.get('mileage'), 'Mileage')
+
+            if fare is not None and not driver:
+                raise ValueError('fare needs a driver name.')
+            if diesel_liters is not None and diesel_cost is None:
+                raise ValueError('fuel liters given without a fuel cost.')
+            if fare is None and diesel_cost is None and mileage is None:
+                continue
+
+            if fare is not None:
+                conductor = driver.paired_conductors[0] if driver.paired_conductors else None
+                db.session.add(DailyLog(
+                    vehicle_id=vehicle.id, driver_id=driver.id,
+                    conductor_id=conductor.id if conductor else None,
+                    log_date=log_date, gross_revenue=fare, created_by=current_user.id,
+                ))
+            if diesel_cost is not None:
+                db.session.add(FuelLog(
+                    vehicle_id=vehicle.id, log_date=log_date,
+                    liters=diesel_liters or 0,
+                    cost_per_liter=(diesel_cost / diesel_liters) if diesel_liters else 0,
+                    total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
+                ))
+            elif mileage is not None:
+                db.session.add(FuelLog(
+                    vehicle_id=vehicle.id, log_date=log_date, liters=0,
+                    cost_per_liter=0, total_cost=0, odometer=mileage, created_by=current_user.id,
+                ))
+            imported += 1
+        except ValueError as e:
+            errors.append(f'Row {i}: {e}')
+
+    if imported:
+        db.session.commit()
+        log_audit('CREATE', 'daily_logs', None,
+                   f'Imported {imported} ledger row(s) for {vehicle.registration} from {file.filename}')
+    else:
+        db.session.rollback()
+
+    if imported:
+        flash(f'Imported {imported} row(s) for {vehicle.registration}.', 'success')
+    if errors:
+        shown = errors[:10]
+        more = f' (+{len(errors) - 10} more)' if len(errors) > 10 else ''
+        flash('Skipped rows — ' + '; '.join(shown) + more, 'warning')
+    if not imported and not errors:
+        flash('No rows found to import.', 'warning')
 
     return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
 
@@ -3037,6 +3224,10 @@ def migrate_db():
             cols = [c['name'] for c in inspector.get_columns(table)]
             if 'depot_id' in cols:
                 conn.execute(text(f"ALTER TABLE {table} DROP COLUMN depot_id"))
+
+        vehicle_cols = [c['name'] for c in inspector.get_columns('vehicles')]
+        if 'fuel_type' not in vehicle_cols:
+            conn.execute(text("ALTER TABLE vehicles ADD COLUMN fuel_type VARCHAR(10) DEFAULT 'diesel'"))
         if inspector.has_table('depots'):
             conn.execute(text("DROP TABLE depots"))
 

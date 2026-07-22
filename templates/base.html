@@ -35,7 +35,7 @@
     <div class="nav-section">
       <div class="nav-section-label">Crew Portal</div>
       <a href="{{ url_for('driver_ledger') }}" class="nav-item {% if 'ledger' in (request.endpoint or '') %}active{% endif %}">
-        <i data-feather="edit-3"></i> Log Income
+        <i data-feather="edit-3"></i> Daily Transaction
       </a>
       <a href="{{ url_for('crew_leaderboard') }}" class="nav-item {% if request.endpoint == 'crew_leaderboard' %}active{% endif %}">
         <i data-feather="award"></i> Performance
