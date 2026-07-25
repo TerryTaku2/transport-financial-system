@@ -1,0 +1,46 @@
+{% extends 'base.html' %}
+{% block title %}Add Franchise Income{% endblock %}
+{% block page_title %}Add Franchise Income{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Add Franchise Income</h1>
+    <div class="subtitle">Kept separate from vehicle operations income</div>
+  </div>
+  <a href="{{ url_for('franchise_income_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Franchise Income</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Frequency<span class="req">*</span></label>
+          <select name="frequency" id="frequency-select" required onchange="document.getElementById('entry-date-label').textContent = this.value === 'weekly' ? 'Week Ending' : 'Date';">
+            <option value="daily" {% if frequency == 'daily' %}selected{% endif %}>Daily</option>
+            <option value="weekly" {% if frequency == 'weekly' %}selected{% endif %}>Weekly</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Amount (USD)<span class="req">*</span></label>
+          <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label id="entry-date-label">{% if frequency == 'weekly' %}Week Ending{% else %}Date{% endif %}</label>
+          <input type="date" name="entry_date" required value="{{ today }}">
+        </div>
+      </div>
+      <div class="form-group mb-16">
+        <label>Description</label>
+        <textarea name="description" rows="2"></textarea>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Franchise Income</button>
+        <a href="{{ url_for('franchise_income_list') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -6,8 +6,10 @@ T-Tech Solutions | June 2026
 
 import os
 import csv
+import difflib
 import io
 import json
+import re
 import secrets
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
@@ -433,6 +435,21 @@ class Budget(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+# ─────────────────────────────────────────────────────────────
+# Franchise Income: a revenue stream separate from vehicle
+# operations, with its own daily/weekly/consolidated P&L.
+# ─────────────────────────────────────────────────────────────
+class FranchiseIncome(db.Model):
+    __tablename__ = 'franchise_income'
+    id = db.Column(db.Integer, primary_key=True)
+    frequency = db.Column(db.String(10), nullable=False)  # 'daily' or 'weekly'
+    entry_date = db.Column(db.Date, nullable=False)  # day for daily entries, week-ending date for weekly
+    amount = db.Column(db.Float, nullable=False)
+    description = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
 class MaintenanceSchedule(db.Model):
     __tablename__ = 'maintenance_schedules'
     id = db.Column(db.Integer, primary_key=True)
@@ -448,6 +465,86 @@ class MaintenanceSchedule(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     vehicle = db.relationship('Vehicle')
+
+
+# ─────────────────────────────────────────────────────────────
+# Spares Store: parts inventory, purchases & marked-up sales
+# ─────────────────────────────────────────────────────────────
+class SparePart(db.Model):
+    __tablename__ = 'spare_parts'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), nullable=False)
+    part_number = db.Column(db.String(50))
+    unit = db.Column(db.String(20), nullable=False, default='pc')
+    # Running weighted-average unit cost, updated on every purchase — not
+    # editable directly, it's a derived stock-valuation figure.
+    cost_price = db.Column(db.Float, nullable=False, default=0.0)
+    markup_percent = db.Column(db.Float, nullable=False, default=0.0)
+    quantity_on_hand = db.Column(db.Integer, nullable=False, default=0)
+    reorder_level = db.Column(db.Integer, nullable=False, default=0)
+    status = db.Column(db.String(20), default='active')
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    purchases = db.relationship('StorePurchase', backref='part', lazy=True,
+                                cascade='all, delete-orphan')
+    sales = db.relationship('StoreSale', backref='part', lazy=True,
+                            cascade='all, delete-orphan')
+
+    @property
+    def selling_price(self):
+        return round(self.cost_price * (1 + self.markup_percent / 100), 2)
+
+    @property
+    def stock_value(self):
+        return self.cost_price * self.quantity_on_hand
+
+    @property
+    def low_stock(self):
+        return self.quantity_on_hand <= self.reorder_level
+
+
+class StorePurchase(db.Model):
+    """A restock — adds quantity to the part and rolls the new cost into
+    the part's weighted-average cost_price."""
+    __tablename__ = 'store_purchases'
+    id = db.Column(db.Integer, primary_key=True)
+    part_id = db.Column(db.Integer, db.ForeignKey('spare_parts.id'), nullable=False)
+    purchase_date = db.Column(db.Date, nullable=False, default=date.today)
+    quantity = db.Column(db.Integer, nullable=False)
+    unit_cost = db.Column(db.Float, nullable=False)
+    total_cost = db.Column(db.Float, nullable=False)
+    supplier = db.Column(db.String(100))
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    creator = db.relationship('User', foreign_keys=[created_by])
+
+
+class StoreSale(db.Model):
+    """A sale at the part's marked-up selling price. Cost and price are
+    snapshotted at sale time so historical profit doesn't shift when the
+    part's cost or markup later changes."""
+    __tablename__ = 'store_sales'
+    id = db.Column(db.Integer, primary_key=True)
+    part_id = db.Column(db.Integer, db.ForeignKey('spare_parts.id'), nullable=False)
+    sale_date = db.Column(db.Date, nullable=False, default=date.today)
+    quantity = db.Column(db.Integer, nullable=False)
+    unit_cost = db.Column(db.Float, nullable=False)
+    unit_price = db.Column(db.Float, nullable=False)
+    total_amount = db.Column(db.Float, nullable=False)
+    customer_name = db.Column(db.String(100))
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    creator = db.relationship('User', foreign_keys=[created_by])
+
+    @property
+    def profit(self):
+        return (self.unit_price - self.unit_cost) * self.quantity
 
 
 # ─────────────────────────────────────────────────────────────
@@ -470,6 +567,8 @@ PERMISSIONS = {
     'reports':      'Finance & Reports — income statement, payroll, CSV exports',
     'compliance':   'Compliance — vehicle documents & expiry tracker',
     'finance':      'Finance Ledger — loans, payables, receivables, capital, expenses, budget',
+    'store':        'Spares Store — parts inventory, purchases & marked-up sales',
+    'franchise':    'Franchise Income — daily/weekly income entry & franchise P&L statements',
 }
 
 PERMISSION_REDIRECTS = [
@@ -484,6 +583,8 @@ PERMISSION_REDIRECTS = [
     ('reports',     'report_income'),
     ('compliance',  'compliance'),
     ('finance',     'loans_list'),
+    ('store',       'store_parts'),
+    ('franchise',   'franchise_income_list'),
 ]
 
 
@@ -580,6 +681,253 @@ def parse_import_number(value, label):
         return float(s)
     except ValueError:
         raise ValueError(f'{label} "{s}" is not a number.')
+
+
+MAX_LEDGER_IMPORT_ROWS = 2000
+
+# Canonical ledger import fields and the header synonyms an uploaded file might
+# use for each — used to auto-map an arbitrary file's columns onto the shape
+# the importer expects, instead of requiring an exact header match.
+CANONICAL_LEDGER_FIELDS = [
+    ('date', 'Date', ['date', 'log date', 'trip date', 'day']),
+    ('driver', 'Driver', ['driver', 'driver name', 'crew', 'operator']),
+    ('fare', 'Fare', ['fare', 'revenue', 'income', 'gross revenue', 'collection',
+                      'collections', 'takings']),
+    ('fuel_cost', 'Fuel Cost', ['diesel cost', 'petrol cost', 'fuel cost', 'fuel amount']),
+    ('fuel_liters', 'Fuel Liters', ['diesel liters', 'diesel litres', 'petrol liters',
+                                    'petrol litres', 'fuel liters', 'fuel litres',
+                                    'liters', 'litres']),
+    ('mileage', 'Mileage', ['mileage', 'odometer', 'odo', 'distance reading', 'km reading']),
+]
+
+# The raw-header key each canonical field must land on so the existing
+# row-validation loop (which looks for these exact keys) keeps working unchanged.
+CANONICAL_TO_ROW_KEY = {
+    'date': 'date', 'driver': 'driver', 'fare': 'fare',
+    'fuel_cost': 'diesel cost', 'fuel_liters': 'diesel liters', 'mileage': 'mileage',
+}
+
+
+def _find_header_row(raw_rows, max_scan=10):
+    """Locate the header row within the first few rows of an uploaded sheet,
+    skipping any title/blank rows some logbooks put above the real columns
+    (e.g. a "JULY 2026 DAILY TRANSACTIONS" banner row)."""
+    date_synonyms = next(syns for key, _label, syns in CANONICAL_LEDGER_FIELDS if key == 'date')
+    for idx, row in enumerate(raw_rows[:max_scan]):
+        cells = [str(c).strip().lower() for c in row if c not in (None, '')]
+        if len(cells) < 2:
+            continue
+        if any(c in date_synonyms or difflib.get_close_matches(c, date_synonyms, n=1, cutoff=0.75)
+               for c in cells):
+            return idx
+    return 0
+
+
+def _json_safe_cell(cell):
+    # Excel date cells come through openpyxl as datetime/date objects,
+    # which aren't JSON-serializable — the row data gets round-tripped
+    # through a hidden form field, so normalize to the 'YYYY-MM-DD'
+    # string parse_import_date already accepts.
+    if isinstance(cell, datetime):
+        return cell.date().isoformat()
+    if isinstance(cell, date):
+        return cell.isoformat()
+    return cell
+
+
+def _rows_from_raw(raw_rows):
+    """Turn a sheet/CSV's raw rows into (headers, rows), locating the real
+    header row (skipping any title/blank rows above it) and keying each row
+    by its stripped, lowercased header."""
+    header_idx = _find_header_row(raw_rows)
+    headers = [str(h).strip().lower() if h is not None else '' for h in raw_rows[header_idx]]
+    rows = [{h: _json_safe_cell(c) for h, c in zip(headers, r)}
+            for r in raw_rows[header_idx + 1:] if any(c not in (None, '') for c in r)]
+    return [h for h in headers if h], rows
+
+
+def read_uploaded_table(file):
+    """Parse an uploaded CSV/XLSX file into (headers, rows). Each row is a dict
+    keyed by its stripped, lowercased header. Raises ValueError on an
+    unsupported or unreadable file."""
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    try:
+        if ext == 'csv':
+            reader = csv.reader(io.StringIO(file.read().decode('utf-8-sig')))
+            raw_rows = list(reader)
+        elif ext in ('xlsx', 'xlsm'):
+            ws = openpyxl.load_workbook(file, data_only=True).active
+            raw_rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        else:
+            raise ValueError('Unsupported file type — upload a .csv or .xlsx file.')
+        if not raw_rows:
+            raise ValueError('The file is empty.')
+    except ValueError:
+        raise
+    except Exception:
+        raise ValueError('Could not read that file. Make sure it is a valid CSV or Excel export.')
+
+    headers, rows = _rows_from_raw(raw_rows)
+    if len(rows) > MAX_LEDGER_IMPORT_ROWS:
+        raise ValueError(f'That file has {len(rows)} rows — the importer previews at most '
+                         f'{MAX_LEDGER_IMPORT_ROWS} at a time. Split it into smaller files.')
+    return headers, rows
+
+
+def read_uploaded_workbook_sheets(file):
+    """Parse a multi-sheet XLSX/XLSM workbook into {sheet_name: (headers, rows)}
+    for every sheet that has data — lets a fleet-wide workbook (one tab per
+    vehicle, like a company's master logbook) be imported in a single pass.
+    Raises ValueError on an unsupported or unreadable file."""
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in ('xlsx', 'xlsm'):
+        raise ValueError('Upload a .xlsx or .xlsm workbook — one sheet per vehicle.')
+    try:
+        wb = openpyxl.load_workbook(file, data_only=True)
+    except Exception:
+        raise ValueError('Could not read that file. Make sure it is a valid Excel workbook.')
+
+    sheets = {}
+    for ws in wb.worksheets:
+        raw_rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        if not raw_rows:
+            continue
+        headers, rows = _rows_from_raw(raw_rows)
+        if rows:
+            sheets[ws.title] = (headers, rows[:MAX_LEDGER_IMPORT_ROWS])
+    return sheets
+
+
+def _normalize_registration(name):
+    return re.sub(r'\s+', ' ', str(name or '')).strip().upper()
+
+
+def auto_map_columns(headers):
+    """Guess which uploaded header feeds each canonical ledger field, by exact
+    synonym match first and fuzzy match second. Returns {field_key: header_or_None}."""
+    mapping = {}
+    claimed = set()
+    for field_key, _label, synonyms in CANONICAL_LEDGER_FIELDS:
+        match = next((h for h in headers if h in synonyms and h not in claimed), None)
+        if not match:
+            candidates = [h for h in headers if h not in claimed]
+            # word-boundary substring match first, e.g. "daily fare" contains "fare"
+            match = next((h for h in candidates
+                          if any(re.search(rf'\b{re.escape(s)}\b', h) for s in synonyms)), None)
+        if not match:
+            close = difflib.get_close_matches(synonyms[0], candidates, n=1, cutoff=0.6)
+            if not close:
+                for syn in synonyms[1:]:
+                    close = difflib.get_close_matches(syn, candidates, n=1, cutoff=0.6)
+                    if close:
+                        break
+            match = close[0] if close else None
+        mapping[field_key] = match
+        if match:
+            claimed.add(match)
+    return mapping
+
+
+def apply_column_mapping(headers, raw_rows, mapping):
+    """Rebuild each raw row (keyed by uploaded header) into the row shape the
+    ledger import loop expects (keyed by canonical field name), per `mapping`
+    ({field_key: header_or_None})."""
+    mapped_rows = []
+    for raw in raw_rows:
+        row = {}
+        for field_key, header in mapping.items():
+            row_key = CANONICAL_TO_ROW_KEY[field_key]
+            row[row_key] = raw.get(header) if header else None
+        mapped_rows.append(row)
+    return mapped_rows
+
+
+def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
+    """Validate and persist already-mapped ledger rows (keyed by 'date',
+    'driver', 'fare', 'diesel cost', 'diesel liters', 'mileage') as DailyLog/
+    FuelLog entries for `vehicle`. Returns (imported_count, error_messages,
+    created_driver_names); does not commit — the caller decides when to
+    commit/rollback.
+
+    If auto_register_drivers is True, a fare row naming a driver that isn't
+    on file registers a new active Driver instead of erroring — used by the
+    fleet-wide bulk import, where dozens of real driver names showing up for
+    the first time is the expected case, not a data-entry mistake worth
+    blocking on. The single-vehicle import leaves this off, since there a
+    human already reviewed the file and can add the driver deliberately."""
+    driver_by_name = {d.name.strip().lower(): d for d in
+                       Driver.query.filter_by(role='driver', status='active').all()}
+    created_drivers = []
+    last_driver = None  # carries forward across blank-driver rows, see below
+
+    imported = 0
+    errors = []
+    for i, raw_row in enumerate(file_rows, start=2):  # row 1 is the header
+        row = {(k or '').strip().lower(): v for k, v in raw_row.items()}
+        try:
+            date_raw = row.get('date')
+            if date_raw in (None, ''):
+                continue
+            log_date = parse_import_date(date_raw)
+
+            driver_name = str(row.get('driver') or '').strip()
+            driver = driver_by_name.get(driver_name.lower()) if driver_name else None
+
+            cost_key = next((k for k in ('diesel cost', 'petrol cost', 'fuel cost') if k in row), 'diesel cost')
+            liters_key = next((k for k in ('diesel liters', 'petrol liters', 'fuel liters') if k in row), 'diesel liters')
+            fare = parse_import_number(row.get('fare'), 'Fare')
+            diesel_cost = parse_import_number(row.get(cost_key), 'Fuel Cost')
+            diesel_liters = parse_import_number(row.get(liters_key), 'Fuel Liters')
+            mileage = parse_import_number(row.get('mileage'), 'Mileage')
+
+            # Real-world logbooks often put a note ("GARAGE", "ARRESTED", "DRIVER
+            # NOT FEELING WELL") in the driver column on no-fare days — only
+            # require a recognized driver when there's actual revenue to attribute.
+            if fare and not driver:
+                if not driver_name and last_driver is not None:
+                    # Some logbooks only write the driver's name once and leave
+                    # it blank on the following days to mean "same as above".
+                    driver = last_driver
+                elif driver_name and auto_register_drivers:
+                    driver = Driver(name=driver_name, role='driver', status='active')
+                    db.session.add(driver)
+                    db.session.flush()
+                    driver_by_name[driver_name.lower()] = driver
+                    created_drivers.append(driver_name)
+                else:
+                    raise ValueError(f'unknown driver "{driver_name}".' if driver_name else 'fare needs a driver name.')
+            if diesel_liters is not None and diesel_cost is None:
+                raise ValueError('fuel liters given without a fuel cost.')
+            if fare is None and diesel_cost is None and mileage is None:
+                continue
+
+            if driver_name and driver:
+                last_driver = driver
+
+            if fare:
+                conductor = driver.paired_conductors[0] if driver.paired_conductors else None
+                db.session.add(DailyLog(
+                    vehicle_id=vehicle.id, driver_id=driver.id,
+                    conductor_id=conductor.id if conductor else None,
+                    log_date=log_date, gross_revenue=fare, created_by=current_user.id,
+                ))
+            if diesel_cost is not None:
+                db.session.add(FuelLog(
+                    vehicle_id=vehicle.id, log_date=log_date,
+                    liters=diesel_liters or 0,
+                    cost_per_liter=(diesel_cost / diesel_liters) if diesel_liters else 0,
+                    total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
+                ))
+            elif mileage is not None:
+                db.session.add(FuelLog(
+                    vehicle_id=vehicle.id, log_date=log_date, liters=0,
+                    cost_per_liter=0, total_cost=0, odometer=mileage, created_by=current_user.id,
+                ))
+            imported += 1
+        except ValueError as e:
+            errors.append(f'Row {i}: {e}')
+
+    return imported, errors, created_drivers
 
 
 def form_float(form, field, label=None, required=True, default=None, min_value=None):
@@ -1453,8 +1801,13 @@ def driver_ledger():
     vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else (all_vehicles[0] if all_vehicles else None)
 
     rows, total_fare, total_diesel = [], 0.0, 0.0
+    latest_odometer = None
     if vehicle:
         rows, total_fare, total_diesel = vehicle_ledger_rows(vehicle.id, df, dt)
+        latest_fuel = FuelLog.query.filter(
+            FuelLog.vehicle_id == vehicle.id, FuelLog.odometer.isnot(None)
+        ).order_by(FuelLog.log_date.desc(), FuelLog.id.desc()).first()
+        latest_odometer = latest_fuel.odometer if latest_fuel else None
 
     all_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
     return render_template('logs/ledger.html', vehicles=all_vehicles, vehicle=vehicle,
@@ -1462,7 +1815,7 @@ def driver_ledger():
         rows=rows, total_fare=total_fare, total_diesel=total_diesel,
         net=total_fare - total_diesel,
         period=period, date_from=date_from_str, date_to=date_to_str,
-        today=today.strftime('%Y-%m-%d'))
+        today=today.strftime('%Y-%m-%d'), latest_odometer=latest_odometer)
 
 
 @app.route('/logs/ledger/add', methods=['POST'])
@@ -1570,97 +1923,83 @@ def driver_ledger_export():
     return resp
 
 
-@app.route('/logs/ledger/import', methods=['POST'])
-@login_required
-@permission_required_any('daily_logs', 'crew_portal')
-def driver_ledger_import():
+def _resolve_ledger_import_vehicle():
     period = request.form.get('period', 'month')
     vehicle_id = form_int(request.form, 'vehicle_id', required=False)
     vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else None
+    return vehicle, vehicle_id, period
+
+
+@app.route('/logs/ledger/import/preview', methods=['POST'])
+@login_required
+@permission_required_any('daily_logs', 'crew_portal')
+def driver_ledger_import_preview():
+    vehicle, vehicle_id, period = _resolve_ledger_import_vehicle()
     if not vehicle:
         flash('Select a vehicle before importing.', 'danger')
         return redirect(url_for('driver_ledger', period=period))
 
     file = request.files.get('file')
-    if not file or not file.filename:
-        flash('Choose a CSV or Excel file to import.', 'danger')
-        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
-
-    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
     try:
-        if ext == 'csv':
-            file_rows = list(csv.DictReader(io.StringIO(file.read().decode('utf-8-sig'))))
-        elif ext in ('xlsx', 'xlsm'):
-            ws = openpyxl.load_workbook(file, data_only=True).active
-            rows_iter = ws.iter_rows(values_only=True)
-            header = [str(h).strip().lower() if h else '' for h in next(rows_iter)]
-            file_rows = [dict(zip(header, r)) for r in rows_iter if any(c is not None for c in r)]
+        if file and file.filename:
+            filename = file.filename
+            headers, raw_rows = read_uploaded_table(file)
+            mapping = auto_map_columns(headers)
         else:
-            flash('Unsupported file type — upload a .csv or .xlsx file.', 'danger')
-            return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
-    except Exception:
-        flash('Could not read that file. Make sure it is a valid CSV or Excel export.', 'danger')
+            # Re-preview after the user adjusted the mapping — the file itself
+            # isn't resubmitted, the previously parsed rows travel via raw_data.
+            filename = request.form.get('filename', 'uploaded file')
+            payload = json.loads(request.form.get('raw_data') or '{}')
+            headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
+            if not headers or not raw_rows:
+                raise ValueError('Choose a CSV or Excel file to import.')
+            mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
+                       for field_key, _label, _syn in CANONICAL_LEDGER_FIELDS}
+    except (ValueError, json.JSONDecodeError, TypeError):
+        flash('Choose a CSV or Excel file to import — the previous preview session expired.', 'danger')
         return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
 
-    driver_by_name = {d.name.strip().lower(): d for d in
-                       Driver.query.filter_by(role='driver', status='active').all()}
+    if not raw_rows:
+        flash('That file has no data rows to import — it only has a header row. '
+              'Add rows with a Date and Fare/Fuel Cost/Mileage, then re-import.', 'warning')
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
 
-    imported = 0
-    errors = []
-    for i, raw_row in enumerate(file_rows, start=2):  # row 1 is the header
-        row = {(k or '').strip().lower(): v for k, v in raw_row.items()}
-        try:
-            date_raw = row.get('date')
-            if date_raw in (None, ''):
-                continue
-            log_date = parse_import_date(date_raw)
+    preview_rows = apply_column_mapping(headers, raw_rows[:10], mapping)
+    return render_template('logs/ledger_import_preview.html',
+                           vehicle=vehicle, period=period, filename=filename,
+                           headers=headers, mapping=mapping, fields=CANONICAL_LEDGER_FIELDS,
+                           preview_rows=preview_rows, row_count=len(raw_rows),
+                           raw_data=json.dumps({'headers': headers, 'rows': raw_rows}))
 
-            driver_name = str(row.get('driver') or '').strip()
-            driver = driver_by_name.get(driver_name.lower()) if driver_name else None
-            if driver_name and not driver:
-                raise ValueError(f'unknown driver "{driver_name}".')
 
-            cost_key = next((k for k in ('diesel cost', 'petrol cost', 'fuel cost') if k in row), 'diesel cost')
-            liters_key = next((k for k in ('diesel liters', 'petrol liters', 'fuel liters') if k in row), 'diesel liters')
-            fare = parse_import_number(row.get('fare'), 'Fare')
-            diesel_cost = parse_import_number(row.get(cost_key), 'Fuel Cost')
-            diesel_liters = parse_import_number(row.get(liters_key), 'Fuel Liters')
-            mileage = parse_import_number(row.get('mileage'), 'Mileage')
+@app.route('/logs/ledger/import/confirm', methods=['POST'])
+@login_required
+@permission_required_any('daily_logs', 'crew_portal')
+def driver_ledger_import_confirm():
+    vehicle, vehicle_id, period = _resolve_ledger_import_vehicle()
+    if not vehicle:
+        flash('Select a vehicle before importing.', 'danger')
+        return redirect(url_for('driver_ledger', period=period))
 
-            if fare is not None and not driver:
-                raise ValueError('fare needs a driver name.')
-            if diesel_liters is not None and diesel_cost is None:
-                raise ValueError('fuel liters given without a fuel cost.')
-            if fare is None and diesel_cost is None and mileage is None:
-                continue
+    filename = request.form.get('filename', 'uploaded file')
+    try:
+        payload = json.loads(request.form.get('raw_data') or '{}')
+        headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
+        if not raw_rows:
+            raise ValueError('empty')
+    except (ValueError, json.JSONDecodeError, TypeError):
+        flash('That preview session expired — please choose the file again.', 'danger')
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
 
-            if fare is not None:
-                conductor = driver.paired_conductors[0] if driver.paired_conductors else None
-                db.session.add(DailyLog(
-                    vehicle_id=vehicle.id, driver_id=driver.id,
-                    conductor_id=conductor.id if conductor else None,
-                    log_date=log_date, gross_revenue=fare, created_by=current_user.id,
-                ))
-            if diesel_cost is not None:
-                db.session.add(FuelLog(
-                    vehicle_id=vehicle.id, log_date=log_date,
-                    liters=diesel_liters or 0,
-                    cost_per_liter=(diesel_cost / diesel_liters) if diesel_liters else 0,
-                    total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
-                ))
-            elif mileage is not None:
-                db.session.add(FuelLog(
-                    vehicle_id=vehicle.id, log_date=log_date, liters=0,
-                    cost_per_liter=0, total_cost=0, odometer=mileage, created_by=current_user.id,
-                ))
-            imported += 1
-        except ValueError as e:
-            errors.append(f'Row {i}: {e}')
+    mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
+               for field_key, _label, _syn in CANONICAL_LEDGER_FIELDS}
+    file_rows = apply_column_mapping(headers, raw_rows, mapping)
+    imported, errors, _created_drivers = import_ledger_rows(file_rows, vehicle)
 
     if imported:
         db.session.commit()
         log_audit('CREATE', 'daily_logs', None,
-                   f'Imported {imported} ledger row(s) for {vehicle.registration} from {file.filename}')
+                   f'Imported {imported} ledger row(s) for {vehicle.registration} from {filename}')
     else:
         db.session.rollback()
 
@@ -1674,6 +2013,112 @@ def driver_ledger_import():
         flash('No rows found to import.', 'warning')
 
     return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+
+
+@app.route('/logs/ledger/import/bulk', methods=['POST'])
+@login_required
+@permission_required_any('daily_logs', 'crew_portal')
+def driver_ledger_import_bulk():
+    """Import a fleet-wide workbook with one sheet per vehicle (sheet name
+    matched against each vehicle's registration) in a single pass. Unlike the
+    single-vehicle import there's no manual column-mapping step — with dozens
+    of sheets that isn't practical, so each sheet is auto-mapped the same way
+    and the results page reports what happened per vehicle."""
+    period = request.form.get('period', 'month')
+    file = request.files.get('file')
+    if not file or not file.filename:
+        flash('Choose an Excel workbook to import.', 'danger')
+        return redirect(url_for('driver_ledger', period=period))
+
+    try:
+        sheets = read_uploaded_workbook_sheets(file)
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('driver_ledger', period=period))
+
+    if not sheets:
+        flash('That workbook has no sheets with data rows to import.', 'warning')
+        return redirect(url_for('driver_ledger', period=period))
+
+    auto_register = request.form.get('auto_register') == '1'
+    vehicles_by_reg = {_normalize_registration(v.registration): v for v in Vehicle.query.all()}
+
+    results = []
+    for sheet_name, (headers, rows) in sheets.items():
+        savepoint = db.session.begin_nested()
+        try:
+            mapping = auto_map_columns(headers)
+            vehicle = vehicles_by_reg.get(_normalize_registration(sheet_name))
+            vehicle_created = False
+
+            # Distinguish an actual per-vehicle ledger tab from a fleet-wide
+            # summary sheet like "DAILY TOTAL INCOME" before ever auto-registering
+            # a "vehicle" for it. A summary sheet also has a Date column and its
+            # "INCOME" header even fuzzy-matches the Fare synonym list, so Fare/
+            # Fuel Cost alone aren't a safe signal — a real per-vehicle logbook
+            # always names a Driver or logs Mileage; a financial rollup never does.
+            looks_like_ledger = bool(mapping.get('date')) and bool(
+                mapping.get('driver') or mapping.get('mileage'))
+
+            if not vehicle and looks_like_ledger and auto_register:
+                registration = re.sub(r'\s+', ' ', sheet_name).strip().upper()
+                vehicle = Vehicle(registration=registration, make='Unknown', model='Unknown',
+                                   year=date.today().year, status='active', fuel_type='diesel')
+                db.session.add(vehicle)
+                db.session.flush()
+                vehicles_by_reg[_normalize_registration(registration)] = vehicle
+                vehicle_created = True
+                log_audit('CREATE', 'vehicles', vehicle.id,
+                          f'Auto-registered vehicle {registration} from fleet workbook '
+                          f'import (sheet "{sheet_name}") — make/model/year are placeholders.')
+
+            if not vehicle:
+                reason = ('No vehicle matches this sheet name.' if looks_like_ledger else
+                          "Doesn't look like a per-vehicle ledger sheet.")
+                results.append({'sheet': sheet_name, 'vehicle': None, 'mapping': {},
+                                 'imported': 0, 'errors': [], 'created_drivers': [],
+                                 'vehicle_created': False, 'skip_reason': reason})
+                savepoint.commit()
+                continue
+
+            if not mapping.get('date'):
+                results.append({'sheet': sheet_name, 'vehicle': vehicle, 'mapping': mapping,
+                                 'imported': 0, 'errors': [], 'created_drivers': [],
+                                 'vehicle_created': vehicle_created,
+                                 'skip_reason': 'No Date column detected.'})
+                savepoint.commit()
+                continue
+
+            mapped_rows = apply_column_mapping(headers, rows, mapping)
+            imported, errors, created_drivers = import_ledger_rows(
+                mapped_rows, vehicle, auto_register_drivers=auto_register)
+            if imported:
+                log_audit('CREATE', 'daily_logs', None,
+                           f'Imported {imported} ledger row(s) for {vehicle.registration} '
+                           f'from {file.filename} (sheet "{sheet_name}")')
+            results.append({'sheet': sheet_name, 'vehicle': vehicle, 'mapping': mapping,
+                             'imported': imported, 'errors': errors,
+                             'created_drivers': created_drivers,
+                             'vehicle_created': vehicle_created, 'skip_reason': None})
+            savepoint.commit()
+        except Exception as e:
+            savepoint.rollback()
+            results.append({'sheet': sheet_name, 'vehicle': None, 'mapping': {},
+                             'imported': 0, 'errors': [], 'created_drivers': [],
+                             'vehicle_created': False, 'skip_reason': f'Unexpected error: {e}'})
+
+    total_imported = sum(r['imported'] for r in results)
+    total_registered = (sum(1 for r in results if r['vehicle_created']) +
+                        sum(len(r['created_drivers']) for r in results))
+    if total_imported or total_registered:
+        db.session.commit()
+    else:
+        db.session.rollback()
+
+    return render_template('logs/ledger_bulk_import_result.html',
+                           filename=file.filename, results=results,
+                           total_imported=total_imported, period=period,
+                           fields=CANONICAL_LEDGER_FIELDS)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1903,6 +2348,221 @@ def maintenance_schedule_delete(sid):
     db.session.commit()
     flash('Maintenance schedule deleted.', 'warning')
     return redirect(url_for('maintenance_schedules'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Spares Store: parts inventory, purchases & marked-up sales
+# ─────────────────────────────────────────────────────────────
+@app.route('/store/parts')
+@login_required
+@permission_required('store')
+def store_parts():
+    parts = SparePart.query.order_by(SparePart.name).all()
+    total_stock_value = sum(p.stock_value for p in parts)
+    low_stock_count = sum(1 for p in parts if p.status == 'active' and p.low_stock)
+    month_start = date.today().replace(day=1)
+    month_profit = sum(s.profit for s in
+                       StoreSale.query.filter(StoreSale.sale_date >= month_start).all())
+    return render_template('store/parts.html', parts=parts,
+                           total_stock_value=total_stock_value,
+                           low_stock_count=low_stock_count, month_profit=month_profit)
+
+
+@app.route('/store/parts/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('store')
+@handle_form_errors
+def store_part_add():
+    if request.method == 'POST':
+        part = SparePart(
+            name=request.form['name'].strip(),
+            part_number=request.form.get('part_number', '').strip(),
+            unit=request.form.get('unit', 'pc').strip() or 'pc',
+            markup_percent=form_float(request.form, 'markup_percent', required=False,
+                                      default=0, min_value=0),
+            reorder_level=form_int(request.form, 'reorder_level', required=False,
+                                   default=0, min_value=0),
+            notes=request.form.get('notes', '').strip(),
+            created_by=current_user.id,
+        )
+        db.session.add(part)
+        db.session.flush()
+        log_audit('CREATE', 'spare_parts', part.id, f'Added spare part: {part.name}')
+        db.session.commit()
+        flash('Spare part added. Record a purchase to bring in stock.', 'success')
+        return redirect(url_for('store_parts'))
+    return render_template('store/part_form.html', part=None)
+
+
+@app.route('/store/parts/<int:pid>/edit', methods=['GET', 'POST'])
+@login_required
+@permission_required('store')
+@handle_form_errors
+def store_part_edit(pid):
+    part = SparePart.query.get_or_404(pid)
+    if request.method == 'POST':
+        part.name = request.form['name'].strip()
+        part.part_number = request.form.get('part_number', '').strip()
+        part.unit = request.form.get('unit', 'pc').strip() or 'pc'
+        part.markup_percent = form_float(request.form, 'markup_percent', required=False,
+                                         default=0, min_value=0)
+        part.reorder_level = form_int(request.form, 'reorder_level', required=False,
+                                      default=0, min_value=0)
+        part.status = request.form.get('status', 'active')
+        part.notes = request.form.get('notes', '').strip()
+        log_audit('UPDATE', 'spare_parts', part.id, f'Updated spare part: {part.name}')
+        db.session.commit()
+        flash('Spare part updated.', 'success')
+        return redirect(url_for('store_parts'))
+    return render_template('store/part_form.html', part=part)
+
+
+@app.route('/store/parts/<int:pid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def store_part_delete(pid):
+    part = SparePart.query.get_or_404(pid)
+    log_audit('DELETE', 'spare_parts', pid, f'Deleted spare part: {part.name}')
+    db.session.delete(part)
+    db.session.commit()
+    flash('Spare part deleted.', 'warning')
+    return redirect(url_for('store_parts'))
+
+
+@app.route('/store/purchases')
+@login_required
+@permission_required('store')
+def store_purchases():
+    page = request.args.get('page', 1, type=int)
+    part_id = request.args.get('part_id', '')
+    q = StorePurchase.query
+    if part_id:
+        q = q.filter(StorePurchase.part_id == part_id)
+    purchases = q.order_by(StorePurchase.purchase_date.desc()).paginate(page=page, per_page=20)
+    all_parts = SparePart.query.order_by(SparePart.name).all()
+    return render_template('store/purchases.html', purchases=purchases, parts=all_parts,
+                           part_id=part_id)
+
+
+@app.route('/store/purchases/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('store')
+@handle_form_errors
+def store_purchase_add():
+    if request.method == 'POST':
+        part = SparePart.query.get_or_404(form_int(request.form, 'part_id'))
+        quantity = form_int(request.form, 'quantity', min_value=1)
+        unit_cost = form_float(request.form, 'unit_cost', min_value=0)
+
+        purchase = StorePurchase(
+            part_id=part.id,
+            purchase_date=parse_date(request.form['purchase_date']),
+            quantity=quantity,
+            unit_cost=unit_cost,
+            total_cost=quantity * unit_cost,
+            supplier=request.form.get('supplier', '').strip(),
+            notes=request.form.get('notes', '').strip(),
+            created_by=current_user.id,
+        )
+        new_total_qty = part.quantity_on_hand + quantity
+        part.cost_price = ((part.quantity_on_hand * part.cost_price) +
+                           (quantity * unit_cost)) / new_total_qty
+        part.quantity_on_hand = new_total_qty
+
+        db.session.add(purchase)
+        db.session.flush()
+        log_audit('CREATE', 'store_purchases', purchase.id,
+                  f'Purchased {quantity} x {part.name} @ {unit_cost}')
+        db.session.commit()
+        flash('Purchase recorded and stock updated.', 'success')
+        return redirect(url_for('store_purchases'))
+
+    all_parts = SparePart.query.filter_by(status='active').order_by(SparePart.name).all()
+    return render_template('store/purchase_form.html', parts=all_parts,
+                           today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/store/purchases/<int:pid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def store_purchase_delete(pid):
+    purchase = StorePurchase.query.get_or_404(pid)
+    part = purchase.part
+    part.quantity_on_hand = max(0, part.quantity_on_hand - purchase.quantity)
+    log_audit('DELETE', 'store_purchases', pid,
+              f'Deleted purchase of {purchase.quantity} x {part.name}')
+    db.session.delete(purchase)
+    db.session.commit()
+    flash('Purchase deleted and stock reduced accordingly. Note: this does not '
+         'recompute historical average cost.', 'warning')
+    return redirect(url_for('store_purchases'))
+
+
+@app.route('/store/sales')
+@login_required
+@permission_required('store')
+def store_sales():
+    page = request.args.get('page', 1, type=int)
+    part_id = request.args.get('part_id', '')
+    q = StoreSale.query
+    if part_id:
+        q = q.filter(StoreSale.part_id == part_id)
+    sales = q.order_by(StoreSale.sale_date.desc()).paginate(page=page, per_page=20)
+    all_parts = SparePart.query.order_by(SparePart.name).all()
+    return render_template('store/sales.html', sales=sales, parts=all_parts, part_id=part_id)
+
+
+@app.route('/store/sales/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('store')
+@handle_form_errors
+def store_sale_add():
+    if request.method == 'POST':
+        part = SparePart.query.get_or_404(form_int(request.form, 'part_id'))
+        quantity = form_int(request.form, 'quantity', min_value=1)
+        if quantity > part.quantity_on_hand:
+            raise ValueError(f'Only {part.quantity_on_hand} {part.unit}(s) of {part.name} in stock.')
+        unit_price = form_float(request.form, 'unit_price', required=False,
+                                default=part.selling_price, min_value=0)
+
+        sale = StoreSale(
+            part_id=part.id,
+            sale_date=parse_date(request.form['sale_date']),
+            quantity=quantity,
+            unit_cost=part.cost_price,
+            unit_price=unit_price,
+            total_amount=quantity * unit_price,
+            customer_name=request.form.get('customer_name', '').strip(),
+            notes=request.form.get('notes', '').strip(),
+            created_by=current_user.id,
+        )
+        part.quantity_on_hand -= quantity
+
+        db.session.add(sale)
+        db.session.flush()
+        log_audit('CREATE', 'store_sales', sale.id, f'Sold {quantity} x {part.name} @ {unit_price}')
+        db.session.commit()
+        flash('Sale recorded and stock updated.', 'success')
+        return redirect(url_for('store_sales'))
+
+    all_parts = SparePart.query.filter(SparePart.status == 'active',
+                                       SparePart.quantity_on_hand > 0).order_by(SparePart.name).all()
+    return render_template('store/sale_form.html', parts=all_parts,
+                           today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/store/sales/<int:sid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def store_sale_delete(sid):
+    sale = StoreSale.query.get_or_404(sid)
+    part = sale.part
+    part.quantity_on_hand += sale.quantity
+    log_audit('DELETE', 'store_sales', sid, f'Deleted sale of {sale.quantity} x {part.name}')
+    db.session.delete(sale)
+    db.session.commit()
+    flash('Sale deleted and stock restored.', 'warning')
+    return redirect(url_for('store_sales'))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2992,6 +3652,103 @@ def expense_category_delete(cid):
     db.session.commit()
     flash(f'"{name}" deleted.', 'warning')
     return redirect(request.referrer or url_for('expenses_list'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Franchise Income — a revenue stream kept separate from vehicle
+# operations, with its own daily / weekly / consolidated P&L.
+# ─────────────────────────────────────────────────────────────
+@app.route('/franchise/income')
+@login_required
+@permission_required('franchise')
+def franchise_income_list():
+    page = request.args.get('page', 1, type=int)
+    frequency = request.args.get('frequency', '')
+    q = FranchiseIncome.query
+    if frequency in ('daily', 'weekly'):
+        q = q.filter_by(frequency=frequency)
+    entries = q.order_by(FranchiseIncome.entry_date.desc()).paginate(page=page, per_page=20)
+    return render_template('franchise/income_list.html', entries=entries, frequency=frequency)
+
+
+@app.route('/franchise/income/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('franchise')
+@handle_form_errors
+def franchise_income_add():
+    if request.method == 'POST':
+        frequency = request.form.get('frequency', '')
+        if frequency not in ('daily', 'weekly'):
+            raise ValueError('Frequency must be Daily or Weekly.')
+        income = FranchiseIncome(
+            frequency=frequency,
+            entry_date=parse_date(request.form['entry_date']),
+            amount=form_float(request.form, 'amount', min_value=0),
+            description=request.form.get('description', '').strip(),
+            created_by=current_user.id,
+        )
+        db.session.add(income)
+        db.session.flush()
+        log_audit('CREATE', 'franchise_income', income.id, f'Franchise income of {income.amount} ({frequency})')
+        db.session.commit()
+        flash('Franchise income recorded.', 'success')
+        return redirect(url_for('franchise_income_list', frequency=frequency))
+    frequency = request.args.get('frequency', 'daily')
+    return render_template('franchise/income_form.html', frequency=frequency,
+                           today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/franchise/income/<int:fid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def franchise_income_delete(fid):
+    income = FranchiseIncome.query.get_or_404(fid)
+    log_audit('DELETE', 'franchise_income', fid, f'Deleted franchise income of {income.amount}')
+    db.session.delete(income)
+    db.session.commit()
+    flash('Franchise income entry deleted.', 'warning')
+    return redirect(url_for('franchise_income_list'))
+
+
+def _franchise_pnl(frequency):
+    """Build a franchise P&L for the requested period. frequency is
+    'daily', 'weekly', or None for the consolidated statement (both)."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    q = FranchiseIncome.query.filter(FranchiseIncome.entry_date.between(df, dt))
+    if frequency:
+        q = q.filter_by(frequency=frequency)
+    entries = q.order_by(FranchiseIncome.entry_date.desc()).all()
+
+    daily_total = sum(e.amount for e in entries if e.frequency == 'daily')
+    weekly_total = sum(e.amount for e in entries if e.frequency == 'weekly')
+    gross_income = daily_total + weekly_total
+
+    return dict(frequency=frequency, entries=entries, gross_income=gross_income,
+                daily_total=daily_total, weekly_total=weekly_total,
+                date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/reports/franchise/daily')
+@login_required
+@permission_required('franchise')
+def report_franchise_daily():
+    return render_template('franchise/pnl.html', title='Daily Franchise P&L Statement', **_franchise_pnl('daily'))
+
+
+@app.route('/reports/franchise/weekly')
+@login_required
+@permission_required('franchise')
+def report_franchise_weekly():
+    return render_template('franchise/pnl.html', title='Weekly Franchise P&L Statement', **_franchise_pnl('weekly'))
+
+
+@app.route('/reports/franchise/consolidated')
+@login_required
+@permission_required('franchise')
+def report_franchise_consolidated():
+    return render_template('franchise/pnl.html', title='Consolidated Franchise P&L Statement', **_franchise_pnl(None))
 
 
 # ─────────────────────────────────────────────────────────────

@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+{% block title %}Spares Store{% endblock %}
+{% block page_title %}Spares Store — Inventory{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Spare Parts Inventory</h1>
+    <div class="subtitle">{{ parts|length }} part(s) on file — cost, markup &amp; stock on hand</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('store_purchases') }}" class="btn btn-outline"><i data-feather="arrow-down-circle"></i> Purchases</a>
+    <a href="{{ url_for('store_sales') }}" class="btn btn-outline"><i data-feather="arrow-up-circle"></i> Sales</a>
+    <a href="{{ url_for('store_part_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Part</a>
+  </div>
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-icon">📦</div>
+    <div class="kpi-label">Stock Value</div>
+    <div class="kpi-value">{{ total_stock_value|currency }}</div>
+    <div class="kpi-sub">At weighted-average cost</div>
+  </div>
+  <div class="kpi-card {% if low_stock_count > 0 %}kpi-red{% else %}kpi-green{% endif %}">
+    <div class="kpi-icon">⚠️</div>
+    <div class="kpi-label">Low Stock</div>
+    <div class="kpi-value">{{ low_stock_count }}</div>
+    <div class="kpi-sub">At or below reorder level</div>
+  </div>
+  <div class="kpi-card {% if month_profit >= 0 %}kpi-green{% else %}kpi-red{% endif %}">
+    <div class="kpi-icon">💰</div>
+    <div class="kpi-label">Profit (Month)</div>
+    <div class="kpi-value">{{ month_profit|currency }}</div>
+    <div class="kpi-sub">From markup on sales</div>
+  </div>
+</div>
+
+<div class="card">
+  {% if parts %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Part</th><th>Unit</th><th class="text-right">Cost</th><th class="text-right">Markup</th>
+          <th class="text-right">Selling Price</th><th class="text-right">On Hand</th><th>Status</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in parts %}
+        <tr>
+          <td>
+            <strong>{{ p.name }}</strong>
+            {% if p.part_number %}<div style="font-size:11.5px;color:var(--text-muted);">{{ p.part_number }}</div>{% endif %}
+          </td>
+          <td>{{ p.unit }}</td>
+          <td class="text-right">{{ p.cost_price|currency }}</td>
+          <td class="text-right">{{ p.markup_percent|pct }}</td>
+          <td class="text-right"><strong>{{ p.selling_price|currency }}</strong></td>
+          <td class="text-right">
+            {{ p.quantity_on_hand }}
+            {% if p.status == 'active' and p.low_stock %}<span class="badge badge-red">Low</span>{% endif %}
+          </td>
+          <td>
+            {% if p.status == 'active' %}<span class="badge badge-green">Active</span>
+            {% else %}<span class="badge badge-gray">Discontinued</span>{% endif %}
+          </td>
+          <td>
+            <div class="actions">
+              <a href="{{ url_for('store_part_edit', pid=p.id) }}" class="btn btn-outline btn-xs">Edit</a>
+              {% if current_user.role == 'admin' %}
+              <form method="POST" action="{{ url_for('store_part_delete', pid=p.id) }}" data-confirm="Delete this part and all its purchase/sale history?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🔩</div>
+    <p>No spare parts on file yet. <a href="{{ url_for('store_part_add') }}">Add the first one</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

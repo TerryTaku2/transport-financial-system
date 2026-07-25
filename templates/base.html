@@ -139,6 +139,39 @@
     </div>
     {% endif %}
 
+    {% if current_user.has_permission('franchise') %}
+    <div class="nav-section">
+      <div class="nav-section-label">Franchise</div>
+      <a href="{{ url_for('franchise_income_list') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_income') %}active{% endif %}">
+        <i data-feather="credit-card"></i> Income
+      </a>
+      <a href="{{ url_for('report_franchise_daily') }}" class="nav-item {% if request.endpoint == 'report_franchise_daily' %}active{% endif %}">
+        <i data-feather="bar-chart-2"></i> Daily P&amp;L
+      </a>
+      <a href="{{ url_for('report_franchise_weekly') }}" class="nav-item {% if request.endpoint == 'report_franchise_weekly' %}active{% endif %}">
+        <i data-feather="bar-chart-2"></i> Weekly P&amp;L
+      </a>
+      <a href="{{ url_for('report_franchise_consolidated') }}" class="nav-item {% if request.endpoint == 'report_franchise_consolidated' %}active{% endif %}">
+        <i data-feather="pie-chart"></i> Consolidated P&amp;L
+      </a>
+    </div>
+    {% endif %}
+
+    {% if current_user.has_permission('store') %}
+    <div class="nav-section">
+      <div class="nav-section-label">Spares Store</div>
+      <a href="{{ url_for('store_parts') }}" class="nav-item {% if request.endpoint in ['store_parts', 'store_part_add', 'store_part_edit'] %}active{% endif %}">
+        <i data-feather="package"></i> Inventory
+      </a>
+      <a href="{{ url_for('store_purchases') }}" class="nav-item {% if 'store_purchase' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="arrow-down-circle"></i> Purchases
+      </a>
+      <a href="{{ url_for('store_sales') }}" class="nav-item {% if 'store_sale' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="arrow-up-circle"></i> Sales
+      </a>
+    </div>
+    {% endif %}
+
     {% if current_user.has_permission('compliance') %}
     <div class="nav-section">
       <div class="nav-section-label">Compliance</div>

@@ -1,0 +1,72 @@
+{% extends 'base.html' %}
+{% block title %}Store Purchases{% endblock %}
+{% block page_title %}Spares Store — Purchases{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Spare Parts Purchases</h1>
+    <div class="subtitle">Restocking history — each purchase updates the part's average cost</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('store_parts') }}" class="btn btn-outline"><i data-feather="package"></i> Inventory</a>
+    <a href="{{ url_for('store_purchase_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Record Purchase</a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>Part</label>
+    <select name="part_id">
+      <option value="">All Parts</option>
+      {% for p in parts %}
+      <option value="{{ p.id }}" {% if part_id|string == p.id|string %}selected{% endif %}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-outline"><i data-feather="filter"></i> Filter</button>
+  <a href="{{ url_for('store_purchases') }}" class="btn btn-outline">Reset</a>
+</form>
+
+<div class="card">
+  {% if purchases.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Part</th><th class="text-right">Qty</th><th class="text-right">Unit Cost</th><th class="text-right">Total</th><th>Supplier</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for pu in purchases.items %}
+        <tr>
+          <td>{{ pu.purchase_date.strftime('%d %b %Y') }}</td>
+          <td>{{ pu.part.name }}</td>
+          <td class="text-right">{{ pu.quantity }} {{ pu.part.unit }}</td>
+          <td class="text-right">{{ pu.unit_cost|currency }}</td>
+          <td class="text-right"><strong>{{ pu.total_cost|currency }}</strong></td>
+          <td>{{ pu.supplier or '—' }}</td>
+          <td>
+            {% if current_user.role == 'admin' %}
+            <form method="POST" action="{{ url_for('store_purchase_delete', pid=pu.id) }}" data-confirm="Delete this purchase? Stock will be reduced accordingly.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    {% if purchases.has_prev %}<a href="?page={{ purchases.prev_num }}&part_id={{ part_id }}">&laquo; Prev</a>{% endif %}
+    <span class="active">Page {{ purchases.page }} of {{ purchases.pages or 1 }}</span>
+    {% if purchases.has_next %}<a href="?page={{ purchases.next_num }}&part_id={{ part_id }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">📥</div>
+    <p>No purchases recorded yet. <a href="{{ url_for('store_purchase_add') }}">Record one now</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

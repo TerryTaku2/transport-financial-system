@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+{% block title %}Franchise Income{% endblock %}
+{% block page_title %}Franchise — Income{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Franchise Income</h1>
+    <div class="subtitle">Separate revenue stream from vehicle operations</div>
+  </div>
+  <a href="{{ url_for('franchise_income_add', frequency=frequency or 'daily') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Income</a>
+</div>
+
+<div class="btn-group mb-16">
+  <a href="{{ url_for('franchise_income_list') }}" class="btn btn-sm {% if not frequency %}btn-primary{% else %}btn-outline{% endif %}">All</a>
+  <a href="{{ url_for('franchise_income_list', frequency='daily') }}" class="btn btn-sm {% if frequency == 'daily' %}btn-primary{% else %}btn-outline{% endif %}">Daily</a>
+  <a href="{{ url_for('franchise_income_list', frequency='weekly') }}" class="btn btn-sm {% if frequency == 'weekly' %}btn-primary{% else %}btn-outline{% endif %}">Weekly</a>
+</div>
+
+<div class="card">
+  {% if entries.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>{% if frequency == 'weekly' %}Week Ending{% else %}Date{% endif %}</th><th>Frequency</th><th>Description</th><th class="text-right">Amount</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for e in entries.items %}
+        <tr>
+          <td>{{ e.entry_date }}</td>
+          <td><span class="badge {% if e.frequency == 'weekly' %}badge-blue{% else %}badge-gray{% endif %}">{{ e.frequency|capitalize }}</span></td>
+          <td>{{ e.description or '—' }}</td>
+          <td class="text-right">{{ e.amount|currency }}</td>
+          <td>
+            {% if current_user.role == 'admin' %}
+            <form method="POST" action="{{ url_for('franchise_income_delete', fid=e.id) }}" data-confirm="Delete this franchise income entry?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if entries.pages > 1 %}
+  <div class="pagination">
+    {% if entries.has_prev %}<a href="{{ url_for('franchise_income_list', page=entries.prev_num, frequency=frequency) }}">&laquo; Prev</a>{% endif %}
+    <span>Page {{ entries.page }} of {{ entries.pages }}</span>
+    {% if entries.has_next %}<a href="{{ url_for('franchise_income_list', page=entries.next_num, frequency=frequency) }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🧾</div>
+    <p>No franchise income recorded yet. <a href="{{ url_for('franchise_income_add', frequency=frequency or 'daily') }}">Add the first one</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

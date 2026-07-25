@@ -1,0 +1,73 @@
+{% extends 'base.html' %}
+{% block title %}Store Sales{% endblock %}
+{% block page_title %}Spares Store — Sales{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Spare Parts Sales</h1>
+    <div class="subtitle">Sales at marked-up prices — each sale reduces stock</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('store_parts') }}" class="btn btn-outline"><i data-feather="package"></i> Inventory</a>
+    <a href="{{ url_for('store_sale_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Record Sale</a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>Part</label>
+    <select name="part_id">
+      <option value="">All Parts</option>
+      {% for p in parts %}
+      <option value="{{ p.id }}" {% if part_id|string == p.id|string %}selected{% endif %}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-outline"><i data-feather="filter"></i> Filter</button>
+  <a href="{{ url_for('store_sales') }}" class="btn btn-outline">Reset</a>
+</form>
+
+<div class="card">
+  {% if sales.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Part</th><th class="text-right">Qty</th><th class="text-right">Unit Price</th><th class="text-right">Total</th><th class="text-right">Profit</th><th>Customer</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for s in sales.items %}
+        <tr>
+          <td>{{ s.sale_date.strftime('%d %b %Y') }}</td>
+          <td>{{ s.part.name }}</td>
+          <td class="text-right">{{ s.quantity }} {{ s.part.unit }}</td>
+          <td class="text-right">{{ s.unit_price|currency }}</td>
+          <td class="text-right"><strong>{{ s.total_amount|currency }}</strong></td>
+          <td class="text-right" style="color:var(--success);">{{ s.profit|currency }}</td>
+          <td>{{ s.customer_name or '—' }}</td>
+          <td>
+            {% if current_user.role == 'admin' %}
+            <form method="POST" action="{{ url_for('store_sale_delete', sid=s.id) }}" data-confirm="Delete this sale? Stock will be restored.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    {% if sales.has_prev %}<a href="?page={{ sales.prev_num }}&part_id={{ part_id }}">&laquo; Prev</a>{% endif %}
+    <span class="active">Page {{ sales.page }} of {{ sales.pages or 1 }}</span>
+    {% if sales.has_next %}<a href="?page={{ sales.next_num }}&part_id={{ part_id }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🧾</div>
+    <p>No sales recorded yet. <a href="{{ url_for('store_sale_add') }}">Record one now</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

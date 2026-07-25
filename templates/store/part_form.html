@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}{{ 'Edit Part' if part else 'Add Part' }}{% endblock %}
+{% block page_title %}{{ 'Edit Spare Part' if part else 'Add Spare Part' }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ 'Edit Spare Part' if part else 'Add Spare Part' }}</h1>
+    <div class="subtitle">Cost price is set automatically from purchases — record a purchase to bring in stock</div>
+  </div>
+  <a href="{{ url_for('store_parts') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Part Name<span class="req">*</span></label>
+          <input type="text" name="name" required placeholder="e.g. Brake Pads (Front)" value="{{ part.name if part else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Part Number</label>
+          <input type="text" name="part_number" value="{{ part.part_number if part else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Unit</label>
+          <input type="text" id="sp_unit" name="unit" placeholder="pc, box, set, litre..." value="{{ part.unit if part else 'pc' }}">
+        </div>
+        <div class="form-group">
+          <label>Reorder Level</label>
+          <input type="number" name="reorder_level" min="0" step="1" value="{{ part.reorder_level if part else 0 }}">
+        </div>
+        <div class="form-group">
+          <label>Markup (%)<span class="req">*</span></label>
+          <input type="number" id="sp_markup" name="markup_percent" min="0" step="0.1" value="{{ part.markup_percent if part else 0 }}">
+        </div>
+        <div class="form-group">
+          <label>Selling Price Preview</label>
+          <div style="font-size:20px;font-weight:700;color:var(--success);padding-top:6px;" id="sp_price_preview">
+            {{ (part.selling_price|currency) if part else '$0.00' }}
+          </div>
+          <div style="font-size:11.5px;color:var(--text-muted);">Cost {{ (part.cost_price|currency) if part else '$0.00' }} + markup</div>
+        </div>
+        {% if part %}
+        <div class="form-group">
+          <label>Status</label>
+          <select name="status">
+            <option value="active" {% if part.status == 'active' %}selected{% endif %}>Active</option>
+            <option value="discontinued" {% if part.status == 'discontinued' %}selected{% endif %}>Discontinued</option>
+          </select>
+        </div>
+        {% endif %}
+        <div class="form-group full">
+          <label>Notes</label>
+          <textarea name="notes">{{ part.notes if part else '' }}</textarea>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Part</button>
+        <a href="{{ url_for('store_parts') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  document.getElementById('sp_markup').addEventListener('input', function () {
+    var cost = {{ part.cost_price if part else 0 }};
+    var markup = parseFloat(this.value) || 0;
+    document.getElementById('sp_price_preview').textContent = '$' + (cost * (1 + markup / 100)).toFixed(2);
+  });
+</script>
+{% endblock %}

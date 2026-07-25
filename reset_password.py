@@ -23,10 +23,23 @@ def reset_password(username: str, new_password: str) -> None:
         if not user:
             raise ValueError(f'User "{username}" was not found.')
 
+        # Sanitize the NEW_PASSWORD value: strip surrounding whitespace/quotes
+        # and reject obvious pasted commands or multi-line values that include
+        # a shell command (this commonly happens when someone pastes a command
+        # into an env var value in Render's UI).
+        new_password = new_password.strip()
+        if (not new_password
+                or '\n' in new_password
+                or '\r' in new_password
+                or ('python' in new_password and 'reset_password.py' in new_password)):
+            raise ValueError(
+                'The NEW_PASSWORD value looks invalid — make sure it is only the password (no quotes or commands).'
+            )
+
         user.set_password(new_password)
         db.session.commit()
+        # For safety do not print the password to logs. Confirm only success.
         print(f'Password updated successfully for user: {username}')
-        print(f'New password: {new_password}')
 
 
 if __name__ == '__main__':

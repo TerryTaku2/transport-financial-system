@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% block title %}Record Purchase{% endblock %}
+{% block page_title %}Record Purchase{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Record Spares Purchase</h1>
+    <div class="subtitle">Adds to stock and rolls into the part's average cost</div>
+  </div>
+  <a href="{{ url_for('store_purchases') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+</div>
+
+{% if not parts %}
+<div class="alert alert-warning">No active parts on file yet. <a href="{{ url_for('store_part_add') }}">Add a part first</a>.</div>
+{% else %}
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="purchase_date" required value="{{ today }}">
+        </div>
+        <div class="form-group">
+          <label>Part<span class="req">*</span></label>
+          <select name="part_id" required>
+            <option value="">Select part</option>
+            {% for p in parts %}
+            <option value="{{ p.id }}">{{ p.name }}{% if p.part_number %} ({{ p.part_number }}){% endif %} — {{ p.quantity_on_hand }} {{ p.unit }} on hand</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Quantity<span class="req">*</span></label>
+          <input type="number" id="pur_qty" name="quantity" min="1" step="1" required>
+        </div>
+        <div class="form-group">
+          <label>Unit Cost (USD)<span class="req">*</span></label>
+          <input type="number" id="pur_cost" name="unit_cost" step="0.01" min="0" required>
+        </div>
+        <div class="form-group">
+          <label>Supplier</label>
+          <input type="text" name="supplier">
+        </div>
+        <div class="form-group">
+          <label>Total Cost (auto-calculated)</label>
+          <div style="font-size:20px;font-weight:700;color:var(--danger);padding-top:6px;" id="pur_total_preview">$0.00</div>
+        </div>
+        <div class="form-group full">
+          <label>Notes</label>
+          <textarea name="notes"></textarea>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Purchase</button>
+        <a href="{{ url_for('store_purchases') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

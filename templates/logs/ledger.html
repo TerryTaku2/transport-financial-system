@@ -37,7 +37,7 @@
       <a href="{{ url_for('driver_ledger_export', vehicle_id=vehicle.id, period=period) }}" class="btn btn-xs btn-outline">
         <i data-feather="download"></i> Export CSV
       </a>
-      <form method="POST" action="{{ url_for('driver_ledger_import') }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin:0;">
+      <form method="POST" action="{{ url_for('driver_ledger_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin:0;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="vehicle_id" value="{{ vehicle.id }}">
         <input type="hidden" name="period" value="{{ period }}">
@@ -45,6 +45,22 @@
         <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload"></i> Import</button>
       </form>
     </div>
+  </div>
+</div>
+
+<div class="card mb-24" style="padding:10px 14px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+    <div class="form-hint" style="margin:0;">Import a fleet-wide workbook — one sheet per vehicle, matched by registration in the sheet name</div>
+    <form method="POST" action="{{ url_for('driver_ledger_import_bulk') }}" enctype="multipart/form-data" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="period" value="{{ period }}">
+      <input type="file" name="file" accept=".xlsx,.xlsm" required style="font-size:12px;">
+      <label style="display:flex;gap:4px;align-items:center;font-size:12px;font-weight:normal;">
+        <input type="checkbox" name="auto_register" value="1" checked style="width:auto;">
+        Auto-register new vehicles/drivers
+      </label>
+      <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload-cloud"></i> Import Fleet Workbook</button>
+    </form>
   </div>
 </div>
 
@@ -97,13 +113,39 @@
         </div>
         <div class="form-group">
           <label>Mileage</label>
-          <input type="number" name="mileage" step="0.1" min="0" placeholder="Odometer reading">
+          <input type="number" name="mileage" id="mileage-input" step="0.1" min="0"
+                 placeholder="Odometer reading" data-prev-mileage="{{ latest_odometer if latest_odometer is not none else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Distance</label>
+          <input type="text" id="distance-preview" readonly placeholder="—">
+          <div class="form-hint">Current mileage − previous mileage{% if latest_odometer is not none %} ({{ '%.0f'|format(latest_odometer) }}){% endif %}.</div>
         </div>
       </div>
       <button type="submit" class="btn btn-primary"><i data-feather="plus"></i> Add Entry</button>
     </form>
   </div>
 </div>
+
+<script>
+(function () {
+  var mileageInput = document.getElementById('mileage-input');
+  var distancePreview = document.getElementById('distance-preview');
+  if (!mileageInput || !distancePreview) return;
+
+  function updateDistance() {
+    var prev = parseFloat(mileageInput.dataset.prevMileage);
+    var current = parseFloat(mileageInput.value);
+    if (isNaN(prev) || isNaN(current)) {
+      distancePreview.value = '';
+      return;
+    }
+    distancePreview.value = Math.round(current - prev);
+  }
+
+  mileageInput.addEventListener('input', updateDistance);
+})();
+</script>
 
 <div class="kpi-grid">
   <div class="kpi-card kpi-blue">

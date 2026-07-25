@@ -40,6 +40,45 @@ document.addEventListener('DOMContentLoaded', function () {
   if (partsInput) partsInput.addEventListener('input', updateMaintTotal);
   if (laborInput) laborInput.addEventListener('input', updateMaintTotal);
 
+  // ── Store purchase: auto-compute total ──
+  var purQty  = document.getElementById('pur_qty');
+  var purCost = document.getElementById('pur_cost');
+  var purTotal = document.getElementById('pur_total_preview');
+  function updatePurchaseTotal() {
+    if (!purQty || !purCost || !purTotal) return;
+    var q = parseFloat(purQty.value) || 0;
+    var c = parseFloat(purCost.value) || 0;
+    purTotal.textContent = '$' + (q * c).toFixed(2);
+  }
+  if (purQty)  purQty.addEventListener('input', updatePurchaseTotal);
+  if (purCost) purCost.addEventListener('input', updatePurchaseTotal);
+
+  // ── Store sale: prefill price/stock cap from selected part, auto-compute total ──
+  var salePart  = document.getElementById('sale_part');
+  var saleQty   = document.getElementById('sale_qty');
+  var salePrice = document.getElementById('sale_price');
+  var saleTotal = document.getElementById('sale_total_preview');
+  var saleStockHint = document.getElementById('sale_stock_hint');
+  function updateSaleTotal() {
+    if (!saleQty || !salePrice || !saleTotal) return;
+    var q = parseFloat(saleQty.value) || 0;
+    var p = parseFloat(salePrice.value) || 0;
+    saleTotal.textContent = '$' + (q * p).toFixed(2);
+  }
+  function onSalePartChange() {
+    if (!salePart) return;
+    var opt = salePart.options[salePart.selectedIndex];
+    var price = opt ? parseFloat(opt.getAttribute('data-price')) || 0 : 0;
+    var stock = opt ? parseInt(opt.getAttribute('data-stock'), 10) || 0 : 0;
+    if (salePrice && opt && opt.value) salePrice.value = price.toFixed(2);
+    if (saleQty && opt && opt.value) saleQty.setAttribute('max', stock);
+    if (saleStockHint) saleStockHint.textContent = opt && opt.value ? stock + ' in stock' : '';
+    updateSaleTotal();
+  }
+  if (salePart)  salePart.addEventListener('change', onSalePartChange);
+  if (saleQty)   saleQty.addEventListener('input', updateSaleTotal);
+  if (salePrice) salePrice.addEventListener('input', updateSaleTotal);
+
   // ── Confirm delete ──
   document.querySelectorAll('form[data-confirm]').forEach(function (form) {
     form.addEventListener('submit', function (e) {
