@@ -21,8 +21,8 @@
     <div class="stat-value text-success">{{ vehicle.total_revenue|currency }}</div>
   </div>
   <div class="stat-box">
-    <div class="stat-label">Lifetime Fuel Cost</div>
-    <div class="stat-value text-warning">{{ vehicle.total_fuel_cost|currency }}</div>
+    <div class="stat-label">Lifetime Fuel Used</div>
+    <div class="stat-value text-warning">{{ '%.1f'|format(vehicle.total_fuel_liters) }} L</div>
   </div>
   <div class="stat-box">
     <div class="stat-label">Lifetime Maintenance Cost</div>
@@ -74,14 +74,13 @@
     {% if recent_fuel %}
     <div class="table-wrap">
       <table>
-        <thead><tr><th>Date</th><th>Liters</th><th>Cost/L</th><th class="text-right">Total</th></tr></thead>
+        <thead><tr><th>Date</th><th>Liters</th><th class="text-right">Odometer</th></tr></thead>
         <tbody>
           {% for f in recent_fuel %}
           <tr>
             <td>{{ f.log_date.strftime('%d %b') }}</td>
             <td>{{ f.liters }}L</td>
-            <td>{{ f.cost_per_liter|currency }}</td>
-            <td class="text-right">{{ f.total_cost|currency }}</td>
+            <td class="text-right">{{ f.odometer if f.odometer is not none else '—' }}</td>
           </tr>
           {% endfor %}
         </tbody>

@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1>Record Fuel Top-Up</h1>
-    <div class="subtitle">Liters, cost, and odometer reading</div>
+    <div class="subtitle">Liters and odometer reading</div>
   </div>
   <a href="{{ url_for('fuel_logs') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
 </div>
@@ -34,20 +34,12 @@
           <input type="number" id="liters" name="liters" step="0.01" min="0" required>
         </div>
         <div class="form-group">
-          <label>Cost per Liter (USD)<span class="req">*</span></label>
-          <input type="number" id="cost_per_liter" name="cost_per_liter" step="0.001" min="0" required>
-        </div>
-        <div class="form-group">
           <label>Odometer Reading (km)</label>
           <input type="number" name="odometer" step="0.1" min="0">
         </div>
         <div class="form-group">
           <label>Supplier</label>
           <input type="text" name="supplier" placeholder="e.g. Total, Puma, Zuva">
-        </div>
-        <div class="form-group">
-          <label>Total Cost (auto-calculated)</label>
-          <div style="font-size:20px;font-weight:700;color:var(--primary);padding-top:6px;" id="total_preview">$0.00</div>
         </div>
         <div class="form-group full">
           <label>Notes</label>

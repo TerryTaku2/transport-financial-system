@@ -14,19 +14,6 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }, 4500);
 
-  // ── Fuel log: auto-compute total ──
-  var litersInput = document.getElementById('liters');
-  var cplInput    = document.getElementById('cost_per_liter');
-  var totalSpan   = document.getElementById('total_preview');
-  function updateFuelTotal() {
-    if (!litersInput || !cplInput || !totalSpan) return;
-    var l = parseFloat(litersInput.value) || 0;
-    var c = parseFloat(cplInput.value) || 0;
-    totalSpan.textContent = '$' + (l * c).toFixed(2);
-  }
-  if (litersInput) litersInput.addEventListener('input', updateFuelTotal);
-  if (cplInput)    cplInput.addEventListener('input', updateFuelTotal);
-
   // ── Maintenance log: auto-compute total ──
   var partsInput = document.getElementById('parts_cost');
   var laborInput = document.getElementById('labor_cost');

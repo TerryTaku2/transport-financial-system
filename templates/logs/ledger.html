@@ -104,12 +104,8 @@
           <div class="form-hint">Needs a driver selected.</div>
         </div>
         <div class="form-group">
-          <label>{{ vehicle.fuel_type|capitalize }} (USD)</label>
-          <input type="number" name="diesel_cost" step="0.01" min="0" placeholder="0.00">
-        </div>
-        <div class="form-group">
-          <label>{{ vehicle.fuel_type|capitalize }} Liters (optional)</label>
-          <input type="number" name="diesel_liters" step="0.01" min="0" placeholder="Leave blank if unknown">
+          <label>{{ vehicle.fuel_type|capitalize }} Liters</label>
+          <input type="number" name="diesel_liters" step="0.01" min="0" placeholder="0.00">
         </div>
         <div class="form-group">
           <label>Mileage</label>
@@ -153,12 +149,8 @@
     <div class="kpi-value">{{ total_fare|currency }}</div>
   </div>
   <div class="kpi-card kpi-amber">
-    <div class="kpi-label">Total {{ vehicle.fuel_type|capitalize }}</div>
-    <div class="kpi-value">{{ total_diesel|currency }}</div>
-  </div>
-  <div class="kpi-card {% if net >= 0 %}kpi-green{% else %}kpi-red{% endif %}">
-    <div class="kpi-label">Net</div>
-    <div class="kpi-value">{{ net|currency }}</div>
+    <div class="kpi-label">Total {{ vehicle.fuel_type|capitalize }} (Liters)</div>
+    <div class="kpi-value">{{ '%.1f'|format(total_diesel_liters) }} L</div>
   </div>
 </div>
 
@@ -172,7 +164,7 @@
           <th>Date</th>
           <th>Driver Name</th>
           <th class="text-right">Daily Fare</th>
-          <th class="text-right">{{ vehicle.fuel_type|capitalize }}</th>
+          <th class="text-right">{{ vehicle.fuel_type|capitalize }} (L)</th>
           <th class="text-right">Mileage</th>
           <th class="text-right">Distance Travelled</th>
         </tr>
@@ -183,7 +175,7 @@
           <td>{{ row.date }}</td>
           <td>{{ row.driver_names or '—' }}</td>
           <td class="text-right">{{ row.fare|currency if row.fare else '—' }}</td>
-          <td class="text-right">{{ row.diesel_cost|currency if row.diesel_cost else '—' }}</td>
+          <td class="text-right">{{ '%.1f'|format(row.diesel_liters) if row.diesel_liters else '—' }}</td>
           <td class="text-right">{{ row.odometer if row.odometer is not none else '—' }}</td>
           <td class="text-right">{{ '%.0f'|format(row.distance) if row.distance is not none else '—' }}</td>
         </tr>
@@ -193,7 +185,7 @@
         <tr class="summary-row">
           <td colspan="2">TOTALS</td>
           <td class="text-right">{{ total_fare|currency }}</td>
-          <td class="text-right">{{ total_diesel|currency }}</td>
+          <td class="text-right">{{ '%.1f'|format(total_diesel_liters) }}</td>
           <td></td>
           <td></td>
         </tr>

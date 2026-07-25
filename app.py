@@ -130,8 +130,8 @@ class Vehicle(db.Model):
         return sum(l.gross_revenue for l in self.daily_logs)
 
     @property
-    def total_fuel_cost(self):
-        return sum(l.total_cost for l in self.fuel_logs)
+    def total_fuel_liters(self):
+        return sum(l.liters for l in self.fuel_logs)
 
     @property
     def total_maintenance_cost(self):
@@ -236,8 +236,12 @@ class FuelLog(db.Model):
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
     log_date = db.Column(db.Date, nullable=False, default=date.today)
     liters = db.Column(db.Float, nullable=False)
-    cost_per_liter = db.Column(db.Float, nullable=False)
-    total_cost = db.Column(db.Float, nullable=False)
+    # Fuel cost is no longer tracked by the app (liters/distance only) — these
+    # two columns stay on the model, defaulted to 0, purely so existing
+    # production databases (no migration tool in this project) don't reject
+    # new inserts on their pre-existing NOT NULL constraint.
+    cost_per_liter = db.Column(db.Float, nullable=False, default=0.0)
+    total_cost = db.Column(db.Float, nullable=False, default=0.0)
     odometer = db.Column(db.Float)
     supplier = db.Column(db.String(100))
     notes = db.Column(db.Text)
@@ -693,10 +697,9 @@ CANONICAL_LEDGER_FIELDS = [
     ('driver', 'Driver', ['driver', 'driver name', 'crew', 'operator']),
     ('fare', 'Fare', ['fare', 'revenue', 'income', 'gross revenue', 'collection',
                       'collections', 'takings']),
-    ('fuel_cost', 'Fuel Cost', ['diesel cost', 'petrol cost', 'fuel cost', 'fuel amount']),
     ('fuel_liters', 'Fuel Liters', ['diesel liters', 'diesel litres', 'petrol liters',
                                     'petrol litres', 'fuel liters', 'fuel litres',
-                                    'liters', 'litres']),
+                                    'liters', 'litres', 'diesel', 'petrol', 'fuel']),
     ('mileage', 'Mileage', ['mileage', 'odometer', 'odo', 'distance reading', 'km reading']),
 ]
 
@@ -704,7 +707,7 @@ CANONICAL_LEDGER_FIELDS = [
 # row-validation loop (which looks for these exact keys) keeps working unchanged.
 CANONICAL_TO_ROW_KEY = {
     'date': 'date', 'driver': 'driver', 'fare': 'fare',
-    'fuel_cost': 'diesel cost', 'fuel_liters': 'diesel liters', 'mileage': 'mileage',
+    'fuel_liters': 'diesel liters', 'mileage': 'mileage',
 }
 
 
@@ -746,7 +749,27 @@ def _rows_from_raw(raw_rows):
     return [h for h in headers if h], rows
 
 
-def read_uploaded_table(file):
+def _select_sheet_for_vehicle(wb, vehicle):
+    """Pick the right worksheet for a single-vehicle import. A single-sheet
+    file is unambiguous, but a multi-sheet workbook (e.g. a fleet-wide master
+    logbook) must NOT silently fall back to whichever sheet happened to be
+    "active" when it was last saved — that would import a different vehicle's
+    transactions under the one currently selected. Only proceed if a sheet's
+    name matches the selected vehicle's registration; otherwise raise so the
+    upload is rejected instead of misattributed."""
+    if len(wb.sheetnames) == 1:
+        return wb.active
+    target = _normalize_registration(vehicle.registration)
+    for name in wb.sheetnames:
+        if _normalize_registration(name) == target:
+            return wb[name]
+    raise ValueError(
+        f'This workbook has {len(wb.sheetnames)} sheets and none is named "{vehicle.registration}" — '
+        'to avoid importing the wrong vehicle\'s data, upload a file with just one sheet, or use '
+        '"Import Fleet Workbook" below to import every vehicle\'s sheet at once.')
+
+
+def read_uploaded_table(file, vehicle=None):
     """Parse an uploaded CSV/XLSX file into (headers, rows). Each row is a dict
     keyed by its stripped, lowercased header. Raises ValueError on an
     unsupported or unreadable file."""
@@ -756,7 +779,8 @@ def read_uploaded_table(file):
             reader = csv.reader(io.StringIO(file.read().decode('utf-8-sig')))
             raw_rows = list(reader)
         elif ext in ('xlsx', 'xlsm'):
-            ws = openpyxl.load_workbook(file, data_only=True).active
+            wb = openpyxl.load_workbook(file, data_only=True)
+            ws = _select_sheet_for_vehicle(wb, vehicle)
             raw_rows = [list(r) for r in ws.iter_rows(values_only=True)]
         else:
             raise ValueError('Unsupported file type — upload a .csv or .xlsx file.')
@@ -844,10 +868,9 @@ def apply_column_mapping(headers, raw_rows, mapping):
 
 def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
     """Validate and persist already-mapped ledger rows (keyed by 'date',
-    'driver', 'fare', 'diesel cost', 'diesel liters', 'mileage') as DailyLog/
-    FuelLog entries for `vehicle`. Returns (imported_count, error_messages,
-    created_driver_names); does not commit — the caller decides when to
-    commit/rollback.
+    'driver', 'fare', 'diesel liters', 'mileage') as DailyLog/FuelLog entries
+    for `vehicle`. Returns (imported_count, error_messages, created_driver_names);
+    does not commit — the caller decides when to commit/rollback.
 
     If auto_register_drivers is True, a fare row naming a driver that isn't
     on file registers a new active Driver instead of erroring — used by the
@@ -873,10 +896,8 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
             driver_name = str(row.get('driver') or '').strip()
             driver = driver_by_name.get(driver_name.lower()) if driver_name else None
 
-            cost_key = next((k for k in ('diesel cost', 'petrol cost', 'fuel cost') if k in row), 'diesel cost')
             liters_key = next((k for k in ('diesel liters', 'petrol liters', 'fuel liters') if k in row), 'diesel liters')
             fare = parse_import_number(row.get('fare'), 'Fare')
-            diesel_cost = parse_import_number(row.get(cost_key), 'Fuel Cost')
             diesel_liters = parse_import_number(row.get(liters_key), 'Fuel Liters')
             mileage = parse_import_number(row.get('mileage'), 'Mileage')
 
@@ -896,9 +917,7 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
                     created_drivers.append(driver_name)
                 else:
                     raise ValueError(f'unknown driver "{driver_name}".' if driver_name else 'fare needs a driver name.')
-            if diesel_liters is not None and diesel_cost is None:
-                raise ValueError('fuel liters given without a fuel cost.')
-            if fare is None and diesel_cost is None and mileage is None:
+            if fare is None and diesel_liters is None and mileage is None:
                 continue
 
             if driver_name and driver:
@@ -911,17 +930,15 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
                     conductor_id=conductor.id if conductor else None,
                     log_date=log_date, gross_revenue=fare, created_by=current_user.id,
                 ))
-            if diesel_cost is not None:
+            if diesel_liters is not None:
                 db.session.add(FuelLog(
                     vehicle_id=vehicle.id, log_date=log_date,
-                    liters=diesel_liters or 0,
-                    cost_per_liter=(diesel_cost / diesel_liters) if diesel_liters else 0,
-                    total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
+                    liters=diesel_liters, odometer=mileage, created_by=current_user.id,
                 ))
             elif mileage is not None:
                 db.session.add(FuelLog(
                     vehicle_id=vehicle.id, log_date=log_date, liters=0,
-                    cost_per_liter=0, total_cost=0, odometer=mileage, created_by=current_user.id,
+                    odometer=mileage, created_by=current_user.id,
                 ))
             imported += 1
         except ValueError as e:
@@ -1106,8 +1123,6 @@ def compute_financial_position(as_of):
 
     total_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
         DailyLog.log_date <= as_of).scalar() or 0
-    total_fuel = db.session.query(func.sum(FuelLog.total_cost)).filter(
-        FuelLog.log_date <= as_of).scalar() or 0
     total_maintenance = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
         MaintenanceLog.log_date <= as_of).scalar() or 0
     total_expenses = db.session.query(func.sum(Expense.amount)).filter(
@@ -1143,7 +1158,7 @@ def compute_financial_position(as_of):
         OwnerDrawing.drawing_date <= as_of).scalar() or 0
 
     cash_and_equivalents = (
-        total_revenue - total_fuel - total_maintenance - total_expenses
+        total_revenue - total_maintenance - total_expenses
         - commission_paid - total_vehicle_cost
         + loan_proceeds - loan_repayments
         + capital_contributions - owner_drawings
@@ -1152,7 +1167,7 @@ def compute_financial_position(as_of):
 
     retained_earnings = (
         (total_revenue + receivables_total)
-        - (total_fuel + total_maintenance + total_expenses + payables_total)
+        - (total_maintenance + total_expenses + payables_total)
         - total_accum_dep - commission_accrued
     )
     owners_capital = capital_contributions - owner_drawings
@@ -1261,13 +1276,10 @@ def dashboard():
     month_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
         DailyLog.log_date >= month_start).scalar() or 0
 
-    month_fuel = db.session.query(func.sum(FuelLog.total_cost)).filter(
-        FuelLog.log_date >= month_start).scalar() or 0
-
     month_maintenance = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
         MaintenanceLog.log_date >= month_start).scalar() or 0
 
-    month_expenses = month_fuel + month_maintenance
+    month_expenses = month_maintenance
     month_profit = month_revenue - month_expenses
 
     active_vehicles = Vehicle.query.filter_by(status='active').count()
@@ -1714,8 +1726,8 @@ def daily_log_delete(lid):
 # for as a flat cash amount without a metered liter reading.
 # ─────────────────────────────────────────────────────────────
 def vehicle_ledger_rows(vehicle_id, df=None, dt=None):
-    """Merge DailyLog (fare, any driver) and FuelLog (diesel/mileage) for
-    this vehicle by date, with distance computed the same way the Fuel
+    """Merge DailyLog (fare, any driver) and FuelLog (diesel liters/mileage)
+    for this vehicle by date, with distance computed the same way the Fuel
     Efficiency report does — delta from the previous odometer reading.
     If df/dt are given, only rows in that range are returned, but the
     distance baseline still uses the last odometer reading before df so
@@ -1747,13 +1759,12 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None):
     all_dates = sorted(set(daily_by_date) | set(fuel_by_date))
     rows = []
     total_fare = 0.0
-    total_diesel = 0.0
+    total_diesel_liters = 0.0
     for d in all_dates:
         daily_logs = daily_by_date.get(d, [])
         fare = sum(l.gross_revenue for l in daily_logs)
         driver_names = ', '.join(sorted({l.driver.name for l in daily_logs})) or None
         fuel_logs = fuel_by_date.get(d, [])
-        diesel_cost = sum(f.total_cost for f in fuel_logs)
         diesel_liters = sum(f.liters for f in fuel_logs)
         odometer = max((f.odometer for f in fuel_logs if f.odometer is not None), default=None)
 
@@ -1764,13 +1775,13 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None):
             prev_odometer = odometer
 
         total_fare += fare
-        total_diesel += diesel_cost
+        total_diesel_liters += diesel_liters
         rows.append({
             'date': d, 'driver_names': driver_names, 'fare': fare,
-            'diesel_cost': diesel_cost, 'diesel_liters': diesel_liters,
+            'diesel_liters': diesel_liters,
             'odometer': odometer, 'distance': distance,
         })
-    return rows, total_fare, total_diesel
+    return rows, total_fare, total_diesel_liters
 
 
 def resolve_ledger_period(period, today):
@@ -1800,10 +1811,10 @@ def driver_ledger():
     vehicle_id = request.args.get('vehicle_id', '')
     vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else (all_vehicles[0] if all_vehicles else None)
 
-    rows, total_fare, total_diesel = [], 0.0, 0.0
+    rows, total_fare, total_diesel_liters = [], 0.0, 0.0
     latest_odometer = None
     if vehicle:
-        rows, total_fare, total_diesel = vehicle_ledger_rows(vehicle.id, df, dt)
+        rows, total_fare, total_diesel_liters = vehicle_ledger_rows(vehicle.id, df, dt)
         latest_fuel = FuelLog.query.filter(
             FuelLog.vehicle_id == vehicle.id, FuelLog.odometer.isnot(None)
         ).order_by(FuelLog.log_date.desc(), FuelLog.id.desc()).first()
@@ -1812,8 +1823,7 @@ def driver_ledger():
     all_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
     return render_template('logs/ledger.html', vehicles=all_vehicles, vehicle=vehicle,
         drivers=all_drivers,
-        rows=rows, total_fare=total_fare, total_diesel=total_diesel,
-        net=total_fare - total_diesel,
+        rows=rows, total_fare=total_fare, total_diesel_liters=total_diesel_liters,
         period=period, date_from=date_from_str, date_to=date_to_str,
         today=today.strftime('%Y-%m-%d'), latest_odometer=latest_odometer)
 
@@ -1837,7 +1847,6 @@ def driver_ledger_add():
         driver_id = form_int(request.form, 'driver_id', required=False)
         fare = form_float(request.form, 'fare', required=False, min_value=0)
         diesel_liters = form_float(request.form, 'diesel_liters', required=False, min_value=0)
-        diesel_cost = form_float(request.form, 'diesel_cost', required=False, min_value=0)
         mileage = form_float(request.form, 'mileage', required=False, min_value=0)
 
         if fare is not None:
@@ -1846,11 +1855,8 @@ def driver_ledger_add():
         elif driver_id:
             raise ValueError('Fare is required when a driver is selected.')
 
-        if diesel_liters is not None and diesel_cost is None:
-            raise ValueError('Enter the diesel cost as well as the liters.')
-
-        if fare is None and diesel_cost is None and mileage is None:
-            raise ValueError('Enter at least a fare, diesel cost, or mileage reading.')
+        if fare is None and diesel_liters is None and mileage is None:
+            raise ValueError('Enter at least a fare, diesel liters, or mileage reading.')
 
         if fare is not None:
             driver = Driver.query.get(driver_id)
@@ -1862,18 +1868,16 @@ def driver_ledger_add():
             db.session.add(daily)
             log_audit('CREATE', 'daily_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: fare {fare}')
 
-        if diesel_cost is not None:
+        if diesel_liters is not None:
             fuel = FuelLog(
                 vehicle_id=vehicle_id, log_date=log_date,
-                liters=diesel_liters or 0, cost_per_liter=(diesel_cost / diesel_liters) if diesel_liters else 0,
-                total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
+                liters=diesel_liters, odometer=mileage, created_by=current_user.id,
             )
             db.session.add(fuel)
-            log_audit('CREATE', 'fuel_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: diesel {diesel_cost}')
+            log_audit('CREATE', 'fuel_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: diesel {diesel_liters}L')
         elif mileage is not None:
             fuel = FuelLog(
-                vehicle_id=vehicle_id, log_date=log_date, liters=0, cost_per_liter=0,
-                total_cost=0, odometer=mileage, created_by=current_user.id,
+                vehicle_id=vehicle_id, log_date=log_date, liters=0, odometer=mileage, created_by=current_user.id,
             )
             db.session.add(fuel)
 
@@ -1905,12 +1909,11 @@ def driver_ledger_export():
     fuel_label = vehicle.fuel_type.capitalize()
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(['Date', 'Driver', 'Fare', f'{fuel_label} Cost', f'{fuel_label} Liters', 'Mileage', 'Distance'])
+    w.writerow(['Date', 'Driver', 'Fare', f'{fuel_label} Liters', 'Mileage', 'Distance'])
     for row in rows:
         w.writerow([
             row['date'], row['driver_names'] or '',
             f"{row['fare']:.2f}" if row['fare'] else '',
-            f"{row['diesel_cost']:.2f}" if row['diesel_cost'] else '',
             row['diesel_liters'] or '',
             row['odometer'] if row['odometer'] is not None else '',
             row['distance'] if row['distance'] is not None else '',
@@ -1940,14 +1943,18 @@ def driver_ledger_import_preview():
         return redirect(url_for('driver_ledger', period=period))
 
     file = request.files.get('file')
-    try:
-        if file and file.filename:
-            filename = file.filename
-            headers, raw_rows = read_uploaded_table(file)
-            mapping = auto_map_columns(headers)
-        else:
-            # Re-preview after the user adjusted the mapping — the file itself
-            # isn't resubmitted, the previously parsed rows travel via raw_data.
+    if file and file.filename:
+        filename = file.filename
+        try:
+            headers, raw_rows = read_uploaded_table(file, vehicle=vehicle)
+        except ValueError as e:
+            flash(str(e), 'danger')
+            return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+        mapping = auto_map_columns(headers)
+    else:
+        # Re-preview after the user adjusted the mapping — the file itself
+        # isn't resubmitted, the previously parsed rows travel via raw_data.
+        try:
             filename = request.form.get('filename', 'uploaded file')
             payload = json.loads(request.form.get('raw_data') or '{}')
             headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
@@ -1955,13 +1962,13 @@ def driver_ledger_import_preview():
                 raise ValueError('Choose a CSV or Excel file to import.')
             mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
                        for field_key, _label, _syn in CANONICAL_LEDGER_FIELDS}
-    except (ValueError, json.JSONDecodeError, TypeError):
-        flash('Choose a CSV or Excel file to import — the previous preview session expired.', 'danger')
-        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+        except (ValueError, json.JSONDecodeError, TypeError):
+            flash('Choose a CSV or Excel file to import — the previous preview session expired.', 'danger')
+            return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
 
     if not raw_rows:
         flash('That file has no data rows to import — it only has a header row. '
-              'Add rows with a Date and Fare/Fuel Cost/Mileage, then re-import.', 'warning')
+              'Add rows with a Date and Fare/Fuel Liters/Mileage, then re-import.', 'warning')
         return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
 
     preview_rows = apply_column_mapping(headers, raw_rows[:10], mapping)
@@ -2054,9 +2061,9 @@ def driver_ledger_import_bulk():
             # Distinguish an actual per-vehicle ledger tab from a fleet-wide
             # summary sheet like "DAILY TOTAL INCOME" before ever auto-registering
             # a "vehicle" for it. A summary sheet also has a Date column and its
-            # "INCOME" header even fuzzy-matches the Fare synonym list, so Fare/
-            # Fuel Cost alone aren't a safe signal — a real per-vehicle logbook
-            # always names a Driver or logs Mileage; a financial rollup never does.
+            # "INCOME" header even fuzzy-matches the Fare synonym list, so Fare
+            # alone isn't a safe signal — a real per-vehicle logbook always
+            # names a Driver or logs Mileage; a financial rollup never does.
             looks_like_ledger = bool(mapping.get('date')) and bool(
                 mapping.get('driver') or mapping.get('mileage'))
 
@@ -2146,13 +2153,10 @@ def fuel_logs():
 def fuel_log_add():
     if request.method == 'POST':
         liters = form_float(request.form, 'liters', min_value=0)
-        cpl = form_float(request.form, 'cost_per_liter', label='Cost per liter', min_value=0)
         log = FuelLog(
             vehicle_id=form_int(request.form, 'vehicle_id'),
             log_date=parse_date(request.form['log_date']),
             liters=liters,
-            cost_per_liter=cpl,
-            total_cost=liters * cpl,
             odometer=form_float(request.form, 'odometer', required=False, min_value=0),
             supplier=request.form.get('supplier', '').strip(),
             notes=request.form.get('notes', '').strip(),
@@ -2631,28 +2635,25 @@ def crew_leaderboard():
 
 
 def vehicle_income_totals(df, dt, vehicle_id=None):
-    """Revenue/fuel/maintenance/expense totals for one vehicle (or the whole
+    """Revenue/maintenance/expense totals for one vehicle (or the whole
     fleet if vehicle_id is None) over [df, dt]. Only expenses explicitly
     tagged to a vehicle count toward that vehicle's statement — general
     overhead (untagged expenses) only appears in the consolidated total."""
     rev_q = db.session.query(func.sum(DailyLog.gross_revenue)).filter(DailyLog.log_date.between(df, dt))
-    fuel_q = db.session.query(func.sum(FuelLog.total_cost)).filter(FuelLog.log_date.between(df, dt))
     maint_q = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(MaintenanceLog.log_date.between(df, dt))
     exp_q = db.session.query(func.sum(Expense.amount)).filter(Expense.expense_date.between(df, dt))
 
     if vehicle_id:
         rev_q = rev_q.filter(DailyLog.vehicle_id == vehicle_id)
-        fuel_q = fuel_q.filter(FuelLog.vehicle_id == vehicle_id)
         maint_q = maint_q.filter(MaintenanceLog.vehicle_id == vehicle_id)
         exp_q = exp_q.filter(Expense.vehicle_id == vehicle_id)
     else:
         exp_q = exp_q.filter(Expense.vehicle_id.is_(None))
 
     revenue = rev_q.scalar() or 0
-    fuel = fuel_q.scalar() or 0
     maintenance = maint_q.scalar() or 0
     expenses = exp_q.scalar() or 0
-    return revenue, fuel, maintenance, expenses
+    return revenue, maintenance, expenses
 
 
 def expense_breakdown_by_category(df, dt, vehicle_id=None):
@@ -2692,28 +2693,28 @@ def report_income():
 
     if vehicle_id:
         # Per-vehicle statement: only costs directly attributable to this vehicle.
-        gross_revenue, fuel_cost, maintenance_cost, vehicle_expenses = vehicle_income_totals(df, dt, vehicle_id)
+        gross_revenue, maintenance_cost, vehicle_expenses = vehicle_income_totals(df, dt, vehicle_id)
         general_expenses = 0
     else:
-        # Consolidated statement: fleet-wide fuel/maintenance plus ALL expenses
+        # Consolidated statement: fleet-wide maintenance plus ALL expenses
         # (both vehicle-tagged and general overhead).
-        gross_revenue, fuel_cost, maintenance_cost, general_expenses = vehicle_income_totals(df, dt, None)
+        gross_revenue, maintenance_cost, general_expenses = vehicle_income_totals(df, dt, None)
         vehicle_expenses = db.session.query(func.sum(Expense.amount)).filter(
             Expense.expense_date.between(df, dt), Expense.vehicle_id.isnot(None)).scalar() or 0
 
-    total_expenses = fuel_cost + maintenance_cost + vehicle_expenses + general_expenses
+    total_expenses = maintenance_cost + vehicle_expenses + general_expenses
     net_profit = gross_revenue - total_expenses
     profit_margin = (net_profit / gross_revenue * 100) if gross_revenue else 0
 
     vehicle_breakdown = []
     for v in Vehicle.query.order_by(Vehicle.registration).all():
-        v_rev, v_fuel, v_maint, v_exp = vehicle_income_totals(df, dt, v.id)
-        if v_rev == 0 and v_fuel == 0 and v_maint == 0 and v_exp == 0:
+        v_rev, v_maint, v_exp = vehicle_income_totals(df, dt, v.id)
+        if v_rev == 0 and v_maint == 0 and v_exp == 0:
             continue
-        v_total_cost = v_fuel + v_maint + v_exp
+        v_total_cost = v_maint + v_exp
         v_net = v_rev - v_total_cost
         vehicle_breakdown.append({
-            'vehicle': v, 'revenue': v_rev, 'fuel': v_fuel, 'maintenance': v_maint,
+            'vehicle': v, 'revenue': v_rev, 'maintenance': v_maint,
             'expenses': v_exp, 'net_profit': v_net,
             'margin': (v_net / v_rev * 100) if v_rev else 0,
         })
@@ -2722,7 +2723,7 @@ def report_income():
 
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     return render_template('reports/income.html',
-        gross_revenue=gross_revenue, fuel_cost=fuel_cost,
+        gross_revenue=gross_revenue,
         maintenance_cost=maintenance_cost, vehicle_expenses=vehicle_expenses,
         general_expenses=general_expenses, total_expenses=total_expenses,
         net_profit=net_profit, profit_margin=profit_margin,
@@ -2832,8 +2833,6 @@ def report_cash_flow():
     receivables_in = db.session.query(func.sum(Receivable.amount)).filter(
         Receivable.status == 'collected', in_range(Receivable.collected_date)).scalar() or 0
 
-    fuel_out = db.session.query(func.sum(FuelLog.total_cost)).filter(
-        in_range(FuelLog.log_date)).scalar() or 0
     maint_out = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
         in_range(MaintenanceLog.log_date)).scalar() or 0
     expenses_out = db.session.query(func.sum(Expense.amount)).filter(
@@ -2843,7 +2842,7 @@ def report_cash_flow():
     payables_out = db.session.query(func.sum(Payable.amount)).filter(
         Payable.status == 'paid', in_range(Payable.paid_date)).scalar() or 0
 
-    net_operating = operating_in + receivables_in - fuel_out - maint_out - expenses_out - commission_out - payables_out
+    net_operating = operating_in + receivables_in - maint_out - expenses_out - commission_out - payables_out
 
     vehicles_bought = [v for v in Vehicle.query.all() if df <= v.created_at.date() <= dt]
     investing_out = sum(v.acquisition_cost for v in vehicles_bought)
@@ -2867,7 +2866,7 @@ def report_cash_flow():
     return render_template('reports/cash_flow.html',
         date_from=date_from_str, date_to=date_to_str,
         operating_in=operating_in, receivables_in=receivables_in,
-        fuel_out=fuel_out, maint_out=maint_out, expenses_out=expenses_out,
+        maint_out=maint_out, expenses_out=expenses_out,
         commission_out=commission_out, payables_out=payables_out, net_operating=net_operating,
         investing_out=investing_out, net_investing=net_investing, vehicles_bought=vehicles_bought,
         loan_proceeds_in=loan_proceeds_in, loan_repay_out=loan_repay_out,
@@ -2890,14 +2889,12 @@ def report_budget():
     month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
 
     # Expense category labels are prefixed to avoid colliding with the
-    # fixed Revenue/Fuel/Maintenance keys below — an admin could otherwise
+    # fixed Revenue/Maintenance keys below — an admin could otherwise
     # name a heading "Maintenance" (as in the worked example) and silently
     # shadow the MaintenanceLog-derived figure.
     actuals = {
         'Revenue': db.session.query(func.sum(DailyLog.gross_revenue)).filter(
             DailyLog.log_date.between(month_start, month_end)).scalar() or 0,
-        'Fuel': db.session.query(func.sum(FuelLog.total_cost)).filter(
-            FuelLog.log_date.between(month_start, month_end)).scalar() or 0,
         'Maintenance': db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
             MaintenanceLog.log_date.between(month_start, month_end)).scalar() or 0,
     }
@@ -2915,7 +2912,7 @@ def report_budget():
         rows.append({'category': cat, 'budget': budget_amt, 'actual': actual_amt,
                      'variance': actual_amt - budget_amt})
 
-    categories_available = ['Revenue', 'Fuel', 'Maintenance'] + \
+    categories_available = ['Revenue', 'Maintenance'] + \
         [f'Expense: {c.display_name}' for c in ExpenseCategory.query.all()]
     return render_template('reports/budget.html', rows=rows, month=month_str,
         month_label=month_start.strftime('%B %Y'), categories=categories_available)
@@ -2971,30 +2968,26 @@ def report_fuel_efficiency():
             l_per_100km = (curr.liters / distance) * 100
             segments.append({'from_date': prev.log_date, 'to_date': curr.log_date,
                              'distance': distance, 'liters': curr.liters,
-                             'cost': curr.total_cost, 'l_per_100km': l_per_100km})
+                             'l_per_100km': l_per_100km})
         if not segments:
             continue
         total_distance = sum(s['distance'] for s in segments)
         total_liters = sum(s['liters'] for s in segments)
-        total_cost = sum(s['cost'] for s in segments)
         # Aggregate consumption over the whole period (distance-weighted), which
         # is more accurate than averaging each segment's ratio equally.
         overall_l_per_100km = (total_liters / total_distance) * 100 if total_distance else 0
         km_per_liter = (total_distance / total_liters) if total_liters else 0
-        cost_per_km = (total_cost / total_distance) if total_distance else 0
         rows.append({'vehicle': v, 'segments': segments,
                      'avg_l_per_100km': overall_l_per_100km,
                      'total_distance': total_distance, 'total_liters': total_liters,
-                     'total_cost': total_cost, 'km_per_liter': km_per_liter,
-                     'cost_per_km': cost_per_km})
+                     'km_per_liter': km_per_liter})
 
     # Fleet-wide figures aggregated across all measured distance/fuel.
     fleet_distance = sum(r['total_distance'] for r in rows)
     fleet_liters = sum(r['total_liters'] for r in rows)
-    fleet_cost = sum(r['total_cost'] for r in rows)
     fleet_avg = (fleet_liters / fleet_distance) * 100 if fleet_distance else 0
     return render_template('reports/fuel_efficiency.html', rows=rows, fleet_avg=fleet_avg,
-        fleet_distance=fleet_distance, fleet_liters=fleet_liters, fleet_cost=fleet_cost,
+        fleet_distance=fleet_distance, fleet_liters=fleet_liters,
         date_from=date_from_str, date_to=date_to_str)
 
 
@@ -3007,11 +3000,9 @@ def report_route_profitability():
 
     total_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
         DailyLog.log_date.between(df, dt)).scalar() or 0
-    total_fuel = db.session.query(func.sum(FuelLog.total_cost)).filter(
-        FuelLog.log_date.between(df, dt)).scalar() or 0
     total_maintenance = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
         MaintenanceLog.log_date.between(df, dt)).scalar() or 0
-    total_costs = total_fuel + total_maintenance
+    total_costs = total_maintenance
 
     route_data = db.session.query(
         Route.id, Route.name, Route.start_point, Route.end_point,
@@ -3146,14 +3137,13 @@ def export_income():
     w.writerow(['', '', '', 'TOTAL REVENUE', f'{total_rev:.2f}'])
     w.writerow([])
 
-    w.writerow(['FUEL EXPENSES'])
-    w.writerow(['Date', 'Vehicle', 'Liters', 'Cost/Liter (USD)', 'Total (USD)', 'Supplier'])
-    total_fuel = 0
+    w.writerow(['FUEL CONSUMPTION (not a cost — tracked in liters only)'])
+    w.writerow(['Date', 'Vehicle', 'Liters', 'Supplier'])
+    total_fuel_liters = 0
     for f in fuel:
-        w.writerow([f.log_date, f.vehicle.registration, f.liters,
-                    f'{f.cost_per_liter:.4f}', f'{f.total_cost:.2f}', f.supplier or ''])
-        total_fuel += f.total_cost
-    w.writerow(['', '', '', '', 'TOTAL FUEL', f'{total_fuel:.2f}'])
+        w.writerow([f.log_date, f.vehicle.registration, f.liters, f.supplier or ''])
+        total_fuel_liters += f.liters
+    w.writerow(['', '', 'TOTAL LITERS', f'{total_fuel_liters:.1f}'])
     w.writerow([])
 
     w.writerow(['MAINTENANCE EXPENSES'])
@@ -3175,7 +3165,7 @@ def export_income():
         total_exp += e.amount
     w.writerow(['', '', '', 'TOTAL OTHER EXPENSES', f'{total_exp:.2f}'])
     w.writerow([])
-    w.writerow(['NET PROFIT', f'{total_rev - total_fuel - total_maint - total_exp:.2f}'])
+    w.writerow(['NET PROFIT', f'{total_rev - total_maint - total_exp:.2f}'])
 
     out.seek(0)
     resp = make_response(out.getvalue())
@@ -3895,15 +3885,13 @@ def api_revenue_monthly():
         end = date(y + 1, 1, 1) if m == 12 else date(y, m + 1, 1)
         rev = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
             DailyLog.log_date >= start, DailyLog.log_date < end).scalar() or 0
-        fuel = db.session.query(func.sum(FuelLog.total_cost)).filter(
-            FuelLog.log_date >= start, FuelLog.log_date < end).scalar() or 0
         maint = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
             MaintenanceLog.log_date >= start, MaintenanceLog.log_date < end).scalar() or 0
         data.append({
             'month': start.strftime('%b %Y'),
             'revenue': float(rev),
-            'expenses': float(fuel + maint),
-            'profit': float(rev - fuel - maint),
+            'expenses': float(maint),
+            'profit': float(rev - maint),
         })
     return jsonify(data)
 
@@ -3931,11 +3919,9 @@ def api_vehicle_performance():
 def api_expenses_breakdown():
     today = date.today()
     m_start = today.replace(day=1)
-    fuel = db.session.query(func.sum(FuelLog.total_cost)).filter(
-        FuelLog.log_date >= m_start).scalar() or 0
     maint = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
         MaintenanceLog.log_date >= m_start).scalar() or 0
-    return jsonify({'fuel': float(fuel), 'maintenance': float(maint)})
+    return jsonify({'maintenance': float(maint)})
 
 
 # ─────────────────────────────────────────────────────────────

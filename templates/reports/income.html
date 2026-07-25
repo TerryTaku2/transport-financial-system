@@ -46,10 +46,6 @@
     <div class="kpi-label">Gross Revenue</div>
     <div class="kpi-value">{{ gross_revenue|currency }}</div>
   </div>
-  <div class="kpi-card kpi-amber">
-    <div class="kpi-label">Fuel Cost</div>
-    <div class="kpi-value">{{ fuel_cost|currency }}</div>
-  </div>
   <div class="kpi-card kpi-red">
     <div class="kpi-label">Maintenance Cost</div>
     <div class="kpi-value">{{ maintenance_cost|currency }}</div>
@@ -67,7 +63,6 @@
     <table>
       <tbody>
         <tr><td>Gross Revenue</td><td class="text-right">{{ gross_revenue|currency }}</td></tr>
-        <tr><td>Less: Fuel Expenses</td><td class="text-right text-warning">({{ fuel_cost|currency }})</td></tr>
         <tr><td>Less: Maintenance Expenses</td><td class="text-right text-danger">({{ maintenance_cost|currency }})</td></tr>
         <tr><td>Less: Vehicle-tagged Expenses</td><td class="text-right text-warning">({{ vehicle_expenses|currency }})</td></tr>
         {% if not vehicle_id %}
@@ -123,7 +118,6 @@
         <tr>
           <th>Vehicle</th>
           <th class="text-right">Revenue</th>
-          <th class="text-right">Fuel</th>
           <th class="text-right">Maintenance</th>
           <th class="text-right">Expenses</th>
           <th class="text-right">Net Profit</th>
@@ -136,7 +130,6 @@
         <tr>
           <td><strong>{{ row.vehicle.registration }}</strong><div class="form-hint">{{ row.vehicle.make }} {{ row.vehicle.model }}</div></td>
           <td class="text-right">{{ row.revenue|currency }}</td>
-          <td class="text-right">({{ row.fuel|currency }})</td>
           <td class="text-right">({{ row.maintenance|currency }})</td>
           <td class="text-right">({{ row.expenses|currency }})</td>
           <td class="text-right {% if row.net_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ row.net_profit|currency }}</strong></td>
