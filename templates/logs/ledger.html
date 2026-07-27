@@ -117,6 +117,15 @@
           <input type="text" id="distance-preview" readonly placeholder="—">
           <div class="form-hint">Current mileage − previous mileage{% if latest_odometer is not none %} ({{ '%.0f'|format(latest_odometer) }}){% endif %}.</div>
         </div>
+        <div class="form-group">
+          <label>Garnish (USD)</label>
+          <input type="number" name="garnish" step="0.01" min="0" placeholder="0.00">
+          <div class="form-hint">Deducted from this driver's commission when they miss their revenue target. Needs a driver selected.</div>
+        </div>
+        <div class="form-group">
+          <label>Reason for Shortfall</label>
+          <input type="text" name="reason_for_shortfall" maxlength="255" placeholder="Why the target was missed">
+        </div>
       </div>
       <button type="submit" class="btn btn-primary"><i data-feather="plus"></i> Add Entry</button>
     </form>
@@ -152,10 +161,19 @@
     <div class="kpi-label">Total {{ vehicle.fuel_type|capitalize }} (Liters)</div>
     <div class="kpi-value">{{ '%.1f'|format(total_diesel_liters) }} L</div>
   </div>
+  <div class="kpi-card kpi-red">
+    <div class="kpi-label">Total Garnish</div>
+    <div class="kpi-value">{{ total_garnish|currency }}</div>
+  </div>
 </div>
 
 <div class="card">
-  <div class="card-header"><h3>{{ vehicle.registration }} — {{ {'today': 'Today', 'week': 'This Week', 'month': 'This Month', 'all': 'All Time'}[period] }} Transactions</h3></div>
+  <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+    <h3>{{ vehicle.registration }} — {{ {'today': 'Today', 'week': 'This Week', 'month': 'This Month', 'all': 'All Time'}[period] }} Transactions</h3>
+    {% if vehicle.daily_target %}
+    <div class="form-hint" style="margin:0;">Daily target: <strong>{{ vehicle.daily_target|currency }}</strong> — days below it are flagged automatically. <a href="{{ url_for('report_shortfalls') }}">See Revenue Shortfalls</a></div>
+    {% endif %}
+  </div>
   {% if rows %}
   <div class="table-wrap">
     <table>
@@ -167,6 +185,11 @@
           <th class="text-right">{{ vehicle.fuel_type|capitalize }} (L)</th>
           <th class="text-right">Mileage</th>
           <th class="text-right">Distance Travelled</th>
+          <th class="text-right">Garnish</th>
+          <th>Reason for Shortfall</th>
+          {% if vehicle.daily_target %}
+          <th>Target Status</th>
+          {% endif %}
         </tr>
       </thead>
       <tbody>
@@ -174,10 +197,23 @@
         <tr>
           <td>{{ row.date }}</td>
           <td>{{ row.driver_names or '—' }}</td>
-          <td class="text-right">{{ row.fare|currency if row.fare else '—' }}</td>
+          <td class="text-right {% if row.shortfall %}text-danger{% endif %}">{{ row.fare|currency if row.fare else '—' }}</td>
           <td class="text-right">{{ '%.1f'|format(row.diesel_liters) if row.diesel_liters else '—' }}</td>
           <td class="text-right">{{ row.odometer if row.odometer is not none else '—' }}</td>
           <td class="text-right">{{ '%.0f'|format(row.distance) if row.distance is not none else '—' }}</td>
+          <td class="text-right {% if row.garnish %}text-danger{% endif %}">{{ row.garnish|currency if row.garnish else '—' }}</td>
+          <td>{{ row.reason_for_shortfall or '—' }}</td>
+          {% if vehicle.daily_target %}
+          <td>
+            {% if row.driver_names is none %}
+            &mdash;
+            {% elif row.shortfall %}
+            <span class="badge badge-red">Shortfall {{ row.shortfall|currency }}</span>
+            {% else %}
+            <span class="badge badge-green">On Target</span>
+            {% endif %}
+          </td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>
@@ -188,6 +224,11 @@
           <td class="text-right">{{ '%.1f'|format(total_diesel_liters) }}</td>
           <td></td>
           <td></td>
+          <td class="text-right">{{ total_garnish|currency }}</td>
+          <td></td>
+          {% if vehicle.daily_target %}
+          <td></td>
+          {% endif %}
         </tr>
       </tfoot>
     </table>

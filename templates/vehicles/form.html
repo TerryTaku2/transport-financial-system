@@ -49,6 +49,12 @@
           </select>
         </div>
         <div class="form-group">
+          <label>Daily Revenue Target (USD)</label>
+          <input type="number" name="daily_target" step="0.01" min="0" placeholder="e.g. 100.00"
+                 value="{{ vehicle.daily_target if vehicle and vehicle.daily_target is not none else '' }}">
+          <div class="form-hint">Days this vehicle's fare falls short flag on the Revenue Shortfalls report. Leave blank to not track a target.</div>
+        </div>
+        <div class="form-group">
           <label>Status</label>
           <select name="status">
             <option value="active" {% if vehicle and vehicle.status=='active' %}selected{% endif %}>Active</option>

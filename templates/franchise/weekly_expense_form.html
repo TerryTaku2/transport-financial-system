@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block title %}Add Weekly Expense{% endblock %}
+{% block page_title %}Add Weekly Expense{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Add Weekly Expense</h1>
+    <div class="subtitle">A one-off cost for the week, deducted from Net Profit on Weekly Analysis</div>
+  </div>
+  <a href="{{ url_for('franchise_weekly_expenses') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Weekly Expenses</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Any Date in the Week<span class="req">*</span></label>
+          <input type="date" name="week_start" required value="{{ today }}">
+          <div class="form-hint">Rounded to that week's Monday automatically.</div>
+        </div>
+        <div class="form-group">
+          <label>Label<span class="req">*</span></label>
+          <input type="text" name="label" required placeholder="e.g. Bridge, Morning Tickets, Monday Payments">
+        </div>
+        <div class="form-group">
+          <label>Amount (USD)<span class="req">*</span></label>
+          <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00">
+        </div>
+      </div>
+      <div class="form-group mb-16">
+        <label>Notes</label>
+        <textarea name="notes" rows="2"></textarea>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Expense</button>
+        <a href="{{ url_for('franchise_weekly_expenses') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

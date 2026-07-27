@@ -103,6 +103,9 @@
       <a href="{{ url_for('report_payroll') }}" class="nav-item {% if request.endpoint == 'report_payroll' %}active{% endif %}">
         <i data-feather="dollar-sign"></i> Payroll
       </a>
+      <a href="{{ url_for('report_shortfalls') }}" class="nav-item {% if request.endpoint == 'report_shortfalls' %}active{% endif %}">
+        <i data-feather="alert-triangle"></i> Revenue Shortfalls
+      </a>
       <a href="{{ url_for('report_financial_position') }}" class="nav-item {% if request.endpoint == 'report_financial_position' %}active{% endif %}">
         <i data-feather="pie-chart"></i> Financial Position
       </a>
@@ -165,6 +168,9 @@
       </a>
       <a href="{{ url_for('report_franchise_weekly') }}" class="nav-item {% if request.endpoint == 'report_franchise_weekly' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Weekly Analysis
+      </a>
+      <a href="{{ url_for('franchise_weekly_expenses') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_weekly_expense') %}active{% endif %}">
+        <i data-feather="minus-circle"></i> Weekly Expenses
       </a>
       <a href="{{ url_for('report_franchise_consolidated') }}" class="nav-item {% if request.endpoint == 'report_franchise_consolidated' %}active{% endif %}">
         <i data-feather="pie-chart"></i> Consolidated P&amp;L

@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+{% block title %}Weekly Expenses{% endblock %}
+{% block page_title %}Franchise — Weekly Expenses{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Weekly Expenses</h1>
+    <div class="subtitle">One-off weekly costs (e.g. Bridge, Morning Tickets) deducted from Net Profit on Weekly Analysis</div>
+  </div>
+  <a href="{{ url_for('franchise_weekly_expense_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Expense</a>
+</div>
+
+<div class="card">
+  {% if entries.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Week Of</th>
+          <th>Label</th>
+          <th class="text-right">Amount</th>
+          <th>Notes</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries.items %}
+        <tr>
+          <td>{{ e.week_start }}</td>
+          <td>{{ e.label }}</td>
+          <td class="text-right">{{ e.amount|currency }}</td>
+          <td>{{ e.notes or '—' }}</td>
+          <td>
+            {% if current_user.role == 'admin' %}
+            <form method="POST" action="{{ url_for('franchise_weekly_expense_delete', eid=e.id) }}" data-confirm="Delete this weekly expense?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if entries.pages > 1 %}
+  <div class="pagination">
+    {% if entries.has_prev %}<a href="{{ url_for('franchise_weekly_expenses', page=entries.prev_num) }}">&laquo; Prev</a>{% endif %}
+    <span>Page {{ entries.page }} of {{ entries.pages }}</span>
+    {% if entries.has_next %}<a href="{{ url_for('franchise_weekly_expenses', page=entries.next_num) }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🧾</div>
+    <p>No weekly expenses recorded yet. <a href="{{ url_for('franchise_weekly_expense_add') }}">Add the first one</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

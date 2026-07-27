@@ -117,6 +117,10 @@ class Vehicle(db.Model):
     acquisition_cost = db.Column(db.Float, default=0.0)
     status = db.Column(db.String(20), default='active')
     fuel_type = db.Column(db.String(10), default='diesel')
+    # Expected daily fare for this vehicle, set by the admin. Null means no
+    # target is tracked for this vehicle — it's excluded from shortfall
+    # flagging (see report_shortfalls / DailyLog.garnish).
+    daily_target = db.Column(db.Float, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     documents = db.relationship('VehicleDocument', backref='vehicle',
@@ -220,6 +224,12 @@ class DailyLog(db.Model):
     log_date = db.Column(db.Date, nullable=False, default=date.today)
     trips_completed = db.Column(db.Integer, default=0)
     gross_revenue = db.Column(db.Float, nullable=False, default=0.0)
+    # Garnished from the driver/conductor's commission for this day — typically
+    # because they fell short of the admin-set revenue target and the admin
+    # decided not to pay out the full percentage. See reason_for_shortfall.
+    # Netted against commission in the payroll report.
+    garnish = db.Column(db.Float, nullable=False, default=0.0)
+    reason_for_shortfall = db.Column(db.Text)
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id'))
@@ -572,6 +582,22 @@ class FranchiseCollection(db.Model):
     vehicle_id = db.Column(db.Integer, db.ForeignKey('franchise_vehicles.id'), nullable=False)
     entry_date = db.Column(db.Date, nullable=False)
     frequency = db.Column(db.String(10), nullable=False, default='daily')  # 'daily' or 'weekly'
+    amount = db.Column(db.Float, nullable=False)
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class FranchiseWeeklyExpense(db.Model):
+    """A one-off weekly cost (e.g. 'Bridge', 'Morning Tickets', 'Monday
+    Payments') deducted from that week's franchise income to get Net Profit
+    on the Weekly Analysis report. Free-form label rather than fixed
+    categories — in practice this list changes week to week, so it isn't
+    modeled as columns the way FranchiseIncome's expenditure categories are."""
+    __tablename__ = 'franchise_weekly_expenses'
+    id = db.Column(db.Integer, primary_key=True)
+    week_start = db.Column(db.Date, nullable=False)  # Monday of the week this expense applies to
+    label = db.Column(db.String(100), nullable=False)
     amount = db.Column(db.Float, nullable=False)
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
@@ -1209,6 +1235,245 @@ def import_franchise_income_rows(file_rows, created_by=None):
     return imported, errors, error_rows, created_records
 
 
+# ─────────────────────────────────────────────────────────────
+# Franchise Workbook Import — reads a whole multi-sheet Excel workbook (like
+# the franchise's own monthly file: one sheet per month, each holding a
+# reconciliation schedule and two vehicle-collection grids) and sorts each
+# table it finds into the right place, by recognizing each table's own
+# headers rather than requiring one flat header row per sheet.
+# ─────────────────────────────────────────────────────────────
+MAX_WORKBOOK_IMPORT_CELLS = 500000
+
+# Row labels from the franchise's own "Weekly Analysis" recap block — seen
+# while hunting for vehicle-collection grids, these confirm we've wandered
+# into that summary table rather than a real per-vehicle grid, so it's
+# skipped rather than mis-imported as vehicles named "Net Profit".
+_FRANCHISE_ANALYSIS_LABELS = {
+    'daily franchise', 'weekly franchise', 'total income', 'less expenses',
+    'bridge', 'morning tickets', 'monday payments', 'tuesday payments',
+    'net profit', 'total net profit', 'day', 'date', 'total',
+}
+
+
+def _reconciliation_header_blocks(ws):
+    """Find every 'Franchise Collection Reconciliation Schedule' header block
+    in a worksheet (some sheets repeat it once per week) by its column
+    labels — DATE / INCOME [$] / EXPENDITURE [$] — regardless of where on
+    the sheet it sits or what the sheet is named."""
+    blocks = []
+    for row in ws.iter_rows():
+        upcells = {c.column: c.value.strip().upper() for c in row if isinstance(c.value, str)}
+        date_col = next((col for col, v in upcells.items() if v == 'DATE'), None)
+        income_col = next((col for col, v in upcells.items() if v == 'INCOME [$]'), None)
+        exp_col = next((col for col, v in upcells.items() if v == 'EXPENDITURE [$]'), None)
+        deposited_col = next((col for col, v in upcells.items() if v == 'DEPOSITED [$]'), None)
+        if date_col and income_col and exp_col:
+            blocks.append(dict(header_row=row[0].row, date_col=date_col,
+                                income_col=income_col, exp_col=exp_col, deposited_col=deposited_col))
+    return blocks
+
+
+def _extract_reconciliation_block(ws, block):
+    """Turn one reconciliation header block into rows shaped for
+    import_franchise_income_rows (keys matching FRANCHISE_AMOUNT_FIELDS)."""
+    header_row, date_col, income_col, exp_col, deposited_col = (
+        block['header_row'], block['date_col'], block['income_col'], block['exp_col'], block['deposited_col'])
+    weekly_col = next((c for c in range(exp_col + 1, exp_col + 20)
+                        if str(ws.cell(row=header_row + 1, column=c).value or '').strip().upper() in ('WEEKLY', 'WEELY')), None)
+
+    def g(r, col):
+        if col is None:
+            return 0
+        v = ws.cell(row=r, column=col).value
+        return v if isinstance(v, (int, float)) else 0
+
+    rows = []
+    r = header_row + 3
+    blank_streak = 0
+    while blank_streak < 2:
+        date_val = ws.cell(row=r, column=date_col).value
+        d = date_val.date() if isinstance(date_val, datetime) else date_val if isinstance(date_val, date) else None
+        if d is None:
+            blank_streak += 1
+            r += 1
+            continue
+        blank_streak = 0
+        rows.append({
+            'date': d.isoformat(), 'description': '',
+            'income_daily': g(r, income_col), 'income_weekly': g(r, income_col + 1),
+            'exp_traffic_fines_daily': g(r, exp_col), 'exp_facilitation_fees_daily': g(r, exp_col + 1),
+            'exp_workshop_daily': g(r, exp_col + 2), 'exp_wages_daily': g(r, exp_col + 3),
+            'exp_traffic_fines_weekly': g(r, weekly_col), 'exp_facilitation_fees_weekly': g(r, weekly_col + 1 if weekly_col else None),
+            'exp_workshop_weekly': g(r, weekly_col + 2 if weekly_col else None), 'exp_wages_weekly': g(r, weekly_col + 3 if weekly_col else None),
+            'deposited': g(r, deposited_col),
+        })
+        r += 1
+    return rows
+
+
+def _vehicle_matrix_blocks(ws):
+    """Find every vehicle x date collection grid in a worksheet: a row of
+    ≥3 consecutive dates starting at column B, above rows whose column A
+    holds a vehicle plate/name and whose other columns hold amounts paid on
+    the matching date. Frequency ('daily' vs 'weekly') is read from the
+    nearest section label above the grid (e.g. "FRANCHISE DAILY
+    COLLECTIONS"), falling back to the sheet title, then 'daily'."""
+    blocks = []
+    for row in ws.iter_rows():
+        date_cols = []
+        for c in range(2, ws.max_column + 1):
+            v = ws.cell(row=row[0].row, column=c).value
+            if isinstance(v, (datetime, date)):
+                date_cols.append(c)
+            elif date_cols:
+                break
+        if len(date_cols) < 3:
+            continue
+        # Confirm this is really a vehicle grid, not the "Weekly Analysis"
+        # recap block (which also has a row of ~7 dates above summary labels).
+        next_a = ws.cell(row=row[0].row + 1, column=1).value
+        if next_a is None or str(next_a).strip().lower() in _FRANCHISE_ANALYSIS_LABELS:
+            continue
+
+        label = ''
+        for lookback in range(1, 15):
+            v = ws.cell(row=row[0].row - lookback, column=1).value
+            if isinstance(v, str) and v.strip():
+                label = v.strip().upper()
+                break
+        if 'DAILY' in label:
+            frequency = 'daily'
+        elif 'WEEKLY' in label:
+            frequency = 'weekly'
+        else:
+            title = ws.cell(row=1, column=1).value
+            frequency = 'weekly' if isinstance(title, str) and 'WEEKLY' in title.upper() else 'daily'
+
+        blocks.append(dict(date_row=row[0].row, date_cols=date_cols,
+                           data_start=row[0].row + 1, frequency=frequency))
+    return blocks
+
+
+_PLATE_RE = re.compile(r'^([A-Z]{2,3}\s?\d{3,5})\s*(.*)$')
+
+
+def _split_plate_name(raw):
+    raw = (raw or '').strip()
+    m = _PLATE_RE.match(raw.upper())
+    if not m:
+        return raw.upper(), (raw.upper().title() or '(unnamed)')
+    plate = re.sub(r'\s+', ' ', m.group(1).strip())
+    name = m.group(2).strip().title() if m.group(2).strip() else '(unnamed)'
+    return plate, name
+
+
+def _extract_vehicle_matrix_block(ws, block):
+    """Turn one vehicle grid into rows of {plate, name, date, amount, frequency}."""
+    date_cols = {c: (ws.cell(row=block['date_row'], column=c).value.date()
+                      if isinstance(ws.cell(row=block['date_row'], column=c).value, datetime)
+                      else ws.cell(row=block['date_row'], column=c).value)
+                 for c in block['date_cols']}
+    rows = []
+    r = block['data_start']
+    blank_streak = 0
+    while blank_streak < 3:
+        plate_raw = ws.cell(row=r, column=1).value
+        if plate_raw in (None, ''):
+            blank_streak += 1
+            r += 1
+            continue
+        if str(plate_raw).strip().lower() in _FRANCHISE_ANALYSIS_LABELS:
+            break  # ran into the next section (e.g. a "TOTAL INCOME" row)
+        blank_streak = 0
+        plate, name = _split_plate_name(str(plate_raw))
+        for c, d in date_cols.items():
+            amt = ws.cell(row=r, column=c).value
+            if isinstance(amt, (int, float)) and amt:
+                rows.append(dict(plate=plate, name=name, date=d.isoformat(),
+                                  amount=float(amt), frequency=block['frequency']))
+        r += 1
+    return rows
+
+
+def import_franchise_workbook(file, created_by=None):
+    """Read every sheet of an uploaded workbook, auto-detect every
+    reconciliation-schedule and vehicle-collection table in it by header
+    text (not sheet name or position), and sort each into FranchiseIncome /
+    FranchiseVehicle / FranchiseCollection. Returns a summary dict; does not
+    commit — the caller decides when to commit/rollback."""
+    try:
+        wb = openpyxl.load_workbook(file, data_only=True)
+    except Exception:
+        raise ValueError('Could not read that file. Make sure it is a valid Excel workbook.')
+
+    recon_rows, matrix_rows = [], []
+    cell_budget = MAX_WORKBOOK_IMPORT_CELLS
+    for ws in wb.worksheets:
+        for block in _reconciliation_header_blocks(ws):
+            recon_rows.extend(_extract_reconciliation_block(ws, block))
+        for block in _vehicle_matrix_blocks(ws):
+            matrix_rows.extend(_extract_vehicle_matrix_block(ws, block))
+        cell_budget -= ws.max_row * ws.max_column
+        if cell_budget < 0:
+            raise ValueError('That workbook is too large to import in one pass — split it into smaller files.')
+
+    # A table can legitimately repeat across sheets (the source file's own
+    # "Weekly Analysis" tab re-states some reconciliation rows already on
+    # the monthly sheet) — first occurrence wins rather than erroring.
+    seen_dates = set()
+    deduped_recon = []
+    for row in recon_rows:
+        if row['date'] in seen_dates:
+            continue
+        seen_dates.add(row['date'])
+        deduped_recon.append(row)
+
+    seen_matrix = set()
+    deduped_matrix = []
+    for row in matrix_rows:
+        key = (row['plate'], row['date'], row['frequency'])
+        if key in seen_matrix:
+            continue
+        seen_matrix.add(key)
+        deduped_matrix.append(row)
+
+    income_imported, income_errors, income_error_rows, income_records = \
+        import_franchise_income_rows(deduped_recon, created_by=created_by)
+
+    vehicle_by_plate = {v.number_plate: v for v in FranchiseVehicle.query.all()}
+    vehicles_created, collections_created, collections_skipped = 0, 0, 0
+    created_records = list(income_records)
+    for row in deduped_matrix:
+        vehicle = vehicle_by_plate.get(row['plate'])
+        if not vehicle:
+            vehicle = FranchiseVehicle(number_plate=row['plate'], franchisee_name=row['name'], status='active')
+            db.session.add(vehicle)
+            db.session.flush()
+            vehicle_by_plate[row['plate']] = vehicle
+            created_records.append(('franchise_vehicles', vehicle.id))
+            vehicles_created += 1
+        entry_date = parse_import_date(row['date'])
+        if FranchiseCollection.query.filter_by(
+                vehicle_id=vehicle.id, entry_date=entry_date, frequency=row['frequency']).first():
+            collections_skipped += 1
+            continue
+        collection = FranchiseCollection(
+            vehicle_id=vehicle.id, entry_date=entry_date, frequency=row['frequency'],
+            amount=row['amount'], created_by=created_by,
+        )
+        db.session.add(collection)
+        db.session.flush()
+        created_records.append(('franchise_collections', collection.id))
+        collections_created += 1
+
+    return dict(
+        income_imported=income_imported, income_errors=income_errors, income_error_rows=income_error_rows,
+        vehicles_created=vehicles_created, collections_created=collections_created,
+        collections_skipped=collections_skipped, created_records=created_records,
+        total_rows=len(recon_rows) + len(matrix_rows),
+    )
+
+
 def form_float(form, field, label=None, required=True, default=None, min_value=None):
     label = label or field.replace('_', ' ').capitalize()
     raw = (form.get(field) or '').strip()
@@ -1601,6 +1866,7 @@ def vehicle_add():
             acquisition_cost=form_float(request.form, 'acquisition_cost', required=False, default=0, min_value=0),
             status=request.form.get('status', 'active'),
             fuel_type=fuel_type,
+            daily_target=form_float(request.form, 'daily_target', required=False, min_value=0),
         )
         db.session.add(v)
         db.session.flush()
@@ -1644,6 +1910,7 @@ def vehicle_edit(vid):
         if fuel_type not in ('diesel', 'petrol'):
             raise ValueError('Fuel type must be Diesel or Petrol.')
         v.fuel_type = fuel_type
+        v.daily_target = form_float(request.form, 'daily_target', required=False, min_value=0)
         log_audit('UPDATE', 'vehicles', v.id, f'Updated vehicle {v.registration}')
         db.session.commit()
         flash(f'Vehicle {v.registration} updated.', 'success')
@@ -1987,13 +2254,16 @@ def daily_log_delete(lid):
 # day/week/month. Diesel liters are optional since fuel is often paid
 # for as a flat cash amount without a metered liter reading.
 # ─────────────────────────────────────────────────────────────
-def vehicle_ledger_rows(vehicle_id, df=None, dt=None):
+def vehicle_ledger_rows(vehicle_id, df=None, dt=None, daily_target=None):
     """Merge DailyLog (fare, any driver) and FuelLog (diesel liters/mileage)
     for this vehicle by date, with distance computed the same way the Fuel
     Efficiency report does — delta from the previous odometer reading.
     If df/dt are given, only rows in that range are returned, but the
     distance baseline still uses the last odometer reading before df so
-    the first visible row isn't wrongly shown as having no distance."""
+    the first visible row isn't wrongly shown as having no distance.
+    If daily_target is given, each day with a driver entry is flagged
+    against it (see 'shortfall' on each row) — the same target used by
+    the Revenue Shortfalls report, surfaced here at entry time too."""
     daily_q = DailyLog.query.filter_by(vehicle_id=vehicle_id)
     fuel_q = FuelLog.query.filter_by(vehicle_id=vehicle_id)
     if df:
@@ -2022,9 +2292,12 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None):
     rows = []
     total_fare = 0.0
     total_diesel_liters = 0.0
+    total_garnish = 0.0
     for d in all_dates:
         daily_logs = daily_by_date.get(d, [])
         fare = sum(l.gross_revenue for l in daily_logs)
+        garnish = sum(l.garnish for l in daily_logs)
+        reason_for_shortfall = '; '.join(n for n in (l.reason_for_shortfall for l in daily_logs) if n) or None
         driver_names = ', '.join(sorted({l.driver.name for l in daily_logs})) or None
         fuel_logs = fuel_by_date.get(d, [])
         diesel_liters = sum(f.liters for f in fuel_logs)
@@ -2038,12 +2311,20 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None):
 
         total_fare += fare
         total_diesel_liters += diesel_liters
+        total_garnish += garnish
+        # Only flag a day that actually has a driver/fare entry — a
+        # fuel-only row shouldn't read as a missed revenue target.
+        shortfall = None
+        if daily_target and daily_logs and fare < daily_target:
+            shortfall = daily_target - fare
         rows.append({
             'date': d, 'driver_names': driver_names, 'fare': fare,
+            'garnish': garnish, 'reason_for_shortfall': reason_for_shortfall,
+            'shortfall': shortfall,
             'diesel_liters': diesel_liters,
             'odometer': odometer, 'distance': distance,
         })
-    return rows, total_fare, total_diesel_liters
+    return rows, total_fare, total_diesel_liters, total_garnish
 
 
 def resolve_ledger_period(period, today):
@@ -2073,10 +2354,11 @@ def driver_ledger():
     vehicle_id = request.args.get('vehicle_id', '')
     vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else (all_vehicles[0] if all_vehicles else None)
 
-    rows, total_fare, total_diesel_liters = [], 0.0, 0.0
+    rows, total_fare, total_diesel_liters, total_garnish = [], 0.0, 0.0, 0.0
     latest_odometer = None
     if vehicle:
-        rows, total_fare, total_diesel_liters = vehicle_ledger_rows(vehicle.id, df, dt)
+        rows, total_fare, total_diesel_liters, total_garnish = vehicle_ledger_rows(
+            vehicle.id, df, dt, daily_target=vehicle.daily_target)
         latest_fuel = FuelLog.query.filter(
             FuelLog.vehicle_id == vehicle.id, FuelLog.odometer.isnot(None)
         ).order_by(FuelLog.log_date.desc(), FuelLog.id.desc()).first()
@@ -2086,6 +2368,7 @@ def driver_ledger():
     return render_template('logs/ledger.html', vehicles=all_vehicles, vehicle=vehicle,
         drivers=all_drivers,
         rows=rows, total_fare=total_fare, total_diesel_liters=total_diesel_liters,
+        total_garnish=total_garnish,
         period=period, date_from=date_from_str, date_to=date_to_str,
         today=today.strftime('%Y-%m-%d'), latest_odometer=latest_odometer)
 
@@ -2108,27 +2391,33 @@ def driver_ledger_add():
         log_date = parse_date(request.form['log_date'])
         driver_id = form_int(request.form, 'driver_id', required=False)
         fare = form_float(request.form, 'fare', required=False, min_value=0)
+        garnish = form_float(request.form, 'garnish', required=False, min_value=0)
+        reason_for_shortfall = request.form.get('reason_for_shortfall', '').strip() or None
         diesel_liters = form_float(request.form, 'diesel_liters', required=False, min_value=0)
         mileage = form_float(request.form, 'mileage', required=False, min_value=0)
 
-        if fare is not None:
+        if fare is not None or garnish is not None:
             if not driver_id:
-                raise ValueError('Select a driver to record fare against.')
+                raise ValueError('Select a driver to record fare/garnish against.')
         elif driver_id:
-            raise ValueError('Fare is required when a driver is selected.')
+            raise ValueError('Fare or a garnish is required when a driver is selected.')
 
-        if fare is None and diesel_liters is None and mileage is None:
-            raise ValueError('Enter at least a fare, diesel liters, or mileage reading.')
+        if fare is None and diesel_liters is None and mileage is None and garnish is None:
+            raise ValueError('Enter at least a fare, diesel liters, mileage reading, or garnish.')
 
-        if fare is not None:
+        if fare is not None or garnish is not None:
             driver = Driver.query.get(driver_id)
             conductor = driver.paired_conductors[0] if driver and driver.paired_conductors else None
             daily = DailyLog(
                 vehicle_id=vehicle_id, driver_id=driver_id, conductor_id=conductor.id if conductor else None,
-                log_date=log_date, gross_revenue=fare, created_by=current_user.id,
+                log_date=log_date, gross_revenue=fare or 0.0,
+                garnish=garnish or 0.0, reason_for_shortfall=reason_for_shortfall,
+                created_by=current_user.id,
             )
             db.session.add(daily)
-            log_audit('CREATE', 'daily_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: fare {fare}')
+            log_audit('CREATE', 'daily_logs', None,
+                       f'Ledger entry for {vehicle.registration} on {log_date}: fare {fare or 0.0}' +
+                       (f', garnish {garnish} ({reason_for_shortfall})' if garnish else ''))
 
         if diesel_liters is not None:
             fuel = FuelLog(
@@ -2145,6 +2434,17 @@ def driver_ledger_add():
 
         db.session.commit()
         flash('Ledger entry recorded.', 'success')
+
+        # Auto-flag a shortfall right at entry time, not just later on the
+        # Revenue Shortfalls report — checks the day's total fare (this entry
+        # plus any others already logged for the same vehicle/date).
+        if fare is not None and vehicle.daily_target:
+            day_total = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+                DailyLog.vehicle_id == vehicle_id, DailyLog.log_date == log_date).scalar() or 0
+            if day_total < vehicle.daily_target:
+                gap = vehicle.daily_target - day_total
+                flash(f'Flagged: {vehicle.registration} is ${gap:,.2f} short of its ${vehicle.daily_target:,.2f} '
+                      f'daily target on {log_date} — see Revenue Shortfalls to garnish.', 'warning')
     except KeyError as e:
         db.session.rollback()
         flash(f'Missing required field: {e}', 'danger')
@@ -2166,12 +2466,13 @@ def driver_ledger_export():
         return redirect(url_for('driver_ledger'))
 
     period, df, dt = resolve_ledger_period(request.args.get('period', 'month'), date.today())
-    rows, _, _ = vehicle_ledger_rows(vehicle.id, df, dt)
+    rows, _, _, _ = vehicle_ledger_rows(vehicle.id, df, dt)
 
     fuel_label = vehicle.fuel_type.capitalize()
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(['Date', 'Driver', 'Fare', f'{fuel_label} Liters', 'Mileage', 'Distance'])
+    w.writerow(['Date', 'Driver', 'Fare', f'{fuel_label} Liters', 'Mileage', 'Distance',
+                'Garnish', 'Reason for Shortfall'])
     for row in rows:
         w.writerow([
             row['date'], row['driver_names'] or '',
@@ -2179,6 +2480,8 @@ def driver_ledger_export():
             row['diesel_liters'] or '',
             row['odometer'] if row['odometer'] is not None else '',
             row['distance'] if row['distance'] is not None else '',
+            f"{row['garnish']:.2f}" if row['garnish'] else '',
+            row['reason_for_shortfall'] or '',
         ])
     out.seek(0)
     resp = make_response(out.getvalue())
@@ -3030,10 +3333,17 @@ def report_payroll():
                                      func.count(DailyLog.id)).filter(
             DailyLog.conductor_id == d.id,
             DailyLog.log_date.between(df, dt)).first()
+        garnish_driven = db.session.query(func.sum(DailyLog.garnish)).filter(
+            DailyLog.driver_id == d.id,
+            DailyLog.log_date.between(df, dt)).scalar() or 0
+        garnish_conducted = db.session.query(func.sum(DailyLog.garnish)).filter(
+            DailyLog.conductor_id == d.id,
+            DailyLog.log_date.between(df, dt)).scalar() or 0
 
         rev = (driven[0] or 0) + (conducted[0] or 0)
         days = (driven[1] or 0) + (conducted[1] or 0)
-        if days == 0:
+        garnish = garnish_driven + garnish_conducted
+        if days == 0 and not garnish:
             continue
         rate = d.commission_rate if d.commission_rate is not None else (
             dr_rate if d.role == 'driver' else co_rate)
@@ -3047,16 +3357,69 @@ def report_payroll():
             'days_worked': days,
             'rate_pct': rate * 100,
             'commission': commission,
+            'garnish': garnish,
             'paid': paid,
-            'outstanding': commission - paid,
+            'outstanding': commission - garnish - paid,
         })
 
     total_commissions = sum(e['commission'] for e in earnings)
+    total_garnish = sum(e['garnish'] for e in earnings)
     total_paid = sum(e['paid'] for e in earnings)
     total_outstanding = sum(e['outstanding'] for e in earnings)
     return render_template('reports/payroll.html',
         earnings=earnings, total_commissions=total_commissions,
+        total_garnish=total_garnish,
         total_paid=total_paid, total_outstanding=total_outstanding,
+        date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/reports/shortfalls')
+@login_required
+@permission_required('reports')
+def report_shortfalls():
+    """Flags every vehicle/day where actual fare fell below that vehicle's
+    admin-set daily_target — vehicles with no target set are skipped
+    entirely. Each flagged day shows how much garnish (if any) has already
+    been applied against the shortfall, so the admin can see at a glance
+    what's still unresolved and act on it inline."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    rows = []
+    targeted_vehicles = Vehicle.query.filter(
+        Vehicle.daily_target.isnot(None), Vehicle.daily_target > 0
+    ).order_by(Vehicle.registration).all()
+    for v in targeted_vehicles:
+        logs = DailyLog.query.filter(
+            DailyLog.vehicle_id == v.id, DailyLog.log_date.between(df, dt)
+        ).all()
+        by_date = {}
+        for log in logs:
+            by_date.setdefault(log.log_date, []).append(log)
+        for d, day_logs in by_date.items():
+            fare = sum(l.gross_revenue for l in day_logs)
+            if fare >= v.daily_target:
+                continue
+            garnish = sum(l.garnish for l in day_logs)
+            reasons = '; '.join(n for n in (l.reason_for_shortfall for l in day_logs) if n) or None
+            drivers = sorted({l.driver for l in day_logs}, key=lambda dr: dr.name)
+            shortfall = v.daily_target - fare
+            rows.append({
+                'vehicle': v, 'date': d, 'drivers': drivers,
+                'target': v.daily_target, 'fare': fare, 'shortfall': shortfall,
+                'garnish': garnish, 'remaining': shortfall - garnish,
+                'reason_for_shortfall': reasons,
+            })
+
+    rows.sort(key=lambda r: r['date'], reverse=True)
+    total_shortfall = sum(r['shortfall'] for r in rows)
+    total_garnish = sum(r['garnish'] for r in rows)
+    total_remaining = sum(max(r['remaining'], 0) for r in rows)
+    pending_count = sum(1 for r in rows if r['remaining'] > 0)
+
+    return render_template('reports/shortfalls.html', rows=rows,
+        total_shortfall=total_shortfall, total_garnish=total_garnish,
+        total_remaining=total_remaining, pending_count=pending_count,
         date_from=date_from_str, date_to=date_to_str)
 
 
@@ -4048,6 +4411,54 @@ def franchise_income_import_confirm():
     return redirect(url_for('franchise_income_list'))
 
 
+@app.route('/franchise/import/workbook', methods=['POST'])
+@login_required
+@permission_required('franchise')
+def franchise_import_workbook():
+    """Upload a whole multi-sheet workbook (like the franchise's own monthly
+    file) in one go — every reconciliation schedule and vehicle-collection
+    grid in it is found by its own headers and sorted into the right table,
+    no column mapping needed and no sheet-naming convention required."""
+    file = request.files.get('file')
+    if not file or not file.filename:
+        flash('Choose an Excel workbook to import.', 'danger')
+        return redirect(url_for('franchise_income_list'))
+    try:
+        summary = import_franchise_workbook(file, created_by=current_user.id)
+    except ValueError as e:
+        db.session.rollback()
+        flash(str(e), 'danger')
+        return redirect(url_for('franchise_income_list'))
+
+    total_imported = summary['income_imported'] + summary['vehicles_created'] + summary['collections_created']
+    if total_imported or summary['income_error_rows']:
+        save_import_batch('franchise_workbook', file.filename, summary['total_rows'], total_imported,
+                          summary['income_error_rows'], summary['created_records'])
+        log_audit('CREATE', 'franchise_workbook', None,
+                  f"Imported workbook {file.filename}: {summary['income_imported']} reconciliation day(s), "
+                  f"{summary['vehicles_created']} new vehicle(s), {summary['collections_created']} collection(s)")
+        db.session.commit()
+    else:
+        db.session.rollback()
+
+    if total_imported:
+        flash(f"Imported from {file.filename}: {summary['income_imported']} reconciliation day(s), "
+              f"{summary['vehicles_created']} new vehicle(s), {summary['collections_created']} collection(s) "
+              f"({summary['collections_skipped']} already on file, skipped).", 'success')
+    elif summary['total_rows']:
+        flash(f"Nothing new to import from {file.filename} — every row found "
+              f"({summary['collections_skipped']} collection(s) plus any reconciliation days) is already on file.",
+              'warning')
+    else:
+        flash('No reconciliation schedule or vehicle-collection tables were recognized in that workbook.', 'warning')
+    if summary['income_errors']:
+        shown = summary['income_errors'][:10]
+        more = f" (+{len(summary['income_errors']) - 10} more)" if len(summary['income_errors']) > 10 else ''
+        flash('Skipped reconciliation rows — ' + '; '.join(shown) + more, 'warning')
+
+    return redirect(url_for('franchise_income_list'))
+
+
 @app.route('/franchise/income/<int:fid>/delete', methods=['POST'])
 @login_required
 @admin_required
@@ -4311,13 +4722,69 @@ def report_franchise_daily():
                            date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
 
 
+# ─────────────────────────────────────────────────────────────
+# Franchise Weekly Expenses — the free-form "Less Expenses" line items
+# (Bridge, Morning Tickets, Monday/Tuesday Payments, ...) that Weekly
+# Analysis deducts from that week's income to get Net Profit. Free-form
+# because in practice this list of names changes week to week.
+# ─────────────────────────────────────────────────────────────
+@app.route('/franchise/weekly-expenses')
+@login_required
+@permission_required('franchise')
+def franchise_weekly_expenses():
+    page = request.args.get('page', 1, type=int)
+    entries = FranchiseWeeklyExpense.query.order_by(
+        FranchiseWeeklyExpense.week_start.desc(), FranchiseWeeklyExpense.id.desc()).paginate(page=page, per_page=30)
+    return render_template('franchise/weekly_expenses.html', entries=entries)
+
+
+@app.route('/franchise/weekly-expenses/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('franchise')
+@handle_form_errors
+def franchise_weekly_expense_add():
+    if request.method == 'POST':
+        raw_date = parse_date(request.form['week_start'])
+        week_start = raw_date - timedelta(days=raw_date.weekday())  # normalize to that week's Monday
+        label = request.form.get('label', '').strip()
+        if not label:
+            raise ValueError('Expense label is required.')
+        expense = FranchiseWeeklyExpense(
+            week_start=week_start, label=label,
+            amount=form_float(request.form, 'amount', min_value=0),
+            notes=request.form.get('notes', '').strip(),
+            created_by=current_user.id,
+        )
+        db.session.add(expense)
+        db.session.flush()
+        log_audit('CREATE', 'franchise_weekly_expenses', expense.id,
+                  f'{label}: {expense.amount} for week of {week_start}')
+        db.session.commit()
+        flash('Weekly expense recorded.', 'success')
+        return redirect(url_for('franchise_weekly_expenses'))
+    return render_template('franchise/weekly_expense_form.html', today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/franchise/weekly-expenses/<int:eid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def franchise_weekly_expense_delete(eid):
+    expense = FranchiseWeeklyExpense.query.get_or_404(eid)
+    log_audit('DELETE', 'franchise_weekly_expenses', eid, f'Deleted weekly expense {expense.label}: {expense.amount}')
+    db.session.delete(expense)
+    db.session.commit()
+    flash('Weekly expense deleted.', 'warning')
+    return redirect(url_for('franchise_weekly_expenses'))
+
+
 @app.route('/reports/franchise/weekly')
 @login_required
 @permission_required('franchise')
 def report_franchise_weekly():
-    """Weekly Analysis — entries grouped into Monday-Sunday weeks, each
-    rolled up into income/expenditure/net profit, auto-computed from the
-    daily reconciliation entries instead of hand-maintained."""
+    """Weekly Analysis — entries grouped into Monday-Sunday weeks: Daily +
+    Weekly Franchise income, the week's free-form expenses, and Net Profit
+    (Income minus those expenses) — auto-computed to match the franchise's
+    own Weekly Analysis sheet, instead of hand-maintained."""
     df, dt = query_date_range()
     entries = FranchiseIncome.query.filter(FranchiseIncome.entry_date.between(df, dt)) \
         .order_by(FranchiseIncome.entry_date.asc()).all()
@@ -4327,13 +4794,27 @@ def report_franchise_weekly():
         week_start = e.entry_date - timedelta(days=e.entry_date.weekday())
         weeks.setdefault(week_start, []).append(e)
 
-    week_rows = [
-        dict(week_start=start, week_end=start + timedelta(days=6),
-             days=len(week_entries), **_franchise_totals(week_entries))
-        for start, week_entries in sorted(weeks.items())
-    ]
+    expenses_by_week = {}
+    if weeks:
+        for exp in FranchiseWeeklyExpense.query.filter(FranchiseWeeklyExpense.week_start.in_(weeks.keys())).all():
+            expenses_by_week.setdefault(exp.week_start, []).append(exp)
+
+    week_rows = []
+    for start, week_entries in sorted(weeks.items()):
+        week_totals = _franchise_totals(week_entries)
+        week_expenses = expenses_by_week.get(start, [])
+        expense_total = sum(x.amount for x in week_expenses)
+        week_totals['expenses'] = week_expenses
+        week_totals['expense_total'] = expense_total
+        week_totals['net_profit'] = week_totals['total_income'] - expense_total
+        week_rows.append(dict(week_start=start, week_end=start + timedelta(days=6),
+                              days=len(week_entries), **week_totals))
+
+    totals = _franchise_totals(entries)
+    totals['expense_total'] = sum(r['expense_total'] for r in week_rows)
+    totals['net_profit'] = totals['total_income'] - totals['expense_total']
     return render_template('franchise/weekly_analysis.html', title='Franchise Weekly Analysis',
-                           weeks=week_rows, totals=_franchise_totals(entries),
+                           weeks=week_rows, totals=totals,
                            date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
 
 
@@ -4481,12 +4962,15 @@ def audit_log():
 IMPORT_TARGET_PERMISSIONS = {
     'ledger': ('daily_logs', 'crew_portal'),
     'franchise_income': ('franchise',),
+    'franchise_workbook': ('franchise',),
 }
 
 IMPORT_REVERT_MODELS = {
     'daily_logs': DailyLog,
     'fuel_logs': FuelLog,
     'franchise_income': FranchiseIncome,
+    'franchise_vehicles': FranchiseVehicle,
+    'franchise_collections': FranchiseCollection,
 }
 
 
@@ -4653,6 +5137,8 @@ def migrate_db():
         vehicle_cols = [c['name'] for c in inspector.get_columns('vehicles')]
         if 'fuel_type' not in vehicle_cols:
             conn.execute(text("ALTER TABLE vehicles ADD COLUMN fuel_type VARCHAR(10) DEFAULT 'diesel'"))
+        if 'daily_target' not in vehicle_cols:
+            conn.execute(text("ALTER TABLE vehicles ADD COLUMN daily_target FLOAT"))
         if inspector.has_table('depots'):
             conn.execute(text("DROP TABLE depots"))
 
@@ -4736,6 +5222,20 @@ def migrate_db():
             """))
             conn.execute(text("DROP TABLE daily_logs"))
             conn.execute(text("ALTER TABLE daily_logs_new RENAME TO daily_logs"))
+
+        daily_log_col_names = [c['name'] for c in inspector.get_columns('daily_logs')]
+        # Renamed from staff_deduction/deduction_notes to garnish/reason_for_shortfall
+        # to match the "missed revenue target" concept this field represents.
+        if 'garnish' not in daily_log_col_names:
+            if 'staff_deduction' in daily_log_col_names:
+                conn.execute(text("ALTER TABLE daily_logs RENAME COLUMN staff_deduction TO garnish"))
+            else:
+                conn.execute(text("ALTER TABLE daily_logs ADD COLUMN garnish FLOAT NOT NULL DEFAULT 0.0"))
+        if 'reason_for_shortfall' not in daily_log_col_names:
+            if 'deduction_notes' in daily_log_col_names:
+                conn.execute(text("ALTER TABLE daily_logs RENAME COLUMN deduction_notes TO reason_for_shortfall"))
+            else:
+                conn.execute(text("ALTER TABLE daily_logs ADD COLUMN reason_for_shortfall TEXT"))
 
         # franchise_income moved from a flat frequency/amount log to a
         # per-date reconciliation record — drop the old shape and let

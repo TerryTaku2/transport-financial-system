@@ -1,0 +1,111 @@
+{% extends 'base.html' %}
+{% block title %}Revenue Shortfalls{% endblock %}
+{% block page_title %}Reports — Revenue Shortfalls{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Revenue Shortfalls</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; vehicle-days where fare fell below the daily target</div>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-red">
+    <div class="kpi-label">Total Shortfall (this period)</div>
+    <div class="kpi-value">{{ total_shortfall|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Garnish Applied (this period)</div>
+    <div class="kpi-value">{{ total_garnish|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Still Unresolved</div>
+    <div class="kpi-value">{{ total_remaining|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Pending Shortfall Days</div>
+    <div class="kpi-value">{{ pending_count }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Flagged Vehicle-Days</h3></div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Vehicle</th>
+          <th>Driver(s)</th>
+          <th class="text-right">Target</th>
+          <th class="text-right">Fare</th>
+          <th class="text-right">Shortfall</th>
+          <th class="text-right">Garnish Applied</th>
+          <th class="text-right">Remaining</th>
+          <th>Status</th>
+          <th>Quick Garnish</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>{{ row.date }}</td>
+          <td><strong>{{ row.vehicle.registration }}</strong></td>
+          <td>{{ row.drivers|map(attribute='name')|join(', ') or '—' }}</td>
+          <td class="text-right">{{ row.target|currency }}</td>
+          <td class="text-right">{{ row.fare|currency }}</td>
+          <td class="text-right text-danger">{{ row.shortfall|currency }}</td>
+          <td class="text-right">{{ row.garnish|currency if row.garnish else '—' }}</td>
+          <td class="text-right {% if row.remaining > 0 %}text-warning{% endif %}"><strong>{{ row.remaining|currency }}</strong></td>
+          <td>
+            {% if row.remaining <= 0 %}
+            <span class="badge badge-green">Resolved</span>
+            {% else %}
+            <span class="badge badge-amber">Pending</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if row.remaining > 0 and row.drivers %}
+            <form method="POST" action="{{ url_for('driver_ledger_add') }}" style="display:flex;gap:4px;align-items:center;flex-wrap:wrap;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="vehicle_id" value="{{ row.vehicle.id }}">
+              <input type="hidden" name="log_date" value="{{ row.date }}">
+              <input type="hidden" name="period" value="all">
+              <select name="driver_id" style="width:110px;padding:4px;" required>
+                {% for d in row.drivers %}
+                <option value="{{ d.id }}">{{ d.name }}</option>
+                {% endfor %}
+              </select>
+              <input type="number" name="garnish" step="0.01" min="0" placeholder="Amount"
+                     value="{{ '%.2f'|format(row.remaining) }}" style="width:80px;padding:4px;">
+              <input type="text" name="reason_for_shortfall" placeholder="Reason" style="width:120px;padding:4px;">
+              <button class="btn btn-outline btn-xs">Garnish</button>
+            </form>
+            {% else %}
+            &mdash;
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No shortfalls for the selected period. Set a Daily Revenue Target on a vehicle to start tracking it.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

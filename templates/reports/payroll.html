@@ -27,6 +27,10 @@
     <div class="kpi-label">Commission Accrued (this period)</div>
     <div class="kpi-value">{{ total_commissions|currency }}</div>
   </div>
+  <div class="kpi-card kpi-red">
+    <div class="kpi-label">Garnish (this period)</div>
+    <div class="kpi-value">{{ total_garnish|currency }}</div>
+  </div>
   <div class="kpi-card kpi-green">
     <div class="kpi-label">Paid (this period)</div>
     <div class="kpi-value">{{ total_paid|currency }}</div>
@@ -44,7 +48,7 @@
     <table>
       <thead>
         <tr><th>Crew Member</th><th>Role</th><th>Days Worked</th><th>Revenue Generated</th><th>Rate</th>
-            <th class="text-right">Accrued</th><th class="text-right">Paid</th><th class="text-right">Outstanding</th><th></th></tr>
+            <th class="text-right">Accrued</th><th class="text-right">Garnish</th><th class="text-right">Paid</th><th class="text-right">Outstanding</th><th></th></tr>
       </thead>
       <tbody>
         {% for e in earnings %}
@@ -55,6 +59,7 @@
           <td>{{ e.total_revenue|currency }}</td>
           <td>{{ e.rate_pct|round(1) }}%</td>
           <td class="text-right">{{ e.commission|currency }}</td>
+          <td class="text-right {% if e.garnish %}text-danger{% endif %}">{{ e.garnish|currency if e.garnish else '—' }}</td>
           <td class="text-right text-success">{{ e.paid|currency }}</td>
           <td class="text-right {% if e.outstanding > 0 %}text-warning{% endif %}"><strong>{{ e.outstanding|currency }}</strong></td>
           <td>
@@ -76,6 +81,7 @@
         <tr class="summary-row">
           <td colspan="5">TOTAL</td>
           <td class="text-right">{{ total_commissions|currency }}</td>
+          <td class="text-right">{{ total_garnish|currency }}</td>
           <td class="text-right">{{ total_paid|currency }}</td>
           <td class="text-right">{{ total_outstanding|currency }}</td>
           <td></td>

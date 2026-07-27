@@ -6,9 +6,12 @@
 <div class="page-header">
   <div>
     <h1>{{ title }}</h1>
-    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; auto-computed from the daily reconciliation entries</div>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; auto-computed from the daily reconciliation entries and weekly expenses</div>
   </div>
-  <a href="{{ url_for('franchise_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Manage Entries</a>
+  <div class="btn-group">
+    <a href="{{ url_for('franchise_weekly_expenses') }}" class="btn btn-outline"><i data-feather="minus-circle"></i> Weekly Expenses</a>
+    <a href="{{ url_for('franchise_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Manage Entries</a>
+  </div>
 </div>
 
 <form method="GET" class="filter-bar">
@@ -29,8 +32,8 @@
     <div class="kpi-value">{{ totals.total_income|currency }}</div>
   </div>
   <div class="kpi-card kpi-amber">
-    <div class="kpi-label">Total Expenditure</div>
-    <div class="kpi-value">{{ totals.total_expenditure|currency }}</div>
+    <div class="kpi-label">Total Weekly Expenses</div>
+    <div class="kpi-value">{{ totals.expense_total|currency }}</div>
   </div>
   <div class="kpi-card kpi-green">
     <div class="kpi-label">Total Net Profit</div>
@@ -50,9 +53,8 @@
           <th class="text-right">Daily Franchise</th>
           <th class="text-right">Weekly Franchise</th>
           <th class="text-right">Total Income</th>
-          <th class="text-right">Total Expenditure</th>
+          <th>Less Expenses</th>
           <th class="text-right">Net Profit</th>
-          <th class="text-right">Variance</th>
         </tr>
       </thead>
       <tbody>
@@ -63,9 +65,12 @@
           <td class="text-right">{{ w.income_daily|currency }}</td>
           <td class="text-right">{{ w.income_weekly|currency }}</td>
           <td class="text-right">{{ w.total_income|currency }}</td>
-          <td class="text-right">{{ w.total_expenditure|currency }}</td>
+          <td>
+            {% if w.expenses %}
+            {% for x in w.expenses %}<div>{{ x.label }}: {{ x.amount|currency }}</div>{% endfor %}
+            {% else %}—{% endif %}
+          </td>
           <td class="text-right"><span class="{% if w.net_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ w.net_profit|currency }}</span></td>
-          <td class="text-right"><span class="{% if w.variance < 0 %}text-danger{% elif w.variance > 0 %}text-warning{% endif %}">{{ w.variance|currency }}</span></td>
         </tr>
         {% endfor %}
       </tbody>
@@ -76,9 +81,8 @@
           <td class="text-right">{{ totals.income_daily|currency }}</td>
           <td class="text-right">{{ totals.income_weekly|currency }}</td>
           <td class="text-right">{{ totals.total_income|currency }}</td>
-          <td class="text-right">{{ totals.total_expenditure|currency }}</td>
+          <td>{{ totals.expense_total|currency }}</td>
           <td class="text-right">{{ totals.net_profit|currency }}</td>
-          <td class="text-right">{{ totals.variance|currency }}</td>
         </tr>
       </tfoot>
     </table>

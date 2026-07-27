@@ -22,6 +22,19 @@
   </div>
 </div>
 
+<div class="card mb-16" style="padding:10px 14px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+    <div class="form-hint" style="margin:0;">Import a full workbook (e.g. your monthly collections file) in one go — every sheet is scanned for reconciliation schedules and vehicle-collection grids by their own headers, no column mapping needed.</div>
+    <form method="POST" action="{{ url_for('franchise_import_workbook') }}" enctype="multipart/form-data"
+          data-confirm="Import every reconciliation schedule and vehicle-collection table found in this workbook?"
+          style="display:flex;gap:6px;align-items:center;margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="file" name="file" accept=".xlsx,.xlsm" required style="font-size:12px;">
+      <button type="submit" class="btn btn-xs btn-primary"><i data-feather="upload-cloud"></i> Import Full Workbook</button>
+    </form>
+  </div>
+</div>
+
 <div class="card">
   {% if entries.items %}
   <div class="table-wrap">
