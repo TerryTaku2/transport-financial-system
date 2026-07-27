@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}Franchise — {{ 'Daily' if frequency == 'daily' else 'Weekly' }} Collections{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ title }}</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; vehicles paying the {{ frequency }} franchise fee, grouped by date</div>
+  </div>
+  <a href="{{ url_for('franchise_collections', frequency=frequency) }}" class="btn btn-outline"><i data-feather="list"></i> All Collections</a>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Total Collected</div>
+    <div class="kpi-value">{{ total|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-teal">
+    <div class="kpi-label">Days With Collections</div>
+    <div class="kpi-value">{{ days|length }}</div>
+  </div>
+</div>
+
+{% if days %}
+{% for day in days %}
+<div class="card mb-16">
+  <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+    <h3>{{ day.entry_date }}</h3>
+    <div>
+      <span class="badge badge-blue">{{ day.vehicle_count }} vehicle(s)</span>
+      <span class="badge badge-green">{{ day.total|currency }}</span>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Number Plate</th><th>Franchisee</th><th class="text-right">Amount</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        {% for c in day.collections %}
+        <tr>
+          <td>{{ c.vehicle.number_plate }}</td>
+          <td>{{ c.vehicle.franchisee_name }}</td>
+          <td class="text-right">{{ c.amount|currency }}</td>
+          <td>{{ c.notes or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+{% else %}
+<div class="card">
+  <div class="empty-state"><p>No franchise collections recorded for the selected period.</p></div>
+</div>
+{% endif %}
+{% endblock %}

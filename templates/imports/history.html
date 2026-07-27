@@ -1,0 +1,64 @@
+{% extends 'base.html' %}
+{% block title %}Import History{% endblock %}
+{% block page_title %}Admin — Import History{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Import History</h1>
+    <div class="subtitle">Every ledger and franchise income file imported — download failed rows or reverse a bad import</div>
+  </div>
+</div>
+
+<div class="card">
+  {% if batches.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Timestamp</th><th>Type</th><th>Filename</th><th>User</th><th>Rows</th><th>Imported</th><th>Failed</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for batch in batches.items %}
+        <tr>
+          <td>{{ batch.created_at.strftime('%d %b %Y %H:%M:%S') }}</td>
+          <td>{{ 'Ledger' if batch.target_type == 'ledger' else 'Franchise Income' }}</td>
+          <td>{{ batch.filename }}</td>
+          <td>{{ batch.creator.username if batch.creator else '—' }}</td>
+          <td>{{ batch.total_rows }}</td>
+          <td>{{ batch.rows_imported }}</td>
+          <td>{{ batch.rows_failed }}</td>
+          <td>
+            {% if batch.status == 'reverted' %}<span class="badge badge-red">Reverted</span>
+            {% else %}<span class="badge badge-green">Committed</span>{% endif %}
+          </td>
+          <td class="text-right">
+            <div class="btn-group">
+              {% if batch.rows_failed %}
+              <a href="{{ url_for('import_batch_errors_csv', batch_id=batch.id) }}" class="btn btn-outline btn-sm">
+                <i data-feather="download"></i> Errors CSV
+              </a>
+              {% endif %}
+              {% if batch.status == 'committed' and batch.rows_imported %}
+              <form method="POST" action="{{ url_for('import_batch_revert', batch_id=batch.id) }}"
+                    onsubmit="return confirm('Revert this import? This permanently deletes the {{ batch.rows_imported }} record(s) it created.');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="btn btn-danger btn-sm"><i data-feather="rotate-ccw"></i> Revert</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    {% if batches.has_prev %}<a href="?page={{ batches.prev_num }}">&laquo; Prev</a>{% endif %}
+    <span class="active">Page {{ batches.page }} of {{ batches.pages or 1 }}</span>
+    {% if batches.has_next %}<a href="?page={{ batches.next_num }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No imports recorded yet.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

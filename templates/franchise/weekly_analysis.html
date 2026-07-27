@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}Franchise — Weekly Analysis{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ title }}</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; auto-computed from the daily reconciliation entries</div>
+  </div>
+  <a href="{{ url_for('franchise_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Manage Entries</a>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Total Income</div>
+    <div class="kpi-value">{{ totals.total_income|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Total Expenditure</div>
+    <div class="kpi-value">{{ totals.total_expenditure|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Total Net Profit</div>
+    <div class="kpi-value">{{ totals.net_profit|currency }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Weekly Breakdown</h3></div>
+  {% if weeks %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Week</th>
+          <th class="text-right">Days Recorded</th>
+          <th class="text-right">Daily Franchise</th>
+          <th class="text-right">Weekly Franchise</th>
+          <th class="text-right">Total Income</th>
+          <th class="text-right">Total Expenditure</th>
+          <th class="text-right">Net Profit</th>
+          <th class="text-right">Variance</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for w in weeks %}
+        <tr>
+          <td>{{ w.week_start }} &ndash; {{ w.week_end }}</td>
+          <td class="text-right">{{ w.days }}</td>
+          <td class="text-right">{{ w.income_daily|currency }}</td>
+          <td class="text-right">{{ w.income_weekly|currency }}</td>
+          <td class="text-right">{{ w.total_income|currency }}</td>
+          <td class="text-right">{{ w.total_expenditure|currency }}</td>
+          <td class="text-right"><span class="{% if w.net_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ w.net_profit|currency }}</span></td>
+          <td class="text-right"><span class="{% if w.variance < 0 %}text-danger{% elif w.variance > 0 %}text-warning{% endif %}">{{ w.variance|currency }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="summary-row">
+          <td>TOTAL</td>
+          <td></td>
+          <td class="text-right">{{ totals.income_daily|currency }}</td>
+          <td class="text-right">{{ totals.income_weekly|currency }}</td>
+          <td class="text-right">{{ totals.total_income|currency }}</td>
+          <td class="text-right">{{ totals.total_expenditure|currency }}</td>
+          <td class="text-right">{{ totals.net_profit|currency }}</td>
+          <td class="text-right">{{ totals.variance|currency }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No franchise income recorded for the selected period.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+{% block title %}{{ action }} Franchise Vehicle{% endblock %}
+{% block page_title %}{{ action }} Franchise Vehicle{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ action }} Franchise Vehicle</h1>
+    <div class="subtitle">Registry of third-party vehicles operating under the franchise</div>
+  </div>
+  <a href="{{ url_for('franchise_vehicles') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Vehicles</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Number Plate<span class="req">*</span></label>
+          <input type="text" name="number_plate" required value="{{ vehicle.number_plate if vehicle else '' }}" placeholder="e.g. ABQ 6636">
+        </div>
+        <div class="form-group">
+          <label>Franchisee Name<span class="req">*</span></label>
+          <input type="text" name="franchisee_name" required value="{{ vehicle.franchisee_name if vehicle else '' }}" placeholder="Who this vehicle belongs to">
+        </div>
+        <div class="form-group">
+          <label>Status</label>
+          <select name="status">
+            <option value="active" {% if not vehicle or vehicle.status == 'active' %}selected{% endif %}>Active</option>
+            <option value="inactive" {% if vehicle and vehicle.status == 'inactive' %}selected{% endif %}>Inactive</option>
+          </select>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Vehicle</button>
+        <a href="{{ url_for('franchise_vehicles') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

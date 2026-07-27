@@ -145,11 +145,26 @@
       <a href="{{ url_for('franchise_income_list') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_income') %}active{% endif %}">
         <i data-feather="credit-card"></i> Income
       </a>
+      <a href="{{ url_for('franchise_vehicles') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_vehicle') %}active{% endif %}">
+        <i data-feather="truck"></i> Vehicles
+      </a>
+      <a href="{{ url_for('franchise_collections') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_collection') %}active{% endif %}">
+        <i data-feather="dollar-sign"></i> Collections
+      </a>
+      <a href="{{ url_for('report_franchise_daily_collections') }}" class="nav-item {% if request.endpoint == 'report_franchise_daily_collections' %}active{% endif %}">
+        <i data-feather="bar-chart-2"></i> Daily Franchise
+      </a>
+      <a href="{{ url_for('report_franchise_weekly_collections') }}" class="nav-item {% if request.endpoint == 'report_franchise_weekly_collections' %}active{% endif %}">
+        <i data-feather="bar-chart-2"></i> Weekly Franchise
+      </a>
+      <a href="{{ url_for('report_franchise_analysis') }}" class="nav-item {% if request.endpoint == 'report_franchise_analysis' %}active{% endif %}">
+        <i data-feather="trending-up"></i> Franchise Analysis
+      </a>
       <a href="{{ url_for('report_franchise_daily') }}" class="nav-item {% if request.endpoint == 'report_franchise_daily' %}active{% endif %}">
-        <i data-feather="bar-chart-2"></i> Daily P&amp;L
+        <i data-feather="bar-chart-2"></i> Reconciliation Schedule
       </a>
       <a href="{{ url_for('report_franchise_weekly') }}" class="nav-item {% if request.endpoint == 'report_franchise_weekly' %}active{% endif %}">
-        <i data-feather="bar-chart-2"></i> Weekly P&amp;L
+        <i data-feather="bar-chart-2"></i> Weekly Analysis
       </a>
       <a href="{{ url_for('report_franchise_consolidated') }}" class="nav-item {% if request.endpoint == 'report_franchise_consolidated' %}active{% endif %}">
         <i data-feather="pie-chart"></i> Consolidated P&amp;L
@@ -191,6 +206,9 @@
       </a>
       <a href="{{ url_for('audit_log') }}" class="nav-item {% if request.endpoint == 'audit_log' %}active{% endif %}">
         <i data-feather="activity"></i> Audit Log
+      </a>
+      <a href="{{ url_for('import_history') }}" class="nav-item {% if request.endpoint == 'import_history' %}active{% endif %}">
+        <i data-feather="upload-cloud"></i> Import History
       </a>
     </div>
     {% endif %}

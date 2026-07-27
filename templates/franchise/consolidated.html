@@ -1,0 +1,86 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}Franchise — Consolidated P&amp;L{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ title }}</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; {{ entry_count }} day(s) recorded</div>
+  </div>
+  <a href="{{ url_for('franchise_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Manage Entries</a>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Total Income</div>
+    <div class="kpi-value">{{ totals.total_income|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Total Expenditure</div>
+    <div class="kpi-value">{{ totals.total_expenditure|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Net Profit</div>
+    <div class="kpi-value">{{ totals.net_profit|currency }}</div>
+  </div>
+  <div class="kpi-card {% if totals.variance < 0 %}kpi-red{% else %}kpi-teal{% endif %}">
+    <div class="kpi-label">Variance (Deposited vs. Cash)</div>
+    <div class="kpi-value">{{ totals.variance|currency }}</div>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Income</h3></div>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        <tr><td>Daily Franchise Income</td><td class="text-right">{{ totals.income_daily|currency }}</td></tr>
+        <tr><td>Weekly Franchise Income</td><td class="text-right">{{ totals.income_weekly|currency }}</td></tr>
+        <tr class="summary-row"><td>TOTAL INCOME</td><td class="text-right">{{ totals.total_income|currency }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Expenditure</h3></div>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        <tr><td>Traffic Fines</td><td class="text-right">{{ totals.exp_traffic_fines|currency }}</td></tr>
+        <tr><td>Facilitation Fees</td><td class="text-right">{{ totals.exp_facilitation_fees|currency }}</td></tr>
+        <tr><td>Workshop</td><td class="text-right">{{ totals.exp_workshop|currency }}</td></tr>
+        <tr><td>Wages</td><td class="text-right">{{ totals.exp_wages|currency }}</td></tr>
+        <tr><td>Other</td><td class="text-right">{{ totals.other_expenditure|currency }}</td></tr>
+        <tr class="summary-row"><td>TOTAL EXPENDITURE</td><td class="text-right">{{ totals.total_expenditure|currency }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Cash Reconciliation</h3></div>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        <tr><td>Cash in Hand (Income &minus; Expenditure)</td><td class="text-right">{{ totals.cash_in_hand|currency }}</td></tr>
+        <tr><td>Deposited</td><td class="text-right">{{ totals.deposited|currency }}</td></tr>
+        <tr class="summary-row"><td>VARIANCE</td><td class="text-right">{{ totals.variance|currency }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

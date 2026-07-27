@@ -6,15 +6,20 @@
 <div class="page-header">
   <div>
     <h1>Franchise Income</h1>
-    <div class="subtitle">Separate revenue stream from vehicle operations</div>
+    <div class="subtitle">Separate revenue stream from vehicle operations — one reconciliation entry per date</div>
   </div>
-  <a href="{{ url_for('franchise_income_add', frequency=frequency or 'daily') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Income</a>
+  <a href="{{ url_for('franchise_income_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Income</a>
 </div>
 
-<div class="btn-group mb-16">
-  <a href="{{ url_for('franchise_income_list') }}" class="btn btn-sm {% if not frequency %}btn-primary{% else %}btn-outline{% endif %}">All</a>
-  <a href="{{ url_for('franchise_income_list', frequency='daily') }}" class="btn btn-sm {% if frequency == 'daily' %}btn-primary{% else %}btn-outline{% endif %}">Daily</a>
-  <a href="{{ url_for('franchise_income_list', frequency='weekly') }}" class="btn btn-sm {% if frequency == 'weekly' %}btn-primary{% else %}btn-outline{% endif %}">Weekly</a>
+<div class="card mb-16" style="padding:10px 14px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+    <div class="form-hint" style="margin:0;">Import a reconciliation schedule from a CSV/Excel file — one row per date, with Income (Daily/Weekly), Expenditure by category, and Deposited columns.</div>
+    <form method="POST" action="{{ url_for('franchise_income_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required style="font-size:12px;">
+      <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload"></i> Import</button>
+    </form>
+  </div>
 </div>
 
 <div class="card">
@@ -22,15 +27,29 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>{% if frequency == 'weekly' %}Week Ending{% else %}Date{% endif %}</th><th>Frequency</th><th>Description</th><th class="text-right">Amount</th><th></th></tr>
+        <tr>
+          <th>Date</th>
+          <th class="text-right">Income (Daily)</th>
+          <th class="text-right">Income (Weekly)</th>
+          <th class="text-right">Expenditure</th>
+          <th class="text-right">Cash in Hand</th>
+          <th class="text-right">Deposited</th>
+          <th class="text-right">Variance</th>
+          <th>Description</th>
+          <th></th>
+        </tr>
       </thead>
       <tbody>
         {% for e in entries.items %}
         <tr>
           <td>{{ e.entry_date }}</td>
-          <td><span class="badge {% if e.frequency == 'weekly' %}badge-blue{% else %}badge-gray{% endif %}">{{ e.frequency|capitalize }}</span></td>
+          <td class="text-right">{{ e.income_daily|currency }}</td>
+          <td class="text-right">{{ e.income_weekly|currency }}</td>
+          <td class="text-right">{{ e.total_expenditure|currency }}</td>
+          <td class="text-right">{{ e.cash_in_hand|currency }}</td>
+          <td class="text-right">{{ e.deposited|currency }}</td>
+          <td class="text-right"><span class="{% if e.variance < 0 %}text-danger{% elif e.variance > 0 %}text-warning{% endif %}">{{ e.variance|currency }}</span></td>
           <td>{{ e.description or '—' }}</td>
-          <td class="text-right">{{ e.amount|currency }}</td>
           <td>
             {% if current_user.role == 'admin' %}
             <form method="POST" action="{{ url_for('franchise_income_delete', fid=e.id) }}" data-confirm="Delete this franchise income entry?">
@@ -46,15 +65,15 @@
   </div>
   {% if entries.pages > 1 %}
   <div class="pagination">
-    {% if entries.has_prev %}<a href="{{ url_for('franchise_income_list', page=entries.prev_num, frequency=frequency) }}">&laquo; Prev</a>{% endif %}
+    {% if entries.has_prev %}<a href="{{ url_for('franchise_income_list', page=entries.prev_num) }}">&laquo; Prev</a>{% endif %}
     <span>Page {{ entries.page }} of {{ entries.pages }}</span>
-    {% if entries.has_next %}<a href="{{ url_for('franchise_income_list', page=entries.next_num, frequency=frequency) }}">Next &raquo;</a>{% endif %}
+    {% if entries.has_next %}<a href="{{ url_for('franchise_income_list', page=entries.next_num) }}">Next &raquo;</a>{% endif %}
   </div>
   {% endif %}
   {% else %}
   <div class="empty-state">
     <div class="empty-icon">🧾</div>
-    <p>No franchise income recorded yet. <a href="{{ url_for('franchise_income_add', frequency=frequency or 'daily') }}">Add the first one</a>.</p>
+    <p>No franchise income recorded yet. <a href="{{ url_for('franchise_income_add') }}">Add the first one</a>.</p>
   </div>
   {% endif %}
 </div>

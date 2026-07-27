@@ -1,0 +1,56 @@
+{% extends 'base.html' %}
+{% block title %}Franchise Vehicles{% endblock %}
+{% block page_title %}Franchise — Vehicles{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Franchise Vehicles</h1>
+    <div class="subtitle">Third-party vehicles operating under the franchise, and who they belong to</div>
+  </div>
+  <a href="{{ url_for('franchise_vehicle_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Vehicle</a>
+</div>
+
+<div class="card">
+  {% if vehicles %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Number Plate</th>
+          <th>Franchisee</th>
+          <th>Status</th>
+          <th class="text-right">Total Collected</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in vehicles %}
+        <tr>
+          <td>{{ v.number_plate }}</td>
+          <td>{{ v.franchisee_name }}</td>
+          <td><span class="badge {% if v.status == 'active' %}badge-green{% else %}badge-gray{% endif %}">{{ v.status|capitalize }}</span></td>
+          <td class="text-right">{{ v.total_collected|currency }}</td>
+          <td class="btn-group">
+            <a href="{{ url_for('franchise_vehicle_edit', vid=v.id) }}" class="btn btn-outline btn-xs">Edit</a>
+            <a href="{{ url_for('franchise_collections', vehicle_id=v.id) }}" class="btn btn-outline btn-xs">Collections</a>
+            {% if current_user.role == 'admin' %}
+            <form method="POST" action="{{ url_for('franchise_vehicle_delete', vid=v.id) }}" data-confirm="Delete franchise vehicle {{ v.number_plate }}?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🚐</div>
+    <p>No franchise vehicles registered yet. <a href="{{ url_for('franchise_vehicle_add') }}">Add the first one</a>.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
