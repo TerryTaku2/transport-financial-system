@@ -1,12 +1,12 @@
 {% extends 'base.html' %}
-{% block title %}Vehicle Ledger{% endblock %}
-{% block page_title %}Vehicle Ledger{% endblock %}
+{% block title %}Daily Transactions{% endblock %}
+{% block page_title %}Daily Transactions{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Vehicle Ledger</h1>
-    <div class="subtitle">Daily transactions — one running sheet per vehicle{% if vehicle %}, {{ vehicle.registration }}{% endif %}</div>
+    <h1>Daily Transactions</h1>
+    <div class="subtitle">One running sheet per vehicle{% if vehicle %}, {{ vehicle.registration }}{% endif %}</div>
   </div>
 </div>
 
@@ -219,8 +219,27 @@
           {% endif %}
           {% if current_user.role == 'admin' %}
           <td>
-            <a href="{{ url_for('daily_logs', vehicle_id=vehicle.id, date_from=row.date.isoformat(), date_to=row.date.isoformat()) }}"
-               class="btn btn-outline btn-xs" title="Edit the underlying daily log entries for this date">Edit</a>
+            {% if row.multiple %}
+            <span title="Multiple entries this day — delete and re-enter instead">
+              <form method="POST" action="{{ url_for('ledger_entry_delete', vehicle_id=vehicle.id, log_date_str=row.date.isoformat()) }}"
+                    data-confirm="This day has multiple entries for {{ vehicle.registration }} — delete all of them?" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="period" value="{{ period }}">
+                <button class="btn btn-danger btn-xs">Del All</button>
+              </form>
+            </span>
+            {% else %}
+            <div class="actions">
+              <a href="{{ url_for('ledger_entry_edit', vehicle_id=vehicle.id, log_date_str=row.date.isoformat(), period=period) }}"
+                 class="btn btn-outline btn-xs">Edit</a>
+              <form method="POST" action="{{ url_for('ledger_entry_delete', vehicle_id=vehicle.id, log_date_str=row.date.isoformat()) }}"
+                    data-confirm="Delete this entry for {{ vehicle.registration }} on {{ row.date }}?" style="display:inline;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="period" value="{{ period }}">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+            </div>
+            {% endif %}
           </td>
           {% endif %}
         </tr>

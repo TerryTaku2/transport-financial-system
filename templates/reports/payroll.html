@@ -75,6 +75,31 @@
             </form>
           </td>
         </tr>
+        {% for ce in e.conductors %}
+        <tr>
+          <td style="padding-left:28px;color:var(--text-muted);">&#8618; {{ ce.driver.name }}</td>
+          <td><span class="badge badge-gray">Conductor</span></td>
+          <td>{{ ce.days_worked }}</td>
+          <td>{{ ce.total_revenue|currency }}</td>
+          <td>{{ ce.rate_pct|round(1) }}%</td>
+          <td class="text-right">{{ ce.commission|currency }}</td>
+          <td class="text-right {% if ce.garnish %}text-danger{% endif %}">{{ ce.garnish|currency if ce.garnish else '—' }}</td>
+          <td class="text-right text-success">{{ ce.paid|currency }}</td>
+          <td class="text-right {% if ce.outstanding > 0 %}text-warning{% endif %}"><strong>{{ ce.outstanding|currency }}</strong></td>
+          <td>
+            <form method="POST" action="{{ url_for('commission_payment_add') }}" style="display:flex;gap:4px;align-items:center;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="driver_id" value="{{ ce.driver.id }}">
+              <input type="hidden" name="payment_date" value="{{ date_to }}">
+              <input type="hidden" name="period_start" value="{{ date_from }}">
+              <input type="hidden" name="period_end" value="{{ date_to }}">
+              <input type="number" name="amount" step="0.01" min="0" placeholder="Amount"
+                     value="{{ '%.2f'|format(ce.outstanding) if ce.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
+              <button class="btn btn-outline btn-xs">Pay</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
         {% endfor %}
       </tbody>
       <tfoot>

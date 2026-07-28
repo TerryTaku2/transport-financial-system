@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% block title %}Edit Transaction{% endblock %}
+{% block page_title %}Edit Daily Transaction{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Edit Transaction — {{ vehicle.registration }}</h1>
+    <div class="subtitle">{{ log_date.strftime('%d %b %Y') }}</div>
+  </div>
+  <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period=period) }}" class="btn btn-outline">
+    <i data-feather="arrow-left"></i> Back to Daily Transactions
+  </a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="period" value="{{ period }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Date</label>
+          <input type="text" value="{{ log_date.strftime('%d %b %Y') }}" disabled>
+          <div class="form-hint">To change the date, delete this entry and add a new one.</div>
+        </div>
+        <div class="form-group">
+          <label>Driver</label>
+          <select name="driver_id">
+            <option value="">— None (mileage/diesel only) —</option>
+            {% for d in drivers %}
+            <option value="{{ d.id }}" {% if log and log.driver_id==d.id %}selected{% endif %}>{{ d.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Daily Fare (USD)</label>
+          <input type="number" name="fare" step="0.01" min="0" placeholder="0.00"
+                 value="{{ log.gross_revenue if log else '' }}">
+          <div class="form-hint">Needs a driver selected.</div>
+        </div>
+        <div class="form-group">
+          <label>{{ vehicle.fuel_type|capitalize }} Liters</label>
+          <input type="number" name="diesel_liters" step="0.01" min="0" placeholder="0.00"
+                 value="{{ fuel.liters if fuel and fuel.liters else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Mileage</label>
+          <input type="number" name="mileage" step="0.1" min="0" placeholder="Odometer reading"
+                 value="{{ fuel.odometer if fuel and fuel.odometer is not none else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Garnish (USD)</label>
+          <input type="number" name="garnish" step="0.01" min="0" placeholder="0.00"
+                 value="{{ log.garnish if log and log.garnish else '' }}">
+          <div class="form-hint">Deducted from this driver's commission when they miss their revenue target.</div>
+        </div>
+        <div class="form-group">
+          <label>Reason for Shortfall</label>
+          <input type="text" name="reason_for_shortfall" maxlength="255" placeholder="Why the target was missed"
+                 value="{{ log.reason_for_shortfall if log else '' }}">
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Changes</button>
+        <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period=period) }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

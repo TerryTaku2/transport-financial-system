@@ -217,9 +217,11 @@ class DailyLog(db.Model):
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
     driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=False)
     conductor_id = db.Column(db.Integer, db.ForeignKey('drivers.id'))
-    # Nullable because the Vehicle Ledger doesn't track a route per entry
-    # (it mirrors a plain date/driver/fare/diesel/mileage logbook) — the
-    # more detailed Daily Log form still requires one at the form level.
+    # Nullable because Daily Transactions (the vehicle ledger) doesn't
+    # collect a route per entry — it mirrors a plain date/driver/fare/
+    # diesel/mileage logbook. Left over from a route-per-trip form that
+    # has since been merged into this page; route_profitability reports
+    # simply see None for rows entered here.
     route_id = db.Column(db.Integer, db.ForeignKey('routes.id'), nullable=True)
     log_date = db.Column(db.Date, nullable=False, default=date.today)
     trips_completed = db.Column(db.Integer, default=0)
@@ -567,6 +569,14 @@ class FranchiseVehicle(db.Model):
     def total_collected(self):
         return sum(c.amount for c in self.collections)
 
+    @property
+    def total_expense(self):
+        return sum(c.expense for c in self.collections)
+
+    @property
+    def net_collected(self):
+        return self.total_collected - self.total_expense
+
 
 class FranchiseCollection(db.Model):
     """What one franchise vehicle paid on one date — the per-vehicle detail
@@ -576,16 +586,26 @@ class FranchiseCollection(db.Model):
 
     frequency lives here rather than on FranchiseVehicle because the same
     vehicle can owe both a daily due and a separate weekly franchise fee —
-    it's a property of the payment, not a fixed plan per vehicle."""
+    it's a property of the payment, not a fixed plan per vehicle.
+
+    expense is that same vehicle's own cost for that day/week (fuel,
+    fines, etc. it bears itself) — kept alongside amount so each
+    franchisee's collection entry nets out to what it actually owes,
+    without touching the company-wide FranchiseIncome expense figures."""
     __tablename__ = 'franchise_collections'
     id = db.Column(db.Integer, primary_key=True)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('franchise_vehicles.id'), nullable=False)
     entry_date = db.Column(db.Date, nullable=False)
     frequency = db.Column(db.String(10), nullable=False, default='daily')  # 'daily' or 'weekly'
     amount = db.Column(db.Float, nullable=False)
+    expense = db.Column(db.Float, nullable=False, default=0)
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    @property
+    def net(self):
+        return self.amount - (self.expense or 0)
 
 
 class FranchiseWeeklyExpense(db.Model):
@@ -715,7 +735,7 @@ PERMISSIONS = {
     'vehicles':     'Vehicles — view, add & edit vehicles',
     'drivers':      'Crew — view, add & edit drivers/conductors',
     'routes':       'Routes — view, add & edit routes',
-    'daily_logs':   'Daily Logs — view, record & edit trip logs',
+    'daily_logs':   'Daily Transactions — view, record & edit vehicle transactions',
     'fuel_logs':    'Fuel Logs — view & record fuel entries',
     'maintenance':  'Maintenance — view & record maintenance logs',
     'reports':      'Finance & Reports — income statement, payroll, CSV exports',
@@ -731,7 +751,7 @@ PERMISSION_REDIRECTS = [
     ('vehicles',    'vehicles'),
     ('drivers',     'drivers'),
     ('routes',      'routes_list'),
-    ('daily_logs',  'daily_logs'),
+    ('daily_logs',  'driver_ledger'),
     ('fuel_logs',   'fuel_logs'),
     ('maintenance', 'maintenance_logs'),
     ('reports',     'report_income'),
@@ -2137,112 +2157,105 @@ def route_delete(rid):
 
 
 # ─────────────────────────────────────────────────────────────
-# Daily Logs
+# Daily Transactions — edit/delete a single vehicle/date entry from the
+# Vehicle Ledger below. This replaces the old standalone Daily Logs
+# CRUD pages, which duplicated the same DailyLog data behind a second,
+# heavier form — everything now lives on one page: /logs/ledger.
 # ─────────────────────────────────────────────────────────────
-@app.route('/logs/daily')
+@app.route('/logs/ledger/<int:vehicle_id>/<log_date_str>/edit', methods=['GET', 'POST'])
 @login_required
-@permission_required('daily_logs')
-def daily_logs():
-    page = request.args.get('page', 1, type=int)
-    date_from = request.args.get('date_from', '')
-    date_to = request.args.get('date_to', '')
-    vehicle_id = request.args.get('vehicle_id', '')
-
-    q = DailyLog.query
-    if date_from:
-        try:
-            q = q.filter(DailyLog.log_date >= parse_date(date_from))
-        except ValueError:
-            flash(f'"{date_from}" is not a valid start date — filter ignored.', 'warning')
-            date_from = ''
-    if date_to:
-        try:
-            q = q.filter(DailyLog.log_date <= parse_date(date_to))
-        except ValueError:
-            flash(f'"{date_to}" is not a valid end date — filter ignored.', 'warning')
-            date_to = ''
-    if vehicle_id:
-        q = q.filter(DailyLog.vehicle_id == vehicle_id)
-
-    logs = q.order_by(DailyLog.log_date.desc()).paginate(page=page, per_page=20)
-    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
-    return render_template('logs/daily/index.html', logs=logs, vehicles=all_vehicles,
-                           date_from=date_from, date_to=date_to, vehicle_id=vehicle_id)
-
-
-@app.route('/logs/daily/add', methods=['GET', 'POST'])
-@login_required
-@permission_required('daily_logs')
+@permission_required_any('daily_logs', 'crew_portal')
 @handle_form_errors
-def daily_log_add():
+def ledger_entry_edit(vehicle_id, log_date_str):
+    vehicle = Vehicle.query.get_or_404(vehicle_id)
+    try:
+        log_date = parse_date(log_date_str)
+    except ValueError:
+        flash(f'"{log_date_str}" is not a valid date.', 'danger')
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id))
+
+    period = request.values.get('period', 'month')
+    daily_logs_for_date = DailyLog.query.filter_by(
+        vehicle_id=vehicle_id, log_date=log_date).order_by(DailyLog.id).all()
+    fuel_logs_for_date = FuelLog.query.filter_by(
+        vehicle_id=vehicle_id, log_date=log_date).order_by(FuelLog.id).all()
+    if len(daily_logs_for_date) > 1 or len(fuel_logs_for_date) > 1:
+        flash('This day has more than one entry for this vehicle and can\'t be edited '
+              'as a single row — delete it and re-enter instead.', 'warning')
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+
+    log = daily_logs_for_date[0] if daily_logs_for_date else None
+    fuel = fuel_logs_for_date[0] if fuel_logs_for_date else None
+
     if request.method == 'POST':
-        log = DailyLog(
-            vehicle_id=form_int(request.form, 'vehicle_id'),
-            driver_id=form_int(request.form, 'driver_id'),
-            conductor_id=form_int(request.form, 'conductor_id', required=False),
-            route_id=form_int(request.form, 'route_id'),
-            log_date=parse_date(request.form['log_date']),
-            trips_completed=form_int(request.form, 'trips_completed', required=False, default=0, min_value=0),
-            gross_revenue=form_float(request.form, 'gross_revenue', min_value=0),
-            notes=request.form.get('notes', '').strip(),
-            created_by=current_user.id,
-        )
-        db.session.add(log)
-        db.session.flush()
-        log_audit('CREATE', 'daily_logs', log.id,
-                  f'Daily log for {log.vehicle.registration} on {log.log_date}')
+        driver_id = form_int(request.form, 'driver_id', required=False)
+        fare = form_float(request.form, 'fare', required=False, min_value=0)
+        garnish = form_float(request.form, 'garnish', required=False, min_value=0)
+        reason_for_shortfall = request.form.get('reason_for_shortfall', '').strip() or None
+        diesel_liters = form_float(request.form, 'diesel_liters', required=False, min_value=0)
+        mileage = form_float(request.form, 'mileage', required=False, min_value=0)
+
+        if log is not None or fare is not None or garnish is not None:
+            if not driver_id:
+                raise ValueError('Select a driver to record fare/garnish against.')
+            if fare is None:
+                raise ValueError('Fare is required for this entry.')
+
+        if fare is None and diesel_liters is None and mileage is None and garnish is None:
+            raise ValueError('Enter at least a fare, diesel liters, mileage reading, or garnish.')
+
+        if fare is not None:
+            driver = Driver.query.get(driver_id)
+            conductor = driver.paired_conductors[0] if driver and driver.paired_conductors else None
+            if log is None:
+                log = DailyLog(vehicle_id=vehicle_id, log_date=log_date, created_by=current_user.id)
+                db.session.add(log)
+            log.driver_id = driver_id
+            log.conductor_id = conductor.id if conductor else None
+            log.gross_revenue = fare
+            log.garnish = garnish or 0.0
+            log.reason_for_shortfall = reason_for_shortfall
+            log.updated_by = current_user.id
+            log.updated_at = datetime.now(timezone.utc)
+
+        if diesel_liters is not None or mileage is not None:
+            if fuel is None:
+                fuel = FuelLog(vehicle_id=vehicle_id, log_date=log_date, created_by=current_user.id)
+                db.session.add(fuel)
+            fuel.liters = diesel_liters or 0
+            fuel.odometer = mileage
+        elif fuel is not None:
+            db.session.delete(fuel)
+
+        log_audit('UPDATE', 'daily_logs', log.id if log else None,
+                  f'Edited ledger entry for {vehicle.registration} on {log_date}')
         db.session.commit()
-        flash('Daily log recorded.', 'success')
-        return redirect(url_for('daily_logs'))
+        flash('Entry updated.', 'success')
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
 
-    all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
-    all_drivers = Driver.query.filter_by(status='active').order_by(Driver.name).all()
-    all_routes = Route.query.filter_by(status='active').order_by(Route.name).all()
-    return render_template('logs/daily/form.html', log=None, action='Record',
-                           vehicles=all_vehicles, drivers=all_drivers, routes=all_routes,
-                           today=date.today().strftime('%Y-%m-%d'))
+    all_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
+    return render_template('logs/ledger_entry_form.html', vehicle=vehicle, log=log, fuel=fuel,
+                           log_date=log_date, drivers=all_drivers, period=period)
 
 
-@app.route('/logs/daily/<int:lid>/edit', methods=['GET', 'POST'])
-@login_required
-@permission_required('daily_logs')
-@handle_form_errors
-def daily_log_edit(lid):
-    log = DailyLog.query.get_or_404(lid)
-    if request.method == 'POST':
-        log.vehicle_id = form_int(request.form, 'vehicle_id')
-        log.driver_id = form_int(request.form, 'driver_id')
-        log.conductor_id = form_int(request.form, 'conductor_id', required=False)
-        log.route_id = form_int(request.form, 'route_id')
-        log.log_date = parse_date(request.form['log_date'])
-        log.trips_completed = form_int(request.form, 'trips_completed', required=False, default=0, min_value=0)
-        log.gross_revenue = form_float(request.form, 'gross_revenue', min_value=0)
-        log.notes = request.form.get('notes', '').strip()
-        log.updated_by = current_user.id
-        log.updated_at = datetime.now(timezone.utc)
-        log_audit('UPDATE', 'daily_logs', lid, f'Updated daily log {lid}')
-        db.session.commit()
-        flash('Daily log updated.', 'success')
-        return redirect(url_for('daily_logs'))
-
-    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
-    all_drivers = Driver.query.order_by(Driver.name).all()
-    all_routes = Route.query.order_by(Route.name).all()
-    return render_template('logs/daily/form.html', log=log, action='Edit',
-                           vehicles=all_vehicles, drivers=all_drivers, routes=all_routes,
-                           today=log.log_date.strftime('%Y-%m-%d'))
-
-
-@app.route('/logs/daily/<int:lid>/delete', methods=['POST'])
+@app.route('/logs/ledger/<int:vehicle_id>/<log_date_str>/delete', methods=['POST'])
 @login_required
 @admin_required
-def daily_log_delete(lid):
-    log = DailyLog.query.get_or_404(lid)
-    log_audit('DELETE', 'daily_logs', lid, f'Deleted daily log {lid}')
-    db.session.delete(log)
+def ledger_entry_delete(vehicle_id, log_date_str):
+    vehicle = Vehicle.query.get_or_404(vehicle_id)
+    try:
+        log_date = parse_date(log_date_str)
+    except ValueError:
+        flash(f'"{log_date_str}" is not a valid date.', 'danger')
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id))
+
+    period = request.form.get('period', 'month')
+    DailyLog.query.filter_by(vehicle_id=vehicle_id, log_date=log_date).delete()
+    FuelLog.query.filter_by(vehicle_id=vehicle_id, log_date=log_date).delete()
+    log_audit('DELETE', 'daily_logs', None, f'Deleted ledger entry for {vehicle.registration} on {log_date}')
     db.session.commit()
-    flash('Daily log deleted.', 'warning')
-    return redirect(url_for('daily_logs'))
+    flash('Entry deleted.', 'warning')
+    return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2323,6 +2336,10 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None, daily_target=None):
             'shortfall': shortfall,
             'diesel_liters': diesel_liters,
             'odometer': odometer, 'distance': distance,
+            # More than one entry on the same day (e.g. a driver change
+            # mid-shift) can't be represented/edited as a single row —
+            # the UI falls back to "delete all, re-enter" for these.
+            'multiple': len(daily_logs) > 1 or len(fuel_logs) > 1,
         })
     return rows, total_fare, total_diesel_liters, total_garnish
 
@@ -3360,12 +3377,32 @@ def report_payroll():
             'garnish': garnish,
             'paid': paid,
             'outstanding': commission - garnish - paid,
+            'conductors': [],
         })
 
     total_commissions = sum(e['commission'] for e in earnings)
     total_garnish = sum(e['garnish'] for e in earnings)
     total_paid = sum(e['paid'] for e in earnings)
     total_outstanding = sum(e['outstanding'] for e in earnings)
+
+    # Nest each conductor's row under their paired driver so payroll reads
+    # crew-by-crew (driver + the conductor who rode with them) instead of one
+    # flat alphabetical list mixing roles. A conductor only nests if their
+    # paired driver also has an earnings row this period — otherwise (no
+    # pairing set, or the paired driver didn't earn anything) it stays as
+    # its own top-level row, same as before.
+    grouped, nested_ids = [], set()
+    for e in earnings:
+        if e['driver'].role == 'conductor':
+            continue
+        for ce in earnings:
+            if ce['driver'].role == 'conductor' and ce['driver'].paired_driver_id == e['driver'].id:
+                e['conductors'].append(ce)
+                nested_ids.add(ce['driver'].id)
+        grouped.append(e)
+    grouped.extend(e for e in earnings if e['driver'].role == 'conductor' and e['driver'].id not in nested_ids)
+    earnings = grouped
+
     return render_template('reports/payroll.html',
         earnings=earnings, total_commissions=total_commissions,
         total_garnish=total_garnish,
@@ -3713,23 +3750,26 @@ def export_daily_logs():
             q = q.filter(DailyLog.log_date <= parse_date(dt))
     except ValueError as e:
         flash(str(e), 'danger')
-        return redirect(url_for('daily_logs'))
+        return redirect(url_for('driver_ledger'))
 
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(['Date', 'Vehicle', 'Driver', 'Conductor', 'Route',
-                'Trips', 'Gross Revenue (USD)', 'Entered By', 'Notes'])
+                'Trips', 'Gross Revenue (USD)', 'Garnish', 'Reason for Shortfall',
+                'Entered By', 'Notes'])
     for log in q.all():
         w.writerow([log.log_date, log.vehicle.registration, log.driver.name,
                     log.conductor.name if log.conductor else '',
                     log.route.name if log.route else '', log.trips_completed,
                     f'{log.gross_revenue:.2f}',
+                    f'{log.garnish:.2f}' if log.garnish else '',
+                    log.reason_for_shortfall or '',
                     log.creator.username if log.creator else '',
                     log.notes or ''])
     out.seek(0)
     resp = make_response(out.getvalue())
     resp.headers['Content-Type'] = 'text/csv'
-    resp.headers['Content-Disposition'] = f'attachment; filename=daily_logs_{date.today()}.csv'
+    resp.headers['Content-Disposition'] = f'attachment; filename=daily_transactions_{date.today()}.csv'
     return resp
 
 
@@ -4588,13 +4628,15 @@ def franchise_collection_add():
             entry_date=parse_date(request.form['entry_date']),
             frequency=frequency,
             amount=form_float(request.form, 'amount', min_value=0),
+            expense=form_float(request.form, 'expense', required=False, default=0, min_value=0),
             notes=request.form.get('notes', '').strip(),
             created_by=current_user.id,
         )
         db.session.add(collection)
         db.session.flush()
         log_audit('CREATE', 'franchise_collections', collection.id,
-                  f'{vehicle.number_plate} paid {collection.amount} ({frequency}) on {collection.entry_date}')
+                  f'{vehicle.number_plate} paid {collection.amount} ({frequency}), expense {collection.expense}, '
+                  f'on {collection.entry_date}')
         db.session.commit()
         flash('Collection recorded.', 'success')
         return redirect(url_for('franchise_collections'))
@@ -4630,10 +4672,11 @@ def _collections_by_day(frequency, df, dt):
         days.setdefault(c.entry_date, []).append(c)
     day_rows = [
         dict(entry_date=d, collections=day_entries, vehicle_count=len(day_entries),
-             total=sum(c.amount for c in day_entries))
+             total=sum(c.amount for c in day_entries), total_expense=sum(c.expense for c in day_entries),
+             net=sum(c.net for c in day_entries))
         for d, day_entries in sorted(days.items(), reverse=True)
     ]
-    return day_rows, sum(c.amount for c in entries)
+    return day_rows, sum(c.amount for c in entries), sum(c.expense for c in entries)
 
 
 @app.route('/reports/franchise/daily-collections')
@@ -4642,9 +4685,10 @@ def _collections_by_day(frequency, df, dt):
 def report_franchise_daily_collections():
     """Daily Franchise — per-date rollup of vehicles paying the daily fee."""
     df, dt = query_date_range()
-    day_rows, total = _collections_by_day('daily', df, dt)
+    day_rows, total, total_expense = _collections_by_day('daily', df, dt)
     return render_template('franchise/daily_collections.html', title='Daily Franchise Collections',
-                           frequency='daily', days=day_rows, total=total,
+                           frequency='daily', days=day_rows, total=total, total_expense=total_expense,
+                           net=total - total_expense,
                            date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
 
 
@@ -4654,9 +4698,10 @@ def report_franchise_daily_collections():
 def report_franchise_weekly_collections():
     """Weekly Franchise — per-date rollup of vehicles paying the weekly fee."""
     df, dt = query_date_range()
-    day_rows, total = _collections_by_day('weekly', df, dt)
+    day_rows, total, total_expense = _collections_by_day('weekly', df, dt)
     return render_template('franchise/daily_collections.html', title='Weekly Franchise Collections',
-                           frequency='weekly', days=day_rows, total=total,
+                           frequency='weekly', days=day_rows, total=total, total_expense=total_expense,
+                           net=total - total_expense,
                            date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
 
 
@@ -5252,6 +5297,9 @@ def migrate_db():
             if 'frequency' not in collection_cols:
                 conn.execute(text(
                     "ALTER TABLE franchise_collections ADD COLUMN frequency VARCHAR(10) NOT NULL DEFAULT 'daily'"))
+            if 'expense' not in collection_cols:
+                conn.execute(text(
+                    "ALTER TABLE franchise_collections ADD COLUMN expense FLOAT NOT NULL DEFAULT 0"))
 
         conn.commit()
 

@@ -42,6 +42,8 @@
           <th>Franchisee</th>
           <th>Frequency</th>
           <th class="text-right">Amount</th>
+          <th class="text-right">Expense</th>
+          <th class="text-right">Net</th>
           <th>Notes</th>
           <th></th>
         </tr>
@@ -54,6 +56,8 @@
           <td>{{ e.vehicle.franchisee_name }}</td>
           <td><span class="badge {% if e.frequency == 'weekly' %}badge-blue{% else %}badge-gray{% endif %}">{{ e.frequency|capitalize }}</span></td>
           <td class="text-right">{{ e.amount|currency }}</td>
+          <td class="text-right">{{ e.expense|currency }}</td>
+          <td class="text-right">{{ e.net|currency }}</td>
           <td>{{ e.notes or '—' }}</td>
           <td>
             {% if current_user.role == 'admin' %}

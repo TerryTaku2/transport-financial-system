@@ -14,8 +14,8 @@
     <h1>Good day, {{ current_user.username.title() }} 👋</h1>
     <div class="subtitle">{{ today.strftime('%A, %d %B %Y') }} &mdash; Fleet Operations Overview</div>
   </div>
-  <a href="{{ url_for('daily_log_add') }}" class="btn btn-primary">
-    <i data-feather="plus"></i> Record Daily Log
+  <a href="{{ url_for('driver_ledger') }}" class="btn btn-primary">
+    <i data-feather="plus"></i> Record Daily Transaction
   </a>
 </div>
 
@@ -117,8 +117,8 @@
 <!-- Recent Activity -->
 <div class="card">
   <div class="card-header">
-    <h3>Recent Daily Logs</h3>
-    <a href="{{ url_for('daily_logs') }}" class="btn btn-outline btn-sm">View all</a>
+    <h3>Recent Daily Transactions</h3>
+    <a href="{{ url_for('driver_ledger') }}" class="btn btn-outline btn-sm">View all</a>
   </div>
   {% if recent_logs %}
   <div class="table-wrap">
@@ -150,7 +150,7 @@
   {% else %}
   <div class="empty-state">
     <div class="empty-icon">📋</div>
-    <p>No daily logs yet. <a href="{{ url_for('daily_log_add') }}">Record the first log</a>.</p>
+    <p>No daily transactions yet. <a href="{{ url_for('driver_ledger') }}">Record the first one</a>.</p>
   </div>
   {% endif %}
 </div>

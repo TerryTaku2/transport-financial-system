@@ -28,6 +28,14 @@
     <div class="kpi-label">Total Collected</div>
     <div class="kpi-value">{{ total|currency }}</div>
   </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Total Expense</div>
+    <div class="kpi-value">{{ total_expense|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Net</div>
+    <div class="kpi-value">{{ net|currency }}</div>
+  </div>
   <div class="kpi-card kpi-teal">
     <div class="kpi-label">Days With Collections</div>
     <div class="kpi-value">{{ days|length }}</div>
@@ -42,12 +50,13 @@
     <div>
       <span class="badge badge-blue">{{ day.vehicle_count }} vehicle(s)</span>
       <span class="badge badge-green">{{ day.total|currency }}</span>
+      <span class="badge badge-gray">Net {{ day.net|currency }}</span>
     </div>
   </div>
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Number Plate</th><th>Franchisee</th><th class="text-right">Amount</th><th>Notes</th></tr>
+        <tr><th>Number Plate</th><th>Franchisee</th><th class="text-right">Amount</th><th class="text-right">Expense</th><th class="text-right">Net</th><th>Notes</th></tr>
       </thead>
       <tbody>
         {% for c in day.collections %}
@@ -55,6 +64,8 @@
           <td>{{ c.vehicle.number_plate }}</td>
           <td>{{ c.vehicle.franchisee_name }}</td>
           <td class="text-right">{{ c.amount|currency }}</td>
+          <td class="text-right">{{ c.expense|currency }}</td>
+          <td class="text-right">{{ c.net|currency }}</td>
           <td>{{ c.notes or '—' }}</td>
         </tr>
         {% endfor %}

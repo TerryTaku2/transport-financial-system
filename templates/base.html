@@ -35,7 +35,7 @@
     <div class="nav-section">
       <div class="nav-section-label">Crew Portal</div>
       <a href="{{ url_for('driver_ledger') }}" class="nav-item {% if 'ledger' in (request.endpoint or '') %}active{% endif %}">
-        <i data-feather="edit-3"></i> Daily Transaction
+        <i data-feather="edit-3"></i> Daily Transactions
       </a>
       <a href="{{ url_for('crew_leaderboard') }}" class="nav-item {% if request.endpoint == 'crew_leaderboard' %}active{% endif %}">
         <i data-feather="award"></i> Performance
@@ -64,17 +64,9 @@
     </div>
     {% endif %}
 
-    {% if current_user.has_permission('daily_logs') or current_user.has_permission('fuel_logs') or current_user.has_permission('maintenance') %}
+    {% if current_user.has_permission('fuel_logs') or current_user.has_permission('maintenance') %}
     <div class="nav-section">
       <div class="nav-section-label">Operations</div>
-      {% if current_user.has_permission('daily_logs') %}
-      <a href="{{ url_for('daily_logs') }}" class="nav-item {% if 'daily_log' in (request.endpoint or '') %}active{% endif %}">
-        <i data-feather="clipboard"></i> Daily Logs
-      </a>
-      <a href="{{ url_for('driver_ledger') }}" class="nav-item {% if 'ledger' in (request.endpoint or '') %}active{% endif %}">
-        <i data-feather="book-open"></i> Vehicle Ledger
-      </a>
-      {% endif %}
       {% if current_user.has_permission('fuel_logs') %}
       <a href="{{ url_for('fuel_logs') }}" class="nav-item {% if 'fuel_log' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="droplet"></i> Fuel Logs
