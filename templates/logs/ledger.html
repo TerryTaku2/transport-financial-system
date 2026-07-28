@@ -190,6 +190,9 @@
           {% if vehicle.daily_target %}
           <th>Target Status</th>
           {% endif %}
+          {% if current_user.role == 'admin' %}
+          <th></th>
+          {% endif %}
         </tr>
       </thead>
       <tbody>
@@ -214,6 +217,12 @@
             {% endif %}
           </td>
           {% endif %}
+          {% if current_user.role == 'admin' %}
+          <td>
+            <a href="{{ url_for('daily_logs', vehicle_id=vehicle.id, date_from=row.date.isoformat(), date_to=row.date.isoformat()) }}"
+               class="btn btn-outline btn-xs" title="Edit the underlying daily log entries for this date">Edit</a>
+          </td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>
@@ -227,6 +236,9 @@
           <td class="text-right">{{ total_garnish|currency }}</td>
           <td></td>
           {% if vehicle.daily_target %}
+          <td></td>
+          {% endif %}
+          {% if current_user.role == 'admin' %}
           <td></td>
           {% endif %}
         </tr>
