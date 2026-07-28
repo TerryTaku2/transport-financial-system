@@ -77,6 +77,18 @@
         </tr>
         {% for ce in e.conductors %}
         <tr>
+          {% if ce.is_placeholder %}
+          <td style="padding-left:28px;color:var(--text-muted);">&#8618; <em>Conductor</em></td>
+          <td><span class="badge badge-gray">Conductor</span></td>
+          <td>{{ ce.days_worked }}</td>
+          <td>{{ ce.total_revenue|currency }}</td>
+          <td>{{ ce.rate_pct|round(1) }}%</td>
+          <td class="text-right">{{ ce.commission|currency }}</td>
+          <td class="text-right">—</td>
+          <td class="text-right">—</td>
+          <td class="text-right"><strong>{{ ce.outstanding|currency }}</strong></td>
+          <td></td>
+          {% else %}
           <td style="padding-left:28px;color:var(--text-muted);">&#8618; {{ ce.driver.name }}</td>
           <td><span class="badge badge-gray">Conductor</span></td>
           <td>{{ ce.days_worked }}</td>
@@ -98,6 +110,7 @@
               <button class="btn btn-outline btn-xs">Pay</button>
             </form>
           </td>
+          {% endif %}
         </tr>
         {% endfor %}
         {% endfor %}

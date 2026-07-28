@@ -107,6 +107,9 @@
       <a href="{{ url_for('report_fuel_efficiency') }}" class="nav-item {% if request.endpoint == 'report_fuel_efficiency' %}active{% endif %}">
         <i data-feather="trending-up"></i> Fuel Efficiency
       </a>
+      <a href="{{ url_for('report_distance_travelled') }}" class="nav-item {% if request.endpoint == 'report_distance_travelled' %}active{% endif %}">
+        <i data-feather="navigation"></i> Distance Travelled
+      </a>
       <a href="{{ url_for('report_route_profitability') }}" class="nav-item {% if request.endpoint == 'report_route_profitability' %}active{% endif %}">
         <i data-feather="map"></i> Route Profitability
       </a>

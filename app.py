@@ -3390,7 +3390,11 @@ def report_payroll():
     # flat alphabetical list mixing roles. A conductor only nests if their
     # paired driver also has an earnings row this period — otherwise (no
     # pairing set, or the paired driver didn't earn anything) it stays as
-    # its own top-level row, same as before.
+    # its own top-level row, same as before. If a driver has no conductor
+    # to nest, a placeholder row still prints under them labeled "Conductor",
+    # with commission projected off the driver's own revenue at the standard
+    # conductor rate — there's no CommissionPayment target without a real
+    # person, so it's informational (no Pay action), not an amount owed.
     grouped, nested_ids = [], set()
     for e in earnings:
         if e['driver'].role == 'conductor':
@@ -3399,6 +3403,15 @@ def report_payroll():
             if ce['driver'].role == 'conductor' and ce['driver'].paired_driver_id == e['driver'].id:
                 e['conductors'].append(ce)
                 nested_ids.add(ce['driver'].id)
+        if not e['conductors']:
+            placeholder_commission = e['total_revenue'] * co_rate
+            e['conductors'].append({
+                'driver': None, 'is_placeholder': True,
+                'total_revenue': e['total_revenue'], 'days_worked': e['days_worked'],
+                'rate_pct': co_rate * 100,
+                'commission': placeholder_commission, 'garnish': 0, 'paid': 0,
+                'outstanding': placeholder_commission,
+            })
         grouped.append(e)
     grouped.extend(e for e in earnings if e['driver'].role == 'conductor' and e['driver'].id not in nested_ids)
     earnings = grouped
@@ -3669,6 +3682,42 @@ def report_fuel_efficiency():
         date_from=date_from_str, date_to=date_to_str)
 
 
+@app.route('/reports/distance-travelled')
+@login_required
+@permission_required('reports')
+def report_distance_travelled():
+    d = query_single_date('date')
+    date_str = d.strftime('%Y-%m-%d')
+
+    rows = []
+    for v in Vehicle.query.order_by(Vehicle.registration).all():
+        # Odometer reading logged for this exact date (max, in case of more
+        # than one fuel/mileage entry that day) — same basis as the Vehicle
+        # Ledger and Fuel Efficiency report.
+        odometer = db.session.query(func.max(FuelLog.odometer)).filter(
+            FuelLog.vehicle_id == v.id, FuelLog.log_date == d,
+            FuelLog.odometer.isnot(None)).scalar()
+
+        distance = prev_odometer = prev_date = None
+        if odometer is not None:
+            prev = FuelLog.query.filter(
+                FuelLog.vehicle_id == v.id, FuelLog.log_date < d,
+                FuelLog.odometer.isnot(None)).order_by(FuelLog.log_date.desc()).first()
+            if prev:
+                prev_odometer, prev_date = prev.odometer, prev.log_date
+                distance = odometer - prev_odometer
+
+        rows.append({'vehicle': v, 'odometer': odometer,
+                     'prev_odometer': prev_odometer, 'prev_date': prev_date,
+                     'distance': distance})
+
+    fleet_distance = sum(r['distance'] for r in rows if r['distance'] is not None)
+    vehicles_reporting = sum(1 for r in rows if r['distance'] is not None)
+    return render_template('reports/distance_travelled.html', rows=rows,
+        date_str=date_str, fleet_distance=fleet_distance,
+        vehicles_reporting=vehicles_reporting, fleet_size=len(rows))
+
+
 @app.route('/reports/route-profitability')
 @login_required
 @permission_required('reports')
@@ -3910,6 +3959,41 @@ def export_financial_position():
     resp = make_response(out.getvalue())
     resp.headers['Content-Type'] = 'text/csv'
     resp.headers['Content-Disposition'] = f'attachment; filename=financial_position_{as_of}.csv'
+    return resp
+
+
+@app.route('/reports/export/distance-travelled')
+@login_required
+@permission_required('reports')
+def export_distance_travelled():
+    d = query_single_date('date')
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([f'DISTANCE TRAVELLED — {d}'])
+    w.writerow([])
+    w.writerow(['Vehicle', 'Previous Reading Date', 'Previous Odometer (km)',
+                'Odometer on Date (km)', 'Distance Travelled (km)'])
+    for v in Vehicle.query.order_by(Vehicle.registration).all():
+        odometer = db.session.query(func.max(FuelLog.odometer)).filter(
+            FuelLog.vehicle_id == v.id, FuelLog.log_date == d,
+            FuelLog.odometer.isnot(None)).scalar()
+        prev_odometer = prev_date = distance = None
+        if odometer is not None:
+            prev = FuelLog.query.filter(
+                FuelLog.vehicle_id == v.id, FuelLog.log_date < d,
+                FuelLog.odometer.isnot(None)).order_by(FuelLog.log_date.desc()).first()
+            if prev:
+                prev_odometer, prev_date = prev.odometer, prev.log_date
+                distance = odometer - prev_odometer
+        w.writerow([v.registration, prev_date or '', prev_odometer or '',
+                    odometer if odometer is not None else '',
+                    f'{distance:.0f}' if distance is not None else ''])
+
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'text/csv'
+    resp.headers['Content-Disposition'] = f'attachment; filename=distance_travelled_{d}.csv'
     return resp
 
 
