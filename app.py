@@ -5389,10 +5389,42 @@ def migrate_db():
 
 
 def create_default_expense_categories():
-    headings = ('Insurance', 'Licensing & Permits', 'Salaries & Wages', 'Rent & Utilities', 'Other Overhead')
+    """Vehicle Expenses are classified under exactly five top-level
+    headings: Maintenance, Wages, Traffic Fines, Insurance, Admin."""
+    headings = ('Maintenance', 'Wages', 'Traffic Fines', 'Insurance', 'Admin')
     for name in headings:
         if not ExpenseCategory.query.filter_by(name=name, parent_id=None).first():
             db.session.add(ExpenseCategory(name=name))
+    db.session.flush()
+
+    # Retire the older, differently-named default headings this list
+    # replaces. Each is only deleted outright if it holds no expenses and
+    # no sub-categories — if it does, that data is folded into the closest
+    # matching new heading first, so nothing already booked gets silently
+    # dropped or orphaned.
+    legacy_fold_into = {
+        'Salaries & Wages': 'Wages',
+        'Licensing & Permits': 'Admin',
+        'Rent & Utilities': 'Admin',
+        'Other Overhead': 'Admin',
+        'Tax': 'Admin',
+    }
+    new_headings_by_name = {h.name: h for h in
+        ExpenseCategory.query.filter(ExpenseCategory.parent_id.is_(None),
+                                     ExpenseCategory.name.in_(headings)).all()}
+    for old_name, new_name in legacy_fold_into.items():
+        old = ExpenseCategory.query.filter_by(name=old_name, parent_id=None).first()
+        if not old:
+            continue
+        has_data = Expense.query.filter_by(category_id=old.id).first() is not None or old.children
+        if has_data:
+            new = new_headings_by_name.get(new_name)
+            if new:
+                Expense.query.filter_by(category_id=old.id).update({'category_id': new.id})
+                for child in list(old.children):
+                    child.parent_id = new.id
+        db.session.delete(old)
+    db.session.flush()
 
     maintenance = ExpenseCategory.query.filter_by(name='Maintenance', parent_id=None).first()
     if not maintenance:
