@@ -63,11 +63,9 @@
     <table>
       <tbody>
         <tr><td>Gross Revenue</td><td class="text-right">{{ gross_revenue|currency }}</td></tr>
-        <tr><td>Less: Maintenance Expenses</td><td class="text-right text-danger">({{ maintenance_cost|currency }})</td></tr>
-        <tr><td>Less: Vehicle-tagged Expenses</td><td class="text-right text-warning">({{ vehicle_expenses|currency }})</td></tr>
-        {% if not vehicle_id %}
-        <tr><td>Less: General Overhead (untagged expenses)</td><td class="text-right text-warning">({{ general_expenses|currency }})</td></tr>
-        {% endif %}
+        {% for name, amount in statement_expenses %}
+        <tr><td>Less: {{ name }}</td><td class="text-right text-danger">({{ amount|currency }})</td></tr>
+        {% endfor %}
         <tr><td><strong>Total Operating Expenses</strong></td><td class="text-right"><strong>({{ total_expenses|currency }})</strong></td></tr>
         <tr class="summary-row"><td>NET PROFIT</td><td class="text-right">{{ net_profit|currency }}</td></tr>
       </tbody>

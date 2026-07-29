@@ -3354,11 +3354,32 @@ def report_income():
     vehicle_breakdown.sort(key=lambda r: r['net_profit'], reverse=True)
     expense_breakdown = expense_breakdown_by_category(df, dt, vehicle_id or None)
 
+    # Statement Summary classifies expenses under five fixed headings
+    # (matching create_default_expense_categories) rather than the
+    # tagged/untagged split — Maintenance folds in logged maintenance-job
+    # costs alongside any Expense rows booked to the Maintenance category.
+    # Anything booked under a custom heading a user has added falls into
+    # "Other" so it still counts toward Total Operating Expenses.
+    statement_category_names = ('Maintenance', 'Wages', 'Traffic Fines', 'Insurance', 'Admin')
+    category_totals = {name: 0.0 for name in statement_category_names}
+    other_expenses = 0.0
+    for row in expense_breakdown:
+        if row['name'] in category_totals:
+            category_totals[row['name']] = row['total']
+        else:
+            other_expenses += row['total']
+    category_totals['Maintenance'] += maintenance_cost
+
+    statement_expenses = [(name, category_totals[name]) for name in statement_category_names]
+    if other_expenses:
+        statement_expenses.append(('Other', other_expenses))
+
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     return render_template('reports/income.html',
         gross_revenue=gross_revenue,
         maintenance_cost=maintenance_cost, vehicle_expenses=vehicle_expenses,
         general_expenses=general_expenses, total_expenses=total_expenses,
+        statement_expenses=statement_expenses,
         net_profit=net_profit, profit_margin=profit_margin,
         vehicle_breakdown=vehicle_breakdown, expense_breakdown=expense_breakdown,
         vehicles=all_vehicles,
