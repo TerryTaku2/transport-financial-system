@@ -26,6 +26,7 @@
           <th>Acquisition Cost</th>
           <th>Total Revenue</th>
           <th>Status</th>
+          <th>Insurance</th>
           <th>Documents</th>
           <th>Actions</th>
         </tr>
@@ -46,6 +47,17 @@
               <span class="badge badge-amber"><span class="dot dot-amber"></span>Maintenance</span>
             {% else %}
               <span class="badge badge-gray"><span class="dot dot-gray"></span>Inactive</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if v.insurance_status == 'expired' %}
+              <span class="badge badge-red">Expired {{ -v.insurance_days_to_expiry }}d ago</span>
+            {% elif v.insurance_status == 'warning' %}
+              <span class="badge badge-amber">{{ v.insurance_days_to_expiry }}d left</span>
+            {% elif v.insurance_status == 'valid' %}
+              <span class="badge badge-green">Valid</span>
+            {% else %}
+              <span class="badge badge-gray">Not on file</span>
             {% endif %}
           </td>
           <td>

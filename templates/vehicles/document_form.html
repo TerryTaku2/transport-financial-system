@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1>Add Document — {{ vehicle.registration }}</h1>
-    <div class="subtitle">Fitness certificate, route permit, insurance, or license</div>
+    <div class="subtitle">Fitness certificate, route permit, or license &mdash; insurance is recorded on the vehicle's Edit page</div>
   </div>
   <a href="{{ url_for('vehicle_detail', vid=vehicle.id) }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
 </div>
@@ -21,7 +21,6 @@
           <select name="doc_type" required>
             <option value="fitness">Fitness Certificate</option>
             <option value="permit">Route Permit</option>
-            <option value="insurance">Insurance Policy</option>
             <option value="license">Vehicle License</option>
             <option value="other">Other</option>
           </select>

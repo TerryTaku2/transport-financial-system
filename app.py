@@ -121,6 +121,13 @@ class Vehicle(db.Model):
     # target is tracked for this vehicle — it's excluded from shortfall
     # flagging (see report_shortfalls / DailyLog.garnish).
     daily_target = db.Column(db.Float, nullable=True)
+    # Insurance is tracked as its own first-class field (not a generic
+    # VehicleDocument) since every vehicle needs exactly one current policy
+    # and it's the compliance item admins check most often — it gets its
+    # own alerting the same way documents do (see insurance_status below).
+    insurance_provider = db.Column(db.String(100))
+    insurance_policy_number = db.Column(db.String(100))
+    insurance_expiry = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     documents = db.relationship('VehicleDocument', backref='vehicle',
@@ -140,6 +147,21 @@ class Vehicle(db.Model):
     @property
     def total_maintenance_cost(self):
         return sum(l.total_cost for l in self.maintenance_logs)
+
+    @property
+    def insurance_days_to_expiry(self):
+        return (self.insurance_expiry - date.today()).days if self.insurance_expiry else None
+
+    @property
+    def insurance_status(self):
+        if not self.insurance_expiry:
+            return 'none'
+        d = self.insurance_days_to_expiry
+        if d < 0:
+            return 'expired'
+        if d <= 30:
+            return 'warning'
+        return 'valid'
 
 
 class VehicleDocument(db.Model):
@@ -1612,9 +1634,13 @@ def compute_commission_accrued(as_of):
             DailyLog.driver_id == d.id, DailyLog.log_date <= as_of).scalar() or 0
         conducted = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
             DailyLog.conductor_id == d.id, DailyLog.log_date <= as_of).scalar() or 0
+        garnish_driven = db.session.query(func.sum(DailyLog.garnish)).filter(
+            DailyLog.driver_id == d.id, DailyLog.log_date <= as_of).scalar() or 0
+        garnish_conducted = db.session.query(func.sum(DailyLog.garnish)).filter(
+            DailyLog.conductor_id == d.id, DailyLog.log_date <= as_of).scalar() or 0
         rate = d.commission_rate if d.commission_rate is not None else (
             dr_rate if d.role == 'driver' else co_rate)
-        total += (driven + conducted) * rate
+        total += max(driven + conducted - garnish_driven - garnish_conducted, 0) * rate
     return total
 
 
@@ -1837,6 +1863,9 @@ def dashboard():
         VehicleDocument.expiry_date.between(today, expiry_threshold)).count()
     expired_docs = VehicleDocument.query.filter(
         VehicleDocument.expiry_date < today).count()
+    expiring_docs += Vehicle.query.filter(
+        Vehicle.insurance_expiry.between(today, expiry_threshold)).count()
+    expired_docs += Vehicle.query.filter(Vehicle.insurance_expiry < today).count()
 
     recent_logs = DailyLog.query.order_by(DailyLog.log_date.desc()).limit(6).all()
 
@@ -1887,6 +1916,9 @@ def vehicle_add():
             status=request.form.get('status', 'active'),
             fuel_type=fuel_type,
             daily_target=form_float(request.form, 'daily_target', required=False, min_value=0),
+            insurance_provider=request.form.get('insurance_provider', '').strip() or None,
+            insurance_policy_number=request.form.get('insurance_policy_number', '').strip() or None,
+            insurance_expiry=parse_date(request.form.get('insurance_expiry')),
         )
         db.session.add(v)
         db.session.flush()
@@ -1931,6 +1963,9 @@ def vehicle_edit(vid):
             raise ValueError('Fuel type must be Diesel or Petrol.')
         v.fuel_type = fuel_type
         v.daily_target = form_float(request.form, 'daily_target', required=False, min_value=0)
+        v.insurance_provider = request.form.get('insurance_provider', '').strip() or None
+        v.insurance_policy_number = request.form.get('insurance_policy_number', '').strip() or None
+        v.insurance_expiry = parse_date(request.form.get('insurance_expiry'))
         log_audit('UPDATE', 'vehicles', v.id, f'Updated vehicle {v.registration}')
         db.session.commit()
         flash(f'Vehicle {v.registration} updated.', 'success')
@@ -3364,7 +3399,10 @@ def report_payroll():
             continue
         rate = d.commission_rate if d.commission_rate is not None else (
             dr_rate if d.role == 'driver' else co_rate)
-        commission = rev * rate
+        # Garnish is netted off revenue before commission is calculated, not
+        # deducted from the commission afterwards — the commission percentage
+        # applies to what the crew member actually brought in after garnish.
+        commission = max(rev - garnish, 0) * rate
         paid = db.session.query(func.sum(CommissionPayment.amount)).filter(
             CommissionPayment.driver_id == d.id,
             CommissionPayment.payment_date.between(df, dt)).scalar() or 0
@@ -3376,7 +3414,7 @@ def report_payroll():
             'commission': commission,
             'garnish': garnish,
             'paid': paid,
-            'outstanding': commission - garnish - paid,
+            'outstanding': commission - paid,
             'conductors': [],
         })
 
@@ -3404,12 +3442,12 @@ def report_payroll():
                 e['conductors'].append(ce)
                 nested_ids.add(ce['driver'].id)
         if not e['conductors']:
-            placeholder_commission = e['total_revenue'] * co_rate
+            placeholder_commission = max(e['total_revenue'] - e['garnish'], 0) * co_rate
             e['conductors'].append({
                 'driver': None, 'is_placeholder': True,
                 'total_revenue': e['total_revenue'], 'days_worked': e['days_worked'],
                 'rate_pct': co_rate * 100,
-                'commission': placeholder_commission, 'garnish': 0, 'paid': 0,
+                'commission': placeholder_commission, 'garnish': e['garnish'], 'paid': 0,
                 'outstanding': placeholder_commission,
             })
         grouped.append(e)
@@ -4977,6 +5015,24 @@ def compliance():
     valid = VehicleDocument.query.filter(
         VehicleDocument.expiry_date > threshold).order_by(
         VehicleDocument.expiry_date).all()
+
+    # Insurance is a Vehicle field, not a VehicleDocument row, but belongs on
+    # the same expiry tracker — wrapped in plain dicts (duck-typed the same
+    # shape the template already expects: vehicle/doc_type/expiry_date/
+    # days_to_expiry) so it sorts and displays alongside real documents.
+    for v in Vehicle.query.filter(Vehicle.insurance_expiry.isnot(None)).all():
+        entry = {'vehicle': v, 'doc_type': 'Insurance', 'expiry_date': v.insurance_expiry,
+                  'days_to_expiry': v.insurance_days_to_expiry}
+        if v.insurance_status == 'expired':
+            expired.append(entry)
+        elif v.insurance_status == 'warning':
+            expiring.append(entry)
+        else:
+            valid.append(entry)
+    expired.sort(key=lambda d: d['expiry_date'] if isinstance(d, dict) else d.expiry_date)
+    expiring.sort(key=lambda d: d['expiry_date'] if isinstance(d, dict) else d.expiry_date)
+    valid.sort(key=lambda d: d['expiry_date'] if isinstance(d, dict) else d.expiry_date)
+
     return render_template('compliance/index.html',
         expired=expired, expiring=expiring, valid=valid, today=today)
 
@@ -5268,6 +5324,12 @@ def migrate_db():
             conn.execute(text("ALTER TABLE vehicles ADD COLUMN fuel_type VARCHAR(10) DEFAULT 'diesel'"))
         if 'daily_target' not in vehicle_cols:
             conn.execute(text("ALTER TABLE vehicles ADD COLUMN daily_target FLOAT"))
+        if 'insurance_provider' not in vehicle_cols:
+            conn.execute(text("ALTER TABLE vehicles ADD COLUMN insurance_provider VARCHAR(100)"))
+        if 'insurance_policy_number' not in vehicle_cols:
+            conn.execute(text("ALTER TABLE vehicles ADD COLUMN insurance_policy_number VARCHAR(100)"))
+        if 'insurance_expiry' not in vehicle_cols:
+            conn.execute(text("ALTER TABLE vehicles ADD COLUMN insurance_expiry DATE"))
         if inspector.has_table('depots'):
             conn.execute(text("DROP TABLE depots"))
 

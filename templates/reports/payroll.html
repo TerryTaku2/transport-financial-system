@@ -47,8 +47,9 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Crew Member</th><th>Role</th><th>Days Worked</th><th>Revenue Generated</th><th>Rate</th>
-            <th class="text-right">Accrued</th><th class="text-right">Garnish</th><th class="text-right">Paid</th><th class="text-right">Outstanding</th><th></th></tr>
+        <tr><th>Crew Member</th><th>Role</th><th>Days Worked</th><th>Revenue Generated</th>
+            <th class="text-right">Garnish</th><th>Rate</th>
+            <th class="text-right">Accrued</th><th class="text-right">Paid</th><th class="text-right">Outstanding</th><th></th></tr>
       </thead>
       <tbody>
         {% for e in earnings %}
@@ -57,9 +58,9 @@
           <td><span class="badge badge-blue">{{ e.driver.role|title }}</span></td>
           <td>{{ e.days_worked }}</td>
           <td>{{ e.total_revenue|currency }}</td>
+          <td class="text-right {% if e.garnish %}text-danger{% endif %}">{{ e.garnish|currency if e.garnish else '—' }}</td>
           <td>{{ e.rate_pct|round(1) }}%</td>
           <td class="text-right">{{ e.commission|currency }}</td>
-          <td class="text-right {% if e.garnish %}text-danger{% endif %}">{{ e.garnish|currency if e.garnish else '—' }}</td>
           <td class="text-right text-success">{{ e.paid|currency }}</td>
           <td class="text-right {% if e.outstanding > 0 %}text-warning{% endif %}"><strong>{{ e.outstanding|currency }}</strong></td>
           <td>
@@ -82,9 +83,9 @@
           <td><span class="badge badge-gray">Conductor</span></td>
           <td>{{ ce.days_worked }}</td>
           <td>{{ ce.total_revenue|currency }}</td>
+          <td class="text-right {% if ce.garnish %}text-danger{% endif %}">{{ ce.garnish|currency if ce.garnish else '—' }}</td>
           <td>{{ ce.rate_pct|round(1) }}%</td>
           <td class="text-right">{{ ce.commission|currency }}</td>
-          <td class="text-right">—</td>
           <td class="text-right">—</td>
           <td class="text-right"><strong>{{ ce.outstanding|currency }}</strong></td>
           <td></td>
@@ -93,9 +94,9 @@
           <td><span class="badge badge-gray">Conductor</span></td>
           <td>{{ ce.days_worked }}</td>
           <td>{{ ce.total_revenue|currency }}</td>
+          <td class="text-right {% if ce.garnish %}text-danger{% endif %}">{{ ce.garnish|currency if ce.garnish else '—' }}</td>
           <td>{{ ce.rate_pct|round(1) }}%</td>
           <td class="text-right">{{ ce.commission|currency }}</td>
-          <td class="text-right {% if ce.garnish %}text-danger{% endif %}">{{ ce.garnish|currency if ce.garnish else '—' }}</td>
           <td class="text-right text-success">{{ ce.paid|currency }}</td>
           <td class="text-right {% if ce.outstanding > 0 %}text-warning{% endif %}"><strong>{{ ce.outstanding|currency }}</strong></td>
           <td>
@@ -117,9 +118,10 @@
       </tbody>
       <tfoot>
         <tr class="summary-row">
-          <td colspan="5">TOTAL</td>
-          <td class="text-right">{{ total_commissions|currency }}</td>
+          <td colspan="4">TOTAL</td>
           <td class="text-right">{{ total_garnish|currency }}</td>
+          <td></td>
+          <td class="text-right">{{ total_commissions|currency }}</td>
           <td class="text-right">{{ total_paid|currency }}</td>
           <td class="text-right">{{ total_outstanding|currency }}</td>
           <td></td>

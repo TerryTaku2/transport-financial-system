@@ -63,14 +63,14 @@
 {% if expired_docs > 0 %}
 <div class="alert alert-danger mb-16">
   <i data-feather="alert-circle" style="width:15px;height:15px;"></i>
-  <strong>{{ expired_docs }} document(s) EXPIRED</strong> &mdash;
+  <strong>{{ expired_docs }} compliance item(s) EXPIRED</strong> (documents/insurance) &mdash;
   <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">Review now &rarr;</a>
 </div>
 {% endif %}
 {% if expiring_docs > 0 %}
 <div class="alert alert-warning mb-16">
   <i data-feather="alert-triangle" style="width:15px;height:15px;"></i>
-  <strong>{{ expiring_docs }} document(s)</strong> expiring within 30 days &mdash;
+  <strong>{{ expiring_docs }} compliance item(s)</strong> (documents/insurance) expiring within 30 days &mdash;
   <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">View compliance &rarr;</a>
 </div>
 {% endif %}
