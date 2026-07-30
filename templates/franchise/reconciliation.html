@@ -6,9 +6,12 @@
 <div class="page-header">
   <div>
     <h1>{{ title }}</h1>
-    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; separate from vehicle operations</div>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; daily and weekly franchise income shown separately</div>
   </div>
-  <a href="{{ url_for('franchise_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Manage Entries</a>
+  <div class="btn-group">
+    <a href="{{ url_for('franchise_daily_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Daily Entries</a>
+    <a href="{{ url_for('franchise_weekly_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Weekly Entries</a>
+  </div>
 </div>
 
 <form method="GET" class="filter-bar">
@@ -23,98 +26,134 @@
   <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
 </form>
 
-<div class="kpi-grid">
+<div class="kpi-grid mb-24">
   <div class="kpi-card kpi-blue">
     <div class="kpi-label">Total Income</div>
-    <div class="kpi-value">{{ totals.total_income|currency }}</div>
+    <div class="kpi-value">{{ combined_totals.income|currency }}</div>
   </div>
   <div class="kpi-card kpi-amber">
     <div class="kpi-label">Total Expenditure</div>
-    <div class="kpi-value">{{ totals.total_expenditure|currency }}</div>
+    <div class="kpi-value">{{ combined_totals.total_expenditure|currency }}</div>
   </div>
   <div class="kpi-card kpi-green">
     <div class="kpi-label">Net Profit</div>
-    <div class="kpi-value">{{ totals.net_profit|currency }}</div>
+    <div class="kpi-value">{{ combined_totals.net_profit|currency }}</div>
   </div>
-  <div class="kpi-card {% if totals.variance < 0 %}kpi-red{% else %}kpi-teal{% endif %}">
-    <div class="kpi-label">Variance (Deposited vs. Cash)</div>
-    <div class="kpi-value">{{ totals.variance|currency }}</div>
+  <div class="kpi-card {% if combined_totals.variance < 0 %}kpi-red{% else %}kpi-teal{% endif %}">
+    <div class="kpi-label">Variance (Cash Deposited vs. Net Income)</div>
+    <div class="kpi-value">{{ combined_totals.variance|currency }}</div>
   </div>
 </div>
 
-<div class="card">
-  <div class="card-header"><h3>Reconciliation Schedule</h3></div>
-  {% if entries %}
+<div class="card mb-24">
+  <div class="card-header"><h3>Daily Reconciliation Schedule</h3></div>
+  {% if daily_rows %}
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th rowspan="2">Date</th>
-          <th colspan="2">Income [$]</th>
-          <th colspan="4">Expenditure — Daily [$]</th>
-          <th colspan="4">Expenditure — Weekly [$]</th>
-          <th rowspan="2">Other [$]</th>
-          <th rowspan="2">Cash in Hand [$]</th>
-          <th rowspan="2">Deposited [$]</th>
-          <th rowspan="2">Variance [$]</th>
-        </tr>
-        <tr>
-          <th class="text-right">Daily</th>
-          <th class="text-right">Weekly</th>
+          <th>Date</th>
+          <th class="text-right">Income [$]</th>
           <th class="text-right">Traffic Fines</th>
-          <th class="text-right">Facilitation</th>
-          <th class="text-right">Workshop</th>
+          <th class="text-right">Facilitation Fee</th>
+          <th class="text-right">Workshop All</th>
           <th class="text-right">Wages</th>
-          <th class="text-right">Traffic Fines</th>
-          <th class="text-right">Facilitation</th>
-          <th class="text-right">Workshop</th>
-          <th class="text-right">Wages</th>
+          <th class="text-right">Other [$]</th>
+          <th class="text-right">Net Income [$]</th>
+          <th class="text-right">Cash Deposited [$]</th>
+          <th class="text-right">Variance [$]</th>
         </tr>
       </thead>
       <tbody>
-        {% for e in entries %}
+        {% for r in daily_rows %}
         <tr>
-          <td>{{ e.entry_date }}</td>
-          <td class="text-right">{{ e.income_daily|currency }}</td>
-          <td class="text-right">{{ e.income_weekly|currency }}</td>
-          <td class="text-right">{{ e.exp_traffic_fines_daily|currency }}</td>
-          <td class="text-right">{{ e.exp_facilitation_fees_daily|currency }}</td>
-          <td class="text-right">{{ e.exp_workshop_daily|currency }}</td>
-          <td class="text-right">{{ e.exp_wages_daily|currency }}</td>
-          <td class="text-right">{{ e.exp_traffic_fines_weekly|currency }}</td>
-          <td class="text-right">{{ e.exp_facilitation_fees_weekly|currency }}</td>
-          <td class="text-right">{{ e.exp_workshop_weekly|currency }}</td>
-          <td class="text-right">{{ e.exp_wages_weekly|currency }}</td>
-          <td class="text-right">{{ e.other_expenditure|currency }}</td>
-          <td class="text-right">{{ e.cash_in_hand|currency }}</td>
-          <td class="text-right">{{ e.deposited|currency }}</td>
-          <td class="text-right"><span class="{% if e.variance < 0 %}text-danger{% elif e.variance > 0 %}text-warning{% endif %}">{{ e.variance|currency }}</span></td>
+          <td>{{ r.period }}</td>
+          <td class="text-right">{{ r.income|currency }}</td>
+          <td class="text-right">{{ r.exp_traffic_fines|currency }}</td>
+          <td class="text-right">{{ r.exp_facilitation_fees|currency }}</td>
+          <td class="text-right">{{ r.exp_workshop|currency }}</td>
+          <td class="text-right">{{ r.exp_wages|currency }}</td>
+          <td class="text-right">{{ r.other_expenditure|currency }}</td>
+          <td class="text-right">{{ r.cash_in_hand|currency }}</td>
+          <td class="text-right">{{ r.deposited|currency }}</td>
+          <td class="text-right"><span class="{% if r.variance < 0 %}text-danger{% elif r.variance > 0 %}text-warning{% endif %}">{{ r.variance|currency }}</span></td>
         </tr>
         {% endfor %}
       </tbody>
       <tfoot>
         <tr class="summary-row">
           <td>TOTAL</td>
-          <td class="text-right">{{ totals.income_daily|currency }}</td>
-          <td class="text-right">{{ totals.income_weekly|currency }}</td>
-          <td class="text-right">{{ entries|sum(attribute='exp_traffic_fines_daily')|currency }}</td>
-          <td class="text-right">{{ entries|sum(attribute='exp_facilitation_fees_daily')|currency }}</td>
-          <td class="text-right">{{ entries|sum(attribute='exp_workshop_daily')|currency }}</td>
-          <td class="text-right">{{ entries|sum(attribute='exp_wages_daily')|currency }}</td>
-          <td class="text-right">{{ entries|sum(attribute='exp_traffic_fines_weekly')|currency }}</td>
-          <td class="text-right">{{ entries|sum(attribute='exp_facilitation_fees_weekly')|currency }}</td>
-          <td class="text-right">{{ entries|sum(attribute='exp_workshop_weekly')|currency }}</td>
-          <td class="text-right">{{ entries|sum(attribute='exp_wages_weekly')|currency }}</td>
-          <td class="text-right">{{ totals.other_expenditure|currency }}</td>
-          <td class="text-right">{{ totals.cash_in_hand|currency }}</td>
-          <td class="text-right">{{ totals.deposited|currency }}</td>
-          <td class="text-right">{{ totals.variance|currency }}</td>
+          <td class="text-right">{{ daily_totals.income|currency }}</td>
+          <td class="text-right">{{ daily_totals.exp_traffic_fines|currency }}</td>
+          <td class="text-right">{{ daily_totals.exp_facilitation_fees|currency }}</td>
+          <td class="text-right">{{ daily_totals.exp_workshop|currency }}</td>
+          <td class="text-right">{{ daily_totals.exp_wages|currency }}</td>
+          <td class="text-right">{{ daily_totals.other_expenditure|currency }}</td>
+          <td class="text-right">{{ daily_totals.cash_in_hand|currency }}</td>
+          <td class="text-right">{{ daily_totals.deposited|currency }}</td>
+          <td class="text-right">{{ daily_totals.variance|currency }}</td>
         </tr>
       </tfoot>
     </table>
   </div>
   {% else %}
-  <div class="empty-state"><p>No franchise income recorded for the selected period.</p></div>
+  <div class="empty-state"><p>No daily franchise income recorded for the selected period.</p></div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Weekly Reconciliation Schedule</h3></div>
+  {% if weekly_rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Week Of</th>
+          <th class="text-right">Income [$]</th>
+          <th class="text-right">Traffic Fines</th>
+          <th class="text-right">Facilitation Fee</th>
+          <th class="text-right">Workshop All</th>
+          <th class="text-right">Wages</th>
+          <th class="text-right">Other [$]</th>
+          <th class="text-right">Net Income [$]</th>
+          <th class="text-right">Cash Deposited [$]</th>
+          <th class="text-right">Variance [$]</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in weekly_rows %}
+        <tr>
+          <td>{{ r.period }}</td>
+          <td class="text-right">{{ r.income|currency }}</td>
+          <td class="text-right">{{ r.exp_traffic_fines|currency }}</td>
+          <td class="text-right">{{ r.exp_facilitation_fees|currency }}</td>
+          <td class="text-right">{{ r.exp_workshop|currency }}</td>
+          <td class="text-right">{{ r.exp_wages|currency }}</td>
+          <td class="text-right">{{ r.other_expenditure|currency }}</td>
+          <td class="text-right">{{ r.cash_in_hand|currency }}</td>
+          <td class="text-right">{{ r.deposited|currency }}</td>
+          <td class="text-right"><span class="{% if r.variance < 0 %}text-danger{% elif r.variance > 0 %}text-warning{% endif %}">{{ r.variance|currency }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="summary-row">
+          <td>TOTAL</td>
+          <td class="text-right">{{ weekly_totals.income|currency }}</td>
+          <td class="text-right">{{ weekly_totals.exp_traffic_fines|currency }}</td>
+          <td class="text-right">{{ weekly_totals.exp_facilitation_fees|currency }}</td>
+          <td class="text-right">{{ weekly_totals.exp_workshop|currency }}</td>
+          <td class="text-right">{{ weekly_totals.exp_wages|currency }}</td>
+          <td class="text-right">{{ weekly_totals.other_expenditure|currency }}</td>
+          <td class="text-right">{{ weekly_totals.cash_in_hand|currency }}</td>
+          <td class="text-right">{{ weekly_totals.deposited|currency }}</td>
+          <td class="text-right">{{ weekly_totals.variance|currency }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No weekly franchise income recorded for the selected period.</p></div>
   {% endif %}
 </div>
 {% endblock %}

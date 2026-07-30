@@ -5,6 +5,23 @@ document.addEventListener('DOMContentLoaded', function () {
   // ── Feather icons ──
   if (typeof feather !== 'undefined') feather.replace();
 
+  // ── Sidebar: remember scroll position across page loads, so navigating
+  // to a link further down a section doesn't dump you back at the top on
+  // the next page and force you to scroll down again to find it. ──
+  var sidebar = document.getElementById('sidebar');
+  if (sidebar) {
+    var savedScroll = sessionStorage.getItem('sidebarScrollTop');
+    if (savedScroll !== null) {
+      sidebar.scrollTop = parseInt(savedScroll, 10) || 0;
+    } else {
+      var activeLink = sidebar.querySelector('.nav-item.active');
+      if (activeLink) activeLink.scrollIntoView({ block: 'center' });
+    }
+    sidebar.addEventListener('scroll', function () {
+      sessionStorage.setItem('sidebarScrollTop', sidebar.scrollTop);
+    });
+  }
+
   // ── Auto-dismiss flash alerts ──
   setTimeout(function () {
     document.querySelectorAll('.alert').forEach(function (el) {

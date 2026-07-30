@@ -6,11 +6,11 @@
 <div class="page-header">
   <div>
     <h1>{{ title }}</h1>
-    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; auto-computed from the daily reconciliation entries and weekly expenses</div>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; each week's Daily Income entries combined with that week's standalone Weekly Income entry</div>
   </div>
   <div class="btn-group">
-    <a href="{{ url_for('franchise_weekly_expenses') }}" class="btn btn-outline"><i data-feather="minus-circle"></i> Weekly Expenses</a>
-    <a href="{{ url_for('franchise_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Manage Entries</a>
+    <a href="{{ url_for('franchise_daily_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Daily Entries</a>
+    <a href="{{ url_for('franchise_weekly_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Weekly Entries</a>
   </div>
 </div>
 
@@ -32,8 +32,8 @@
     <div class="kpi-value">{{ totals.total_income|currency }}</div>
   </div>
   <div class="kpi-card kpi-amber">
-    <div class="kpi-label">Total Weekly Expenses</div>
-    <div class="kpi-value">{{ totals.expense_total|currency }}</div>
+    <div class="kpi-label">Total Expenditure</div>
+    <div class="kpi-value">{{ totals.total_expenditure|currency }}</div>
   </div>
   <div class="kpi-card kpi-green">
     <div class="kpi-label">Total Net Profit</div>
@@ -49,11 +49,13 @@
       <thead>
         <tr>
           <th>Week</th>
-          <th class="text-right">Days Recorded</th>
-          <th class="text-right">Daily Franchise</th>
-          <th class="text-right">Weekly Franchise</th>
+          <th class="text-right">Daily Entries</th>
+          <th class="text-right">Daily Income</th>
+          <th class="text-right">Daily Expenditure</th>
+          <th class="text-right">Weekly Income</th>
+          <th class="text-right">Weekly Expenditure</th>
           <th class="text-right">Total Income</th>
-          <th>Less Expenses</th>
+          <th class="text-right">Total Expenditure</th>
           <th class="text-right">Net Profit</th>
         </tr>
       </thead>
@@ -62,14 +64,12 @@
         <tr>
           <td>{{ w.week_start }} &ndash; {{ w.week_end }}</td>
           <td class="text-right">{{ w.days }}</td>
-          <td class="text-right">{{ w.income_daily|currency }}</td>
-          <td class="text-right">{{ w.income_weekly|currency }}</td>
+          <td class="text-right">{{ w.daily_income|currency }}</td>
+          <td class="text-right">{{ w.daily_expenditure|currency }}</td>
+          <td class="text-right">{{ w.weekly_income|currency }}</td>
+          <td class="text-right">{{ w.weekly_expenditure|currency }}</td>
           <td class="text-right">{{ w.total_income|currency }}</td>
-          <td>
-            {% if w.expenses %}
-            {% for x in w.expenses %}<div>{{ x.label }}: {{ x.amount|currency }}</div>{% endfor %}
-            {% else %}—{% endif %}
-          </td>
+          <td class="text-right">{{ w.total_expenditure|currency }}</td>
           <td class="text-right"><span class="{% if w.net_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ w.net_profit|currency }}</span></td>
         </tr>
         {% endfor %}
@@ -78,10 +78,12 @@
         <tr class="summary-row">
           <td>TOTAL</td>
           <td></td>
-          <td class="text-right">{{ totals.income_daily|currency }}</td>
-          <td class="text-right">{{ totals.income_weekly|currency }}</td>
+          <td class="text-right">{{ totals.daily_income|currency }}</td>
+          <td class="text-right">{{ totals.daily_expenditure|currency }}</td>
+          <td class="text-right">{{ totals.weekly_income|currency }}</td>
+          <td class="text-right">{{ totals.weekly_expenditure|currency }}</td>
           <td class="text-right">{{ totals.total_income|currency }}</td>
-          <td>{{ totals.expense_total|currency }}</td>
+          <td class="text-right">{{ totals.total_expenditure|currency }}</td>
           <td class="text-right">{{ totals.net_profit|currency }}</td>
         </tr>
       </tfoot>

@@ -1,0 +1,125 @@
+{% extends 'base.html' %}
+{% block title %}Add Weekly Franchise Income{% endblock %}
+{% block page_title %}Add Weekly Franchise Income{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Weekly Franchise Income</h1>
+    <div class="subtitle">One entry per week &mdash; income, expenditure and cash reconciliation for weekly-fee collections</div>
+  </div>
+  <a href="{{ url_for('franchise_weekly_income_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Weekly Income</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST" id="franchise-weekly-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Vehicle</label>
+          <select name="vehicle_id">
+            <option value="">— Whole Franchise (no specific vehicle) —</option>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}">{{ v.number_plate }} — {{ v.franchisee_name }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-hint">Leave blank for a combined total not attributed to one vehicle.</div>
+        </div>
+        <div class="form-group">
+          <label>Any Date in the Week<span class="req">*</span></label>
+          <input type="date" name="week_start" required value="{{ today }}">
+          <div class="form-hint">Rounded to that week's Monday automatically.</div>
+        </div>
+      </div>
+
+      <div class="form-group mb-16" style="max-width:220px;">
+        <label>Income (USD)</label>
+        <input type="number" class="calc-input" name="income" step="0.01" value="0" placeholder="0.00">
+      </div>
+
+      <h4 class="mb-8">Expenditure</h4>
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Traffic Fines (USD)</label>
+          <input type="number" class="calc-input" name="exp_traffic_fines" step="0.01" value="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Facilitation Fees (USD)</label>
+          <input type="number" class="calc-input" name="exp_facilitation_fees" step="0.01" value="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Workshop (USD)</label>
+          <input type="number" class="calc-input" name="exp_workshop" step="0.01" value="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Wages (USD)</label>
+          <input type="number" class="calc-input" name="exp_wages" step="0.01" value="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Other Expenditure (USD)</label>
+          <input type="number" class="calc-input" name="other_expenditure" step="0.01" value="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Cash Deposited (USD)</label>
+          <input type="number" class="calc-input" name="deposited" step="0.01" value="0" placeholder="0.00">
+        </div>
+      </div>
+
+      <div class="kpi-grid mb-16">
+        <div class="kpi-card kpi-blue">
+          <div class="kpi-label">Net Income after Expenditure (computed)</div>
+          <div class="kpi-value" id="calc-cash-in-hand">$0.00</div>
+        </div>
+        <div class="kpi-card kpi-amber">
+          <div class="kpi-label">Variance: Cash Deposited vs. Net Income (computed)</div>
+          <div class="kpi-value" id="calc-variance">$0.00</div>
+        </div>
+      </div>
+
+      <div class="form-group mb-16">
+        <label>Description</label>
+        <textarea name="description" rows="2"></textarea>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Weekly Income</button>
+        <a href="{{ url_for('franchise_weekly_income_list') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById('franchise-weekly-form');
+  var cashEl = document.getElementById('calc-cash-in-hand');
+  var varEl = document.getElementById('calc-variance');
+
+  function num(name) {
+    var el = form.querySelector('[name="' + name + '"]');
+    var v = parseFloat(el.value);
+    return isNaN(v) ? 0 : v;
+  }
+
+  function fmt(v) {
+    return '$' + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  }
+
+  function recalc() {
+    var income = num('income');
+    var expenditure = num('exp_traffic_fines') + num('exp_facilitation_fees')
+      + num('exp_workshop') + num('exp_wages') + num('other_expenditure');
+    var cashInHand = income - expenditure;
+    var variance = num('deposited') - cashInHand;
+    cashEl.textContent = fmt(cashInHand);
+    varEl.textContent = fmt(variance);
+  }
+
+  Array.prototype.forEach.call(form.querySelectorAll('.calc-input'), function (input) {
+    input.addEventListener('input', recalc);
+  });
+  recalc();
+})();
+</script>
+{% endblock %}

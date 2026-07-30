@@ -8,7 +8,10 @@
     <h1>{{ title }}</h1>
     <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; {{ entry_count }} day(s) recorded</div>
   </div>
-  <a href="{{ url_for('franchise_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Manage Entries</a>
+  <div class="btn-group">
+    <a href="{{ url_for('franchise_daily_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Daily Entries</a>
+    <a href="{{ url_for('franchise_weekly_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Weekly Entries</a>
+  </div>
 </div>
 
 <form method="GET" class="filter-bar">
@@ -37,7 +40,7 @@
     <div class="kpi-value">{{ totals.net_profit|currency }}</div>
   </div>
   <div class="kpi-card {% if totals.variance < 0 %}kpi-red{% else %}kpi-teal{% endif %}">
-    <div class="kpi-label">Variance (Deposited vs. Cash)</div>
+    <div class="kpi-label">Variance (Cash Deposited vs. Net Income)</div>
     <div class="kpi-value">{{ totals.variance|currency }}</div>
   </div>
 </div>
@@ -76,9 +79,9 @@
   <div class="table-wrap">
     <table>
       <tbody>
-        <tr><td>Cash in Hand (Income &minus; Expenditure)</td><td class="text-right">{{ totals.cash_in_hand|currency }}</td></tr>
-        <tr><td>Deposited</td><td class="text-right">{{ totals.deposited|currency }}</td></tr>
-        <tr class="summary-row"><td>VARIANCE</td><td class="text-right">{{ totals.variance|currency }}</td></tr>
+        <tr><td>Net Income (after Franchise Expenditure)</td><td class="text-right">{{ totals.cash_in_hand|currency }}</td></tr>
+        <tr><td>Cash Deposited</td><td class="text-right">{{ totals.deposited|currency }}</td></tr>
+        <tr class="summary-row"><td>VARIANCE (Cash Deposited &minus; Net Income)</td><td class="text-right">{{ totals.variance|currency }}</td></tr>
       </tbody>
     </table>
   </div>

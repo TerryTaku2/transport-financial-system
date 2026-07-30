@@ -140,8 +140,11 @@
     {% if current_user.has_permission('franchise') %}
     <div class="nav-section">
       <div class="nav-section-label">Franchise</div>
-      <a href="{{ url_for('franchise_income_list') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_income') %}active{% endif %}">
-        <i data-feather="credit-card"></i> Income
+      <a href="{{ url_for('franchise_daily_income_list') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_daily_income') %}active{% endif %}">
+        <i data-feather="credit-card"></i> Daily Income
+      </a>
+      <a href="{{ url_for('franchise_weekly_income_list') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_weekly_income') %}active{% endif %}">
+        <i data-feather="credit-card"></i> Weekly Income
       </a>
       <a href="{{ url_for('franchise_vehicles') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_vehicle') %}active{% endif %}">
         <i data-feather="truck"></i> Vehicles
@@ -149,23 +152,14 @@
       <a href="{{ url_for('franchise_collections') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_collection') %}active{% endif %}">
         <i data-feather="dollar-sign"></i> Collections
       </a>
-      <a href="{{ url_for('report_franchise_daily_collections') }}" class="nav-item {% if request.endpoint == 'report_franchise_daily_collections' %}active{% endif %}">
-        <i data-feather="bar-chart-2"></i> Daily Franchise
-      </a>
-      <a href="{{ url_for('report_franchise_weekly_collections') }}" class="nav-item {% if request.endpoint == 'report_franchise_weekly_collections' %}active{% endif %}">
-        <i data-feather="bar-chart-2"></i> Weekly Franchise
-      </a>
       <a href="{{ url_for('report_franchise_analysis') }}" class="nav-item {% if request.endpoint == 'report_franchise_analysis' %}active{% endif %}">
         <i data-feather="trending-up"></i> Franchise Analysis
       </a>
-      <a href="{{ url_for('report_franchise_daily') }}" class="nav-item {% if request.endpoint == 'report_franchise_daily' %}active{% endif %}">
+      <a href="{{ url_for('report_franchise_reconciliation') }}" class="nav-item {% if request.endpoint == 'report_franchise_reconciliation' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Reconciliation Schedule
       </a>
       <a href="{{ url_for('report_franchise_weekly') }}" class="nav-item {% if request.endpoint == 'report_franchise_weekly' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Weekly Analysis
-      </a>
-      <a href="{{ url_for('franchise_weekly_expenses') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_weekly_expense') %}active{% endif %}">
-        <i data-feather="minus-circle"></i> Weekly Expenses
       </a>
       <a href="{{ url_for('report_franchise_consolidated') }}" class="nav-item {% if request.endpoint == 'report_franchise_consolidated' %}active{% endif %}">
         <i data-feather="pie-chart"></i> Consolidated P&amp;L

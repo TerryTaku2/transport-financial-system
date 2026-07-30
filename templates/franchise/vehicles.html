@@ -20,9 +20,12 @@
           <th>Number Plate</th>
           <th>Franchisee</th>
           <th>Status</th>
+          <th class="text-right">Agreed Amount</th>
+          <th class="text-right">Amount Owed</th>
           <th class="text-right">Total Collected</th>
           <th class="text-right">Total Expense</th>
           <th class="text-right">Net</th>
+          <th>Details</th>
           <th></th>
         </tr>
       </thead>
@@ -32,9 +35,12 @@
           <td>{{ v.number_plate }}</td>
           <td>{{ v.franchisee_name }}</td>
           <td><span class="badge {% if v.status == 'active' %}badge-green{% else %}badge-gray{% endif %}">{{ v.status|capitalize }}</span></td>
+          <td class="text-right">{{ v.agreed_amount|currency }}</td>
+          <td class="text-right"><span class="{% if v.amount_owed > 0 %}text-danger{% endif %}">{{ v.amount_owed|currency }}</span></td>
           <td class="text-right">{{ v.total_collected|currency }}</td>
           <td class="text-right">{{ v.total_expense|currency }}</td>
           <td class="text-right">{{ v.net_collected|currency }}</td>
+          <td>{{ v.notes or '—' }}</td>
           <td class="btn-group">
             <a href="{{ url_for('franchise_vehicle_edit', vid=v.id) }}" class="btn btn-outline btn-xs">Edit</a>
             <a href="{{ url_for('franchise_collections', vehicle_id=v.id) }}" class="btn btn-outline btn-xs">Collections</a>

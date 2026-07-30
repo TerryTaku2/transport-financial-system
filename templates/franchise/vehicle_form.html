@@ -31,6 +31,20 @@
             <option value="inactive" {% if vehicle and vehicle.status == 'inactive' %}selected{% endif %}>Inactive</option>
           </select>
         </div>
+        <div class="form-group">
+          <label>Agreed Franchise Amount (USD)</label>
+          <input type="number" name="agreed_amount" step="0.01" min="0" value="{{ vehicle.agreed_amount if vehicle else 0 }}" placeholder="0.00">
+          <div class="form-hint">The standalone fee this vehicle agreed to pay.</div>
+        </div>
+        <div class="form-group">
+          <label>Amount Owed (USD)</label>
+          <input type="number" name="amount_owed" step="0.01" min="0" value="{{ vehicle.amount_owed if vehicle else 0 }}" placeholder="0.00">
+          <div class="form-hint">Outstanding arrears balance, updated as it changes.</div>
+        </div>
+      </div>
+      <div class="form-group mb-16">
+        <label>Other Details</label>
+        <textarea name="notes" rows="2">{{ vehicle.notes if vehicle else '' }}</textarea>
       </div>
       <div class="btn-group">
         <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Vehicle</button>
