@@ -44,7 +44,13 @@
           <td class="text-right">{{ s.unit_price|currency }}</td>
           <td class="text-right"><strong>{{ s.total_amount|currency }}</strong></td>
           <td class="text-right" style="color:var(--success);">{{ s.profit|currency }}</td>
-          <td>{{ s.customer_name or '—' }}</td>
+          <td>
+            {% if s.vehicle %}
+            <span class="badge badge-blue">{{ s.vehicle.registration }}</span>
+            {% else %}
+            {{ s.customer_name or '—' }}
+            {% endif %}
+          </td>
           <td>
             {% if current_user.role == 'admin' %}
             <form method="POST" action="{{ url_for('store_sale_delete', sid=s.id) }}" data-confirm="Delete this sale? Stock will be restored.">

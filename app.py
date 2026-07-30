@@ -237,7 +237,10 @@ class DailyLog(db.Model):
     __tablename__ = 'daily_logs'
     id = db.Column(db.Integer, primary_key=True)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
-    driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=False)
+    # Nullable so an activity/fare can be logged before a driver is known or
+    # assigned — see driver_ledger_add. Garnish still requires a driver since
+    # it nets against a specific person's commission.
+    driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=True)
     conductor_id = db.Column(db.Integer, db.ForeignKey('drivers.id'))
     # Nullable because Daily Transactions (the vehicle ledger) doesn't
     # collect a route per entry — it mirrors a plain date/driver/fare/
@@ -726,6 +729,11 @@ class StoreSale(db.Model):
     __tablename__ = 'store_sales'
     id = db.Column(db.Integer, primary_key=True)
     part_id = db.Column(db.Integer, db.ForeignKey('spare_parts.id'), nullable=False)
+    # Set when this sale is to one of the fleet's own vehicles rather than an
+    # outside customer — the sale amount then also counts as an expense on
+    # that vehicle's income statement (see vehicle_income_totals). Mutually
+    # exclusive with customer_name in practice, not enforced at the DB level.
+    vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=True)
     sale_date = db.Column(db.Date, nullable=False, default=date.today)
     quantity = db.Column(db.Integer, nullable=False)
     unit_cost = db.Column(db.Float, nullable=False)
@@ -737,10 +745,15 @@ class StoreSale(db.Model):
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     creator = db.relationship('User', foreign_keys=[created_by])
+    vehicle = db.relationship('Vehicle')
 
     @property
     def profit(self):
         return (self.unit_price - self.unit_cost) * self.quantity
+
+    @property
+    def customer_display(self):
+        return self.vehicle.registration if self.vehicle else (self.customer_name or None)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -909,9 +922,10 @@ CANONICAL_LEDGER_FIELDS = [
     ('driver', 'Driver', ['driver', 'driver name', 'crew', 'operator']),
     ('fare', 'Fare', ['fare', 'revenue', 'income', 'gross revenue', 'collection',
                       'collections', 'takings']),
-    ('fuel_liters', 'Fuel Liters', ['diesel liters', 'diesel litres', 'petrol liters',
-                                    'petrol litres', 'fuel liters', 'fuel litres',
-                                    'liters', 'litres', 'diesel', 'petrol', 'fuel']),
+    ('diesel_cost', 'Diesel (USD)', ['diesel cost', 'diesel usd', 'diesel amount',
+                                     'petrol cost', 'petrol usd', 'petrol amount',
+                                     'fuel cost', 'fuel usd', 'fuel amount',
+                                     'diesel', 'petrol', 'fuel']),
     ('mileage', 'Mileage', ['mileage', 'odometer', 'odo', 'distance reading', 'km reading']),
 ]
 
@@ -919,7 +933,7 @@ CANONICAL_LEDGER_FIELDS = [
 # row-validation loop (which looks for these exact keys) keeps working unchanged.
 CANONICAL_TO_ROW_KEY = {
     'date': 'date', 'driver': 'driver', 'fare': 'fare',
-    'fuel_liters': 'diesel liters', 'mileage': 'mileage',
+    'diesel_cost': 'diesel cost', 'mileage': 'mileage',
 }
 
 # Same idea as the ledger fields above, for Franchise Income imports — one row
@@ -1110,7 +1124,7 @@ def apply_column_mapping(headers, raw_rows, mapping, row_key_map=None):
 
 def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
     """Validate and persist already-mapped ledger rows (keyed by 'date',
-    'driver', 'fare', 'diesel liters', 'mileage') as DailyLog/FuelLog entries
+    'driver', 'fare', 'diesel cost', 'mileage') as DailyLog/FuelLog entries
     for `vehicle`. Returns (imported_count, error_messages, created_driver_names);
     does not commit — the caller decides when to commit/rollback.
 
@@ -1146,9 +1160,9 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
             driver_name = str(row.get('driver') or '').strip()
             driver = driver_by_name.get(driver_name.lower()) if driver_name else None
 
-            liters_key = next((k for k in ('diesel liters', 'petrol liters', 'fuel liters') if k in row), 'diesel liters')
+            cost_key = next((k for k in ('diesel cost', 'petrol cost', 'fuel cost') if k in row), 'diesel cost')
             fare = parse_import_number(row.get('fare'), 'Fare')
-            diesel_liters = parse_import_number(row.get(liters_key), 'Fuel Liters')
+            diesel_cost = parse_import_number(row.get(cost_key), 'Diesel (USD)')
             mileage = parse_import_number(row.get('mileage'), 'Mileage')
 
             # Real-world logbooks often put a note ("GARAGE", "ARRESTED", "DRIVER
@@ -1167,7 +1181,7 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
                     created_drivers.append(driver_name)
                 else:
                     raise ValueError(f'unknown driver "{driver_name}".' if driver_name else 'fare needs a driver name.')
-            if fare is None and diesel_liters is None and mileage is None:
+            if fare is None and diesel_cost is None and mileage is None:
                 continue
 
             if driver_name and driver:
@@ -1183,10 +1197,10 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
                 db.session.add(log)
                 db.session.flush()
                 created_records.append(('daily_logs', log.id))
-            if diesel_liters is not None:
+            if diesel_cost is not None:
                 fuel = FuelLog(
-                    vehicle_id=vehicle.id, log_date=log_date,
-                    liters=diesel_liters, odometer=mileage, created_by=current_user.id,
+                    vehicle_id=vehicle.id, log_date=log_date, liters=0,
+                    total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
                 )
                 db.session.add(fuel)
                 db.session.flush()
@@ -2043,8 +2057,6 @@ def driver_add():
         rate_input = form_float(request.form, 'commission_rate', required=False, min_value=0)
         role = request.form.get('role', 'driver')
         license_number = request.form.get('license_number', '').strip() or None
-        if role == 'driver' and not license_number:
-            raise ValueError('License number is required for drivers.')
         if license_number:
             check_unique(Driver, 'license_number', license_number, label='License number')
         paired_driver_id = form_int(request.form, 'paired_driver_id', required=False) if role == 'conductor' else None
@@ -2083,8 +2095,6 @@ def driver_edit(did):
         rate_input = form_float(request.form, 'commission_rate', required=False, min_value=0)
         role = request.form.get('role', 'driver')
         license_number = request.form.get('license_number', '').strip() or None
-        if role == 'driver' and not license_number:
-            raise ValueError('License number is required for drivers.')
         if license_number:
             check_unique(Driver, 'license_number', license_number, label='License number', exclude_id=d.id)
         paired_driver_id = form_int(request.form, 'paired_driver_id', required=False) if role == 'conductor' else None
@@ -2227,17 +2237,17 @@ def ledger_entry_edit(vehicle_id, log_date_str):
         fare = form_float(request.form, 'fare', required=False, min_value=0)
         garnish = form_float(request.form, 'garnish', required=False, min_value=0)
         reason_for_shortfall = request.form.get('reason_for_shortfall', '').strip() or None
-        diesel_liters = form_float(request.form, 'diesel_liters', required=False, min_value=0)
+        diesel_cost = form_float(request.form, 'diesel_cost', required=False, min_value=0)
         mileage = form_float(request.form, 'mileage', required=False, min_value=0)
 
         if log is not None or fare is not None or garnish is not None:
-            if not driver_id:
-                raise ValueError('Select a driver to record fare/garnish against.')
             if fare is None:
                 raise ValueError('Fare is required for this entry.')
+        if garnish is not None and not driver_id:
+            raise ValueError('Select a driver to record a garnish against.')
 
-        if fare is None and diesel_liters is None and mileage is None and garnish is None:
-            raise ValueError('Enter at least a fare, diesel liters, mileage reading, or garnish.')
+        if fare is None and diesel_cost is None and mileage is None and garnish is None:
+            raise ValueError('Enter at least a fare, diesel cost, mileage reading, or garnish.')
 
         if fare is not None:
             driver = Driver.query.get(driver_id)
@@ -2253,11 +2263,11 @@ def ledger_entry_edit(vehicle_id, log_date_str):
             log.updated_by = current_user.id
             log.updated_at = datetime.now(timezone.utc)
 
-        if diesel_liters is not None or mileage is not None:
+        if diesel_cost is not None or mileage is not None:
             if fuel is None:
-                fuel = FuelLog(vehicle_id=vehicle_id, log_date=log_date, created_by=current_user.id)
+                fuel = FuelLog(vehicle_id=vehicle_id, log_date=log_date, liters=0, created_by=current_user.id)
                 db.session.add(fuel)
-            fuel.liters = diesel_liters or 0
+            fuel.total_cost = diesel_cost or 0
             fuel.odometer = mileage
         elif fuel is not None:
             db.session.delete(fuel)
@@ -2299,11 +2309,13 @@ def ledger_entry_delete(vehicle_id, log_date_str):
 # kept — one sheet per vehicle, driver rotating day to day. Posts to
 # the same DailyLog/FuelLog tables the rest of the system uses.
 # Replaces the old Crew Portal "Log Income" form. Filterable by
-# day/week/month. Diesel liters are optional since fuel is often paid
-# for as a flat cash amount without a metered liter reading.
+# day/week/month. Diesel is captured as a USD amount, not liters — crew
+# report what they spent on fuel, not a metered liter reading, so these
+# FuelLog rows carry liters=0 and are skipped by the Fuel Efficiency
+# report (which needs liters) rather than showing a false 0 L/100km.
 # ─────────────────────────────────────────────────────────────
 def vehicle_ledger_rows(vehicle_id, df=None, dt=None, daily_target=None):
-    """Merge DailyLog (fare, any driver) and FuelLog (diesel liters/mileage)
+    """Merge DailyLog (fare, any driver) and FuelLog (diesel cost/mileage)
     for this vehicle by date, with distance computed the same way the Fuel
     Efficiency report does — delta from the previous odometer reading.
     If df/dt are given, only rows in that range are returned, but the
@@ -2339,16 +2351,16 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None, daily_target=None):
     all_dates = sorted(set(daily_by_date) | set(fuel_by_date))
     rows = []
     total_fare = 0.0
-    total_diesel_liters = 0.0
+    total_diesel_cost = 0.0
     total_garnish = 0.0
     for d in all_dates:
         daily_logs = daily_by_date.get(d, [])
         fare = sum(l.gross_revenue for l in daily_logs)
         garnish = sum(l.garnish for l in daily_logs)
         reason_for_shortfall = '; '.join(n for n in (l.reason_for_shortfall for l in daily_logs) if n) or None
-        driver_names = ', '.join(sorted({l.driver.name for l in daily_logs})) or None
+        driver_names = ', '.join(sorted({l.driver.name for l in daily_logs if l.driver})) or None
         fuel_logs = fuel_by_date.get(d, [])
-        diesel_liters = sum(f.liters for f in fuel_logs)
+        diesel_cost = sum(f.total_cost for f in fuel_logs)
         odometer = max((f.odometer for f in fuel_logs if f.odometer is not None), default=None)
 
         distance = None
@@ -2358,7 +2370,7 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None, daily_target=None):
             prev_odometer = odometer
 
         total_fare += fare
-        total_diesel_liters += diesel_liters
+        total_diesel_cost += diesel_cost
         total_garnish += garnish
         # Only flag a day that actually has a driver/fare entry — a
         # fuel-only row shouldn't read as a missed revenue target.
@@ -2369,14 +2381,14 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None, daily_target=None):
             'date': d, 'driver_names': driver_names, 'fare': fare,
             'garnish': garnish, 'reason_for_shortfall': reason_for_shortfall,
             'shortfall': shortfall,
-            'diesel_liters': diesel_liters,
+            'diesel_cost': diesel_cost,
             'odometer': odometer, 'distance': distance,
             # More than one entry on the same day (e.g. a driver change
             # mid-shift) can't be represented/edited as a single row —
             # the UI falls back to "delete all, re-enter" for these.
             'multiple': len(daily_logs) > 1 or len(fuel_logs) > 1,
         })
-    return rows, total_fare, total_diesel_liters, total_garnish
+    return rows, total_fare, total_diesel_cost, total_garnish
 
 
 def resolve_ledger_period(period, today):
@@ -2406,10 +2418,10 @@ def driver_ledger():
     vehicle_id = request.args.get('vehicle_id', '')
     vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else (all_vehicles[0] if all_vehicles else None)
 
-    rows, total_fare, total_diesel_liters, total_garnish = [], 0.0, 0.0, 0.0
+    rows, total_fare, total_diesel_cost, total_garnish = [], 0.0, 0.0, 0.0
     latest_odometer = None
     if vehicle:
-        rows, total_fare, total_diesel_liters, total_garnish = vehicle_ledger_rows(
+        rows, total_fare, total_diesel_cost, total_garnish = vehicle_ledger_rows(
             vehicle.id, df, dt, daily_target=vehicle.daily_target)
         latest_fuel = FuelLog.query.filter(
             FuelLog.vehicle_id == vehicle.id, FuelLog.odometer.isnot(None)
@@ -2419,7 +2431,7 @@ def driver_ledger():
     all_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
     return render_template('logs/ledger.html', vehicles=all_vehicles, vehicle=vehicle,
         drivers=all_drivers,
-        rows=rows, total_fare=total_fare, total_diesel_liters=total_diesel_liters,
+        rows=rows, total_fare=total_fare, total_diesel_cost=total_diesel_cost,
         total_garnish=total_garnish,
         period=period, date_from=date_from_str, date_to=date_to_str,
         today=today.strftime('%Y-%m-%d'), latest_odometer=latest_odometer)
@@ -2445,17 +2457,16 @@ def driver_ledger_add():
         fare = form_float(request.form, 'fare', required=False, min_value=0)
         garnish = form_float(request.form, 'garnish', required=False, min_value=0)
         reason_for_shortfall = request.form.get('reason_for_shortfall', '').strip() or None
-        diesel_liters = form_float(request.form, 'diesel_liters', required=False, min_value=0)
+        diesel_cost = form_float(request.form, 'diesel_cost', required=False, min_value=0)
         mileage = form_float(request.form, 'mileage', required=False, min_value=0)
 
-        if fare is not None or garnish is not None:
-            if not driver_id:
-                raise ValueError('Select a driver to record fare/garnish against.')
-        elif driver_id:
+        if garnish is not None and not driver_id:
+            raise ValueError('Select a driver to record a garnish against.')
+        if driver_id and fare is None and garnish is None:
             raise ValueError('Fare or a garnish is required when a driver is selected.')
 
-        if fare is None and diesel_liters is None and mileage is None and garnish is None:
-            raise ValueError('Enter at least a fare, diesel liters, mileage reading, or garnish.')
+        if fare is None and diesel_cost is None and mileage is None and garnish is None:
+            raise ValueError('Enter at least a fare, diesel cost, mileage reading, or garnish.')
 
         if fare is not None or garnish is not None:
             driver = Driver.query.get(driver_id)
@@ -2471,13 +2482,13 @@ def driver_ledger_add():
                        f'Ledger entry for {vehicle.registration} on {log_date}: fare {fare or 0.0}' +
                        (f', garnish {garnish} ({reason_for_shortfall})' if garnish else ''))
 
-        if diesel_liters is not None:
+        if diesel_cost is not None:
             fuel = FuelLog(
-                vehicle_id=vehicle_id, log_date=log_date,
-                liters=diesel_liters, odometer=mileage, created_by=current_user.id,
+                vehicle_id=vehicle_id, log_date=log_date, liters=0,
+                total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
             )
             db.session.add(fuel)
-            log_audit('CREATE', 'fuel_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: diesel {diesel_liters}L')
+            log_audit('CREATE', 'fuel_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: diesel ${diesel_cost}')
         elif mileage is not None:
             fuel = FuelLog(
                 vehicle_id=vehicle_id, log_date=log_date, liters=0, odometer=mileage, created_by=current_user.id,
@@ -2523,13 +2534,13 @@ def driver_ledger_export():
     fuel_label = vehicle.fuel_type.capitalize()
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(['Date', 'Driver', 'Fare', f'{fuel_label} Liters', 'Mileage', 'Distance',
+    w.writerow(['Date', 'Driver', 'Fare', f'{fuel_label} (USD)', 'Mileage', 'Distance',
                 'Garnish', 'Reason for Shortfall'])
     for row in rows:
         w.writerow([
             row['date'], row['driver_names'] or '',
             f"{row['fare']:.2f}" if row['fare'] else '',
-            row['diesel_liters'] or '',
+            f"{row['diesel_cost']:.2f}" if row['diesel_cost'] else '',
             row['odometer'] if row['odometer'] is not None else '',
             row['distance'] if row['distance'] is not None else '',
             f"{row['garnish']:.2f}" if row['garnish'] else '',
@@ -2585,7 +2596,7 @@ def driver_ledger_import_preview():
 
     if not raw_rows:
         flash('That file has no data rows to import — it only has a header row. '
-              'Add rows with a Date and Fare/Fuel Liters/Mileage, then re-import.', 'warning')
+              'Add rows with a Date and Fare/Diesel (USD)/Mileage, then re-import.', 'warning')
         return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
 
     preview_rows = apply_column_mapping(headers, raw_rows[:10], mapping)
@@ -3161,15 +3172,17 @@ def store_sale_add():
             raise ValueError(f'Only {part.quantity_on_hand} {part.unit}(s) of {part.name} in stock.')
         unit_price = form_float(request.form, 'unit_price', required=False,
                                 default=part.selling_price, min_value=0)
+        vehicle_id = form_int(request.form, 'vehicle_id', required=False)
 
         sale = StoreSale(
             part_id=part.id,
+            vehicle_id=vehicle_id,
             sale_date=parse_date(request.form['sale_date']),
             quantity=quantity,
             unit_cost=part.cost_price,
             unit_price=unit_price,
             total_amount=quantity * unit_price,
-            customer_name=request.form.get('customer_name', '').strip(),
+            customer_name=request.form.get('customer_name', '').strip() if not vehicle_id else None,
             notes=request.form.get('notes', '').strip(),
             created_by=current_user.id,
         )
@@ -3177,14 +3190,18 @@ def store_sale_add():
 
         db.session.add(sale)
         db.session.flush()
-        log_audit('CREATE', 'store_sales', sale.id, f'Sold {quantity} x {part.name} @ {unit_price}')
+        log_audit('CREATE', 'store_sales', sale.id,
+                  f'Sold {quantity} x {part.name} @ {unit_price}' +
+                  (f' to vehicle {sale.vehicle.registration} (booked as an expense on that vehicle)'
+                   if sale.vehicle else ''))
         db.session.commit()
         flash('Sale recorded and stock updated.', 'success')
         return redirect(url_for('store_sales'))
 
     all_parts = SparePart.query.filter(SparePart.status == 'active',
                                        SparePart.quantity_on_hand > 0).order_by(SparePart.name).all()
-    return render_template('store/sale_form.html', parts=all_parts,
+    all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
+    return render_template('store/sale_form.html', parts=all_parts, vehicles=all_vehicles,
                            today=date.today().strftime('%Y-%m-%d'))
 
 
@@ -3200,6 +3217,67 @@ def store_sale_delete(sid):
     db.session.commit()
     flash('Sale deleted and stock restored.', 'warning')
     return redirect(url_for('store_sales'))
+
+
+@app.route('/store/trading-account')
+@login_required
+@permission_required('store')
+def store_trading_account():
+    """Standalone Trading & Profit or Loss Account for the Spares Store,
+    run as its own cost centre. Revenue is ALL sales — including internal
+    sales to company vehicles at the same marked-up price a walk-in
+    customer pays — because from the store's side that's a real sale.
+    That same amount also lands as a maintenance expense on the buying
+    vehicle's income statement (see vehicle_income_totals): the store
+    recognizes revenue, the vehicle recognizes a cost — two sides of one
+    internal transfer, not a double-count within either statement.
+    Cost of sales is summed from each sale's snapshotted unit_cost, which
+    is more accurate than an opening/closing-stock estimate here since
+    cost_price is a live weighted average, not a point-in-time figure."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    sales = StoreSale.query.filter(StoreSale.sale_date.between(df, dt)).all()
+
+    sales_revenue = sum(s.total_amount for s in sales)
+    cost_of_sales = sum(s.unit_cost * s.quantity for s in sales)
+    gross_profit = sales_revenue - cost_of_sales
+    gross_margin = (gross_profit / sales_revenue * 100) if sales_revenue else 0
+
+    external = [s for s in sales if not s.vehicle_id]
+    internal = [s for s in sales if s.vehicle_id]
+    external_sales = sum(s.total_amount for s in external)
+    external_cogs = sum(s.unit_cost * s.quantity for s in external)
+    internal_sales = sum(s.total_amount for s in internal)
+    internal_cogs = sum(s.unit_cost * s.quantity for s in internal)
+
+    purchases_total = db.session.query(func.sum(StorePurchase.total_cost)).filter(
+        StorePurchase.purchase_date.between(df, dt)).scalar() or 0
+    closing_stock_value = sum(p.stock_value for p in SparePart.query.all())
+
+    by_part = {}
+    for s in sales:
+        row = by_part.setdefault(s.part_id,
+            {'part': s.part, 'quantity': 0, 'sales': 0.0, 'cost_of_sales': 0.0})
+        row['quantity'] += s.quantity
+        row['sales'] += s.total_amount
+        row['cost_of_sales'] += s.unit_cost * s.quantity
+    part_breakdown = list(by_part.values())
+    for row in part_breakdown:
+        row['gross_profit'] = row['sales'] - row['cost_of_sales']
+        row['margin'] = (row['gross_profit'] / row['sales'] * 100) if row['sales'] else 0
+    part_breakdown.sort(key=lambda r: r['gross_profit'], reverse=True)
+
+    return render_template('store/trading_account.html',
+        sales_revenue=sales_revenue, cost_of_sales=cost_of_sales,
+        gross_profit=gross_profit, gross_margin=gross_margin,
+        external_sales=external_sales, external_cogs=external_cogs,
+        external_profit=external_sales - external_cogs,
+        internal_sales=internal_sales, internal_cogs=internal_cogs,
+        internal_profit=internal_sales - internal_cogs,
+        purchases_total=purchases_total, closing_stock_value=closing_stock_value,
+        part_breakdown=part_breakdown,
+        date_from=date_from_str, date_to=date_to_str)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -3268,25 +3346,32 @@ def crew_leaderboard():
 
 
 def vehicle_income_totals(df, dt, vehicle_id=None):
-    """Revenue/maintenance/expense totals for one vehicle (or the whole
-    fleet if vehicle_id is None) over [df, dt]. Only expenses explicitly
-    tagged to a vehicle count toward that vehicle's statement — general
-    overhead (untagged expenses) only appears in the consolidated total."""
+    """Revenue/maintenance/expense/spares totals for one vehicle (or the
+    whole fleet if vehicle_id is None) over [df, dt]. Only expenses (and
+    store sales) explicitly tagged to a vehicle count toward that vehicle's
+    statement — general overhead (untagged expenses) only appears in the
+    consolidated total. Spares sold from the in-house store to a company
+    vehicle are booked as an expense on that vehicle here, at the same
+    marked-up price the store charges any other customer — see StoreSale."""
     rev_q = db.session.query(func.sum(DailyLog.gross_revenue)).filter(DailyLog.log_date.between(df, dt))
     maint_q = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(MaintenanceLog.log_date.between(df, dt))
     exp_q = db.session.query(func.sum(Expense.amount)).filter(Expense.expense_date.between(df, dt))
+    spares_q = db.session.query(func.sum(StoreSale.total_amount)).filter(StoreSale.sale_date.between(df, dt))
 
     if vehicle_id:
         rev_q = rev_q.filter(DailyLog.vehicle_id == vehicle_id)
         maint_q = maint_q.filter(MaintenanceLog.vehicle_id == vehicle_id)
         exp_q = exp_q.filter(Expense.vehicle_id == vehicle_id)
+        spares_q = spares_q.filter(StoreSale.vehicle_id == vehicle_id)
     else:
         exp_q = exp_q.filter(Expense.vehicle_id.is_(None))
+        spares_q = spares_q.filter(StoreSale.vehicle_id.isnot(None))
 
     revenue = rev_q.scalar() or 0
     maintenance = maint_q.scalar() or 0
     expenses = exp_q.scalar() or 0
-    return revenue, maintenance, expenses
+    spares = spares_q.scalar() or 0
+    return revenue, maintenance, expenses, spares
 
 
 def expense_breakdown_by_category(df, dt, vehicle_id=None):
@@ -3316,6 +3401,62 @@ def expense_breakdown_by_category(df, dt, vehicle_id=None):
     return rows
 
 
+def statement_expense_line_items(df, dt, vehicle_id=None):
+    """The actual source rows behind each Statement Summary category —
+    MaintenanceLog entries and vehicle-tagged StoreSale spares under
+    Maintenance, Expense rows grouped by their top-level heading (or
+    'Other' for a custom heading) everywhere else. Powers the income
+    statement's click-to-drill-down UI so a category total isn't a dead end."""
+    standard_names = ('Maintenance', 'Wages', 'Traffic Fines', 'Insurance', 'Admin')
+    items = {name: [] for name in standard_names}
+    items['Other'] = []
+
+    maint_q = MaintenanceLog.query.filter(MaintenanceLog.log_date.between(df, dt))
+    if vehicle_id:
+        maint_q = maint_q.filter(MaintenanceLog.vehicle_id == vehicle_id)
+    for m in maint_q.all():
+        items['Maintenance'].append({
+            'date': m.log_date, 'source': 'Maintenance Log',
+            'description': m.description or '—', 'vehicle': m.vehicle.registration,
+            'amount': m.total_cost,
+        })
+
+    spares_q = StoreSale.query.filter(StoreSale.sale_date.between(df, dt))
+    if vehicle_id:
+        spares_q = spares_q.filter(StoreSale.vehicle_id == vehicle_id)
+    else:
+        spares_q = spares_q.filter(StoreSale.vehicle_id.isnot(None))
+    for s in spares_q.all():
+        items['Maintenance'].append({
+            'date': s.sale_date, 'source': 'Store Sale',
+            'description': s.part.name, 'vehicle': s.vehicle.registration if s.vehicle else '—',
+            'amount': s.total_amount,
+        })
+
+    heading_name_by_cat_id = {}
+    for h in ExpenseCategory.query.filter_by(parent_id=None).all():
+        heading_name_by_cat_id[h.id] = h.name
+        for c in h.children:
+            heading_name_by_cat_id[c.id] = h.name
+
+    exp_q = Expense.query.filter(Expense.expense_date.between(df, dt))
+    if vehicle_id:
+        exp_q = exp_q.filter(Expense.vehicle_id == vehicle_id)
+    for e in exp_q.all():
+        heading = heading_name_by_cat_id.get(e.category_id)
+        bucket = heading if heading in items else 'Other'
+        items[bucket].append({
+            'date': e.expense_date, 'source': e.category.display_name,
+            'description': e.description or '—',
+            'vehicle': e.vehicle.registration if e.vehicle else '—',
+            'amount': e.amount,
+        })
+
+    for rows in items.values():
+        rows.sort(key=lambda r: r['date'], reverse=True)
+    return items
+
+
 @app.route('/reports/income')
 @login_required
 @permission_required('reports')
@@ -3326,28 +3467,31 @@ def report_income():
 
     if vehicle_id:
         # Per-vehicle statement: only costs directly attributable to this vehicle.
-        gross_revenue, maintenance_cost, vehicle_expenses = vehicle_income_totals(df, dt, vehicle_id)
+        gross_revenue, maintenance_cost, vehicle_expenses, spares_cost = vehicle_income_totals(df, dt, vehicle_id)
         general_expenses = 0
     else:
         # Consolidated statement: fleet-wide maintenance plus ALL expenses
-        # (both vehicle-tagged and general overhead).
-        gross_revenue, maintenance_cost, general_expenses = vehicle_income_totals(df, dt, None)
+        # (both vehicle-tagged and general overhead), plus spares sold from
+        # the store to any company vehicle.
+        gross_revenue, maintenance_cost, general_expenses, spares_cost = vehicle_income_totals(df, dt, None)
         vehicle_expenses = db.session.query(func.sum(Expense.amount)).filter(
             Expense.expense_date.between(df, dt), Expense.vehicle_id.isnot(None)).scalar() or 0
 
-    total_expenses = maintenance_cost + vehicle_expenses + general_expenses
+    total_expenses = maintenance_cost + vehicle_expenses + general_expenses + spares_cost
     net_profit = gross_revenue - total_expenses
     profit_margin = (net_profit / gross_revenue * 100) if gross_revenue else 0
 
     vehicle_breakdown = []
     for v in Vehicle.query.order_by(Vehicle.registration).all():
-        v_rev, v_maint, v_exp = vehicle_income_totals(df, dt, v.id)
-        if v_rev == 0 and v_maint == 0 and v_exp == 0:
+        v_rev, v_maint, v_exp, v_spares = vehicle_income_totals(df, dt, v.id)
+        if v_rev == 0 and v_maint == 0 and v_exp == 0 and v_spares == 0:
             continue
-        v_total_cost = v_maint + v_exp
+        v_total_cost = v_maint + v_exp + v_spares
         v_net = v_rev - v_total_cost
         vehicle_breakdown.append({
-            'vehicle': v, 'revenue': v_rev, 'maintenance': v_maint,
+            # Spares bought from the in-house store for this vehicle count as
+            # a maintenance cost, alongside logged maintenance-job spend.
+            'vehicle': v, 'revenue': v_rev, 'maintenance': v_maint + v_spares,
             'expenses': v_exp, 'net_profit': v_net,
             'margin': (v_net / v_rev * 100) if v_rev else 0,
         })
@@ -3357,7 +3501,8 @@ def report_income():
     # Statement Summary classifies expenses under five fixed headings
     # (matching create_default_expense_categories) rather than the
     # tagged/untagged split — Maintenance folds in logged maintenance-job
-    # costs alongside any Expense rows booked to the Maintenance category.
+    # costs, spares sold from the store to a company vehicle, and any
+    # Expense rows booked to the Maintenance category, all together.
     # Anything booked under a custom heading a user has added falls into
     # "Other" so it still counts toward Total Operating Expenses.
     statement_category_names = ('Maintenance', 'Wages', 'Traffic Fines', 'Insurance', 'Admin')
@@ -3368,18 +3513,19 @@ def report_income():
             category_totals[row['name']] = row['total']
         else:
             other_expenses += row['total']
-    category_totals['Maintenance'] += maintenance_cost
+    category_totals['Maintenance'] += maintenance_cost + spares_cost
 
     statement_expenses = [(name, category_totals[name]) for name in statement_category_names]
     if other_expenses:
         statement_expenses.append(('Other', other_expenses))
+    statement_expense_items = statement_expense_line_items(df, dt, vehicle_id or None)
 
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     return render_template('reports/income.html',
         gross_revenue=gross_revenue,
         maintenance_cost=maintenance_cost, vehicle_expenses=vehicle_expenses,
         general_expenses=general_expenses, total_expenses=total_expenses,
-        statement_expenses=statement_expenses,
+        statement_expenses=statement_expenses, statement_expense_items=statement_expense_items,
         net_profit=net_profit, profit_margin=profit_margin,
         vehicle_breakdown=vehicle_breakdown, expense_breakdown=expense_breakdown,
         vehicles=all_vehicles,
@@ -3511,7 +3657,7 @@ def report_shortfalls():
                 continue
             garnish = sum(l.garnish for l in day_logs)
             reasons = '; '.join(n for n in (l.reason_for_shortfall for l in day_logs) if n) or None
-            drivers = sorted({l.driver for l in day_logs}, key=lambda dr: dr.name)
+            drivers = sorted({l.driver for l in day_logs if l.driver}, key=lambda dr: dr.name)
             shortfall = v.daily_target - fare
             rows.append({
                 'vehicle': v, 'date': d, 'drivers': drivers,
@@ -3866,7 +4012,7 @@ def export_daily_logs():
                 'Trips', 'Gross Revenue (USD)', 'Garnish', 'Reason for Shortfall',
                 'Entered By', 'Notes'])
     for log in q.all():
-        w.writerow([log.log_date, log.vehicle.registration, log.driver.name,
+        w.writerow([log.log_date, log.vehicle.registration, log.driver.name if log.driver else '',
                     log.conductor.name if log.conductor else '',
                     log.route.name if log.route else '', log.trips_completed,
                     f'{log.gross_revenue:.2f}',
@@ -3893,6 +4039,7 @@ def export_income():
     fuel_q = FuelLog.query.filter(FuelLog.log_date.between(df, dt))
     maint_q = MaintenanceLog.query.filter(MaintenanceLog.log_date.between(df, dt))
     exp_q = Expense.query.filter(Expense.expense_date.between(df, dt))
+    spares_q = StoreSale.query.filter(StoreSale.sale_date.between(df, dt))
 
     vehicle_label = 'Consolidated (fleet-wide)'
     if vehicle_id:
@@ -3902,11 +4049,15 @@ def export_income():
         fuel_q = fuel_q.filter(FuelLog.vehicle_id == vehicle_id)
         maint_q = maint_q.filter(MaintenanceLog.vehicle_id == vehicle_id)
         exp_q = exp_q.filter(Expense.vehicle_id == vehicle_id)
+        spares_q = spares_q.filter(StoreSale.vehicle_id == vehicle_id)
+    else:
+        spares_q = spares_q.filter(StoreSale.vehicle_id.isnot(None))
 
     daily = daily_q.order_by(DailyLog.log_date).all()
     fuel = fuel_q.order_by(FuelLog.log_date).all()
     maintenance = maint_q.order_by(MaintenanceLog.log_date).all()
     expenses = exp_q.order_by(Expense.expense_date).all()
+    spares = spares_q.order_by(StoreSale.sale_date).all()
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -3954,7 +4105,18 @@ def export_income():
         total_exp += e.amount
     w.writerow(['', '', '', 'TOTAL OTHER EXPENSES', f'{total_exp:.2f}'])
     w.writerow([])
-    w.writerow(['NET PROFIT', f'{total_rev - total_maint - total_exp:.2f}'])
+
+    w.writerow(['SPARES SOLD TO COMPANY VEHICLES (booked as a maintenance expense on that vehicle)'])
+    w.writerow(['Date', 'Part', 'Vehicle', 'Qty', 'Unit Price (USD)', 'Total (USD)'])
+    total_spares = 0
+    for s in spares:
+        w.writerow([s.sale_date, s.part.name, s.vehicle.registration if s.vehicle else '',
+                    s.quantity, f'{s.unit_price:.2f}', f'{s.total_amount:.2f}'])
+        total_spares += s.total_amount
+    w.writerow(['', '', '', '', 'TOTAL SPARES', f'{total_spares:.2f}'])
+    w.writerow([])
+
+    w.writerow(['NET PROFIT', f'{total_rev - total_maint - total_exp - total_spares:.2f}'])
 
     out.seek(0)
     resp = make_response(out.getvalue())
@@ -5360,6 +5522,12 @@ def migrate_db():
                 conn.execute(text(
                     "ALTER TABLE expense_categories ADD COLUMN parent_id INTEGER REFERENCES expense_categories(id)"))
 
+        if inspector.has_table('store_sales'):
+            store_sale_cols = [c['name'] for c in inspector.get_columns('store_sales')]
+            if 'vehicle_id' not in store_sale_cols:
+                conn.execute(text(
+                    "ALTER TABLE store_sales ADD COLUMN vehicle_id INTEGER REFERENCES vehicles(id)"))
+
         driver_cols = inspector.get_columns('drivers')
         driver_col_names = [c['name'] for c in driver_cols]
         if 'paired_driver_id' not in driver_col_names:
@@ -5448,6 +5616,40 @@ def migrate_db():
                 conn.execute(text("ALTER TABLE daily_logs RENAME COLUMN deduction_notes TO reason_for_shortfall"))
             else:
                 conn.execute(text("ALTER TABLE daily_logs ADD COLUMN reason_for_shortfall TEXT"))
+
+        driver_id_col = next((c for c in inspector.get_columns('daily_logs') if c['name'] == 'driver_id'), None)
+        if driver_id_col is not None and not driver_id_col['nullable']:
+            # SQLite can't relax a NOT NULL constraint with ALTER TABLE — rebuild the table.
+            # Daily Transactions needs to record a fare/activity before a driver is assigned.
+            conn.execute(text("""
+                CREATE TABLE daily_logs_new2 (
+                    id INTEGER PRIMARY KEY,
+                    vehicle_id INTEGER NOT NULL REFERENCES vehicles(id),
+                    driver_id INTEGER REFERENCES drivers(id),
+                    conductor_id INTEGER REFERENCES drivers(id),
+                    route_id INTEGER REFERENCES routes(id),
+                    log_date DATE NOT NULL,
+                    trips_completed INTEGER,
+                    gross_revenue FLOAT NOT NULL,
+                    garnish FLOAT NOT NULL DEFAULT 0.0,
+                    reason_for_shortfall TEXT,
+                    notes TEXT,
+                    created_by INTEGER REFERENCES users(id),
+                    updated_by INTEGER REFERENCES users(id),
+                    created_at DATETIME,
+                    updated_at DATETIME
+                )
+            """))
+            conn.execute(text("""
+                INSERT INTO daily_logs_new2 (id, vehicle_id, driver_id, conductor_id, route_id,
+                    log_date, trips_completed, gross_revenue, garnish, reason_for_shortfall, notes,
+                    created_by, updated_by, created_at, updated_at)
+                SELECT id, vehicle_id, driver_id, conductor_id, route_id,
+                    log_date, trips_completed, gross_revenue, garnish, reason_for_shortfall, notes,
+                    created_by, updated_by, created_at, updated_at FROM daily_logs
+            """))
+            conn.execute(text("DROP TABLE daily_logs"))
+            conn.execute(text("ALTER TABLE daily_logs_new2 RENAME TO daily_logs"))
 
         # franchise_income moved from a flat frequency/amount log to a
         # per-date reconciliation record — drop the old shape and let

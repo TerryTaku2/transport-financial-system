@@ -59,12 +59,44 @@
 
 <div class="card mb-24">
   <div class="card-header"><h3>Statement Summary</h3></div>
+  <div class="form-hint" style="margin:0 16px 8px;">Click an expense line to see where it came from.</div>
   <div class="table-wrap">
     <table>
       <tbody>
         <tr><td>Gross Revenue</td><td class="text-right">{{ gross_revenue|currency }}</td></tr>
         {% for name, amount in statement_expenses %}
-        <tr><td>Less: {{ name }}</td><td class="text-right text-danger">({{ amount|currency }})</td></tr>
+        {% set line_items = statement_expense_items.get(name, []) %}
+        <tr class="{% if line_items %}expense-row-toggle{% endif %}"
+            {% if line_items %}data-target="expense-detail-{{ loop.index }}" style="cursor:pointer;"{% endif %}>
+          <td>
+            Less: {{ name }}
+            {% if line_items %}<span class="expense-chevron" style="color:var(--text-muted);margin-left:6px;">&#9656;</span>
+            <span class="form-hint">({{ line_items|length }} item{{ 's' if line_items|length != 1 else '' }})</span>{% endif %}
+          </td>
+          <td class="text-right text-danger">({{ amount|currency }})</td>
+        </tr>
+        {% if line_items %}
+        <tr class="expense-detail-row" id="expense-detail-{{ loop.index }}" style="display:none;">
+          <td colspan="2" style="padding:0;background:var(--hover-bg);">
+            <table style="margin:0;">
+              <thead>
+                <tr><th>Date</th><th>Source</th><th>Vehicle</th><th>Description</th><th class="text-right">Amount</th></tr>
+              </thead>
+              <tbody>
+                {% for item in line_items %}
+                <tr>
+                  <td>{{ item.date.strftime('%d %b %Y') }}</td>
+                  <td>{{ item.source }}</td>
+                  <td>{{ item.vehicle }}</td>
+                  <td>{{ item.description }}</td>
+                  <td class="text-right">{{ item.amount|currency }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </td>
+        </tr>
+        {% endif %}
         {% endfor %}
         <tr><td><strong>Total Operating Expenses</strong></td><td class="text-right"><strong>({{ total_expenses|currency }})</strong></td></tr>
         <tr class="summary-row"><td>NET PROFIT</td><td class="text-right">{{ net_profit|currency }}</td></tr>
@@ -72,6 +104,19 @@
     </table>
   </div>
 </div>
+
+<script>
+document.querySelectorAll('.expense-row-toggle').forEach(function (row) {
+  row.addEventListener('click', function () {
+    var target = document.getElementById(row.dataset.target);
+    if (!target) return;
+    var isHidden = target.style.display === 'none';
+    target.style.display = isHidden ? '' : 'none';
+    var chevron = row.querySelector('.expense-chevron');
+    if (chevron) chevron.innerHTML = isHidden ? '&#9662;' : '&#9656;';
+  });
+});
+</script>
 
 {% if expense_breakdown %}
 <div class="card mb-24">

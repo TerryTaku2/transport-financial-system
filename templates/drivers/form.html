@@ -28,9 +28,9 @@
           </select>
         </div>
         <div class="form-group" id="license-group">
-          <label>License Number<span class="req" id="license-req">*</span></label>
+          <label>License Number</label>
           <input type="text" name="license_number" id="license-input" value="{{ driver.license_number if driver else '' }}">
-          <div class="form-hint">Required for drivers. Conductors don't drive, so this can be left blank.</div>
+          <div class="form-hint">Optional.</div>
         </div>
         <div class="form-group" id="paired-driver-group">
           <label>Works Under Driver</label>
@@ -106,8 +106,6 @@
 <script>
 function toggleCrewFields() {
   var isDriver = document.getElementById('role-select').value === 'driver';
-  document.getElementById('license-input').required = isDriver;
-  document.getElementById('license-req').style.display = isDriver ? 'inline' : 'none';
   document.getElementById('paired-driver-group').style.display = isDriver ? 'none' : '';
 }
 toggleCrewFields();

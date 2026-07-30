@@ -66,6 +66,18 @@ document.addEventListener('DOMContentLoaded', function () {
   if (saleQty)   saleQty.addEventListener('input', updateSaleTotal);
   if (salePrice) salePrice.addEventListener('input', updateSaleTotal);
 
+  // ── Store sale: hide the free-text Customer field once a company vehicle is picked ──
+  var saleVehicle = document.getElementById('sale_vehicle');
+  var saleCustomerGroup = document.getElementById('sale_customer_group');
+  var saleCustomer = document.getElementById('sale_customer');
+  function onSaleVehicleChange() {
+    if (!saleVehicle || !saleCustomerGroup) return;
+    var toVehicle = !!saleVehicle.value;
+    saleCustomerGroup.style.display = toVehicle ? 'none' : '';
+    if (toVehicle && saleCustomer) saleCustomer.value = '';
+  }
+  if (saleVehicle) saleVehicle.addEventListener('change', onSaleVehicleChange);
+
   // ── Confirm delete ──
   document.querySelectorAll('form[data-confirm]').forEach(function (form) {
     form.addEventListener('submit', function (e) {

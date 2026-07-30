@@ -134,7 +134,7 @@
         {% for l in recent_logs %}
         <tr>
           <td>{{ l.log_date.strftime('%d %b %Y') }}</td>
-          <td>{{ l.driver.name }}</td>
+          <td>{{ l.driver.name if l.driver else '—' }}</td>
           <td>{{ l.route.name if l.route else '—' }}</td>
           <td>{{ l.trips_completed }}</td>
           <td class="text-right"><strong>{{ l.gross_revenue|currency }}</strong></td>

@@ -44,8 +44,18 @@
           <input type="number" id="sale_price" name="unit_price" step="0.01" min="0" required>
         </div>
         <div class="form-group">
+          <label>Sold To Vehicle (internal)</label>
+          <select name="vehicle_id" id="sale_vehicle">
+            <option value="">— External customer —</option>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}">{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-hint">If sold to a company vehicle, the amount is booked as an expense on that vehicle's income statement.</div>
+        </div>
+        <div class="form-group" id="sale_customer_group">
           <label>Customer</label>
-          <input type="text" name="customer_name">
+          <input type="text" name="customer_name" id="sale_customer">
         </div>
         <div class="form-group">
           <label>Total (auto-calculated)</label>

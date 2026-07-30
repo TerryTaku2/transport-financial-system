@@ -101,11 +101,11 @@
         <div class="form-group">
           <label>Daily Fare (USD)</label>
           <input type="number" name="fare" step="0.01" min="0" placeholder="0.00">
-          <div class="form-hint">Needs a driver selected.</div>
+          <div class="form-hint">Can be logged with no driver selected yet.</div>
         </div>
         <div class="form-group">
-          <label>{{ vehicle.fuel_type|capitalize }} Liters</label>
-          <input type="number" name="diesel_liters" step="0.01" min="0" placeholder="0.00">
+          <label>{{ vehicle.fuel_type|capitalize }} (USD)</label>
+          <input type="number" name="diesel_cost" step="0.01" min="0" placeholder="0.00">
         </div>
         <div class="form-group">
           <label>Mileage</label>
@@ -120,7 +120,7 @@
         <div class="form-group">
           <label>Garnish (USD)</label>
           <input type="number" name="garnish" step="0.01" min="0" placeholder="0.00">
-          <div class="form-hint">Deducted from this driver's commission when they miss their revenue target. Needs a driver selected.</div>
+          <div class="form-hint">Deducted from this driver's commission when they miss their revenue target. Needs a driver selected — fare alone doesn't.</div>
         </div>
         <div class="form-group">
           <label>Reason for Shortfall</label>
@@ -158,8 +158,8 @@
     <div class="kpi-value">{{ total_fare|currency }}</div>
   </div>
   <div class="kpi-card kpi-amber">
-    <div class="kpi-label">Total {{ vehicle.fuel_type|capitalize }} (Liters)</div>
-    <div class="kpi-value">{{ '%.1f'|format(total_diesel_liters) }} L</div>
+    <div class="kpi-label">Total {{ vehicle.fuel_type|capitalize }} (USD)</div>
+    <div class="kpi-value">{{ total_diesel_cost|currency }}</div>
   </div>
   <div class="kpi-card kpi-red">
     <div class="kpi-label">Total Garnish</div>
@@ -182,7 +182,7 @@
           <th>Date</th>
           <th>Driver Name</th>
           <th class="text-right">Daily Fare</th>
-          <th class="text-right">{{ vehicle.fuel_type|capitalize }} (L)</th>
+          <th class="text-right">{{ vehicle.fuel_type|capitalize }} (USD)</th>
           <th class="text-right">Mileage</th>
           <th class="text-right">Distance Travelled</th>
           <th class="text-right">Garnish</th>
@@ -201,7 +201,7 @@
           <td>{{ row.date }}</td>
           <td>{{ row.driver_names or '—' }}</td>
           <td class="text-right {% if row.shortfall %}text-danger{% endif %}">{{ row.fare|currency if row.fare else '—' }}</td>
-          <td class="text-right">{{ '%.1f'|format(row.diesel_liters) if row.diesel_liters else '—' }}</td>
+          <td class="text-right">{{ row.diesel_cost|currency if row.diesel_cost else '—' }}</td>
           <td class="text-right">{{ row.odometer if row.odometer is not none else '—' }}</td>
           <td class="text-right">{{ '%.0f'|format(row.distance) if row.distance is not none else '—' }}</td>
           <td class="text-right {% if row.garnish %}text-danger{% endif %}">{{ row.garnish|currency if row.garnish else '—' }}</td>
@@ -249,7 +249,7 @@
         <tr class="summary-row">
           <td colspan="2">TOTALS</td>
           <td class="text-right">{{ total_fare|currency }}</td>
-          <td class="text-right">{{ '%.1f'|format(total_diesel_liters) }}</td>
+          <td class="text-right">{{ total_diesel_cost|currency }}</td>
           <td></td>
           <td></td>
           <td class="text-right">{{ total_garnish|currency }}</td>

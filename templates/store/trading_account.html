@@ -1,0 +1,134 @@
+{% extends 'base.html' %}
+{% block title %}Store Trading Account{% endblock %}
+{% block page_title %}Spares Store — Trading &amp; Profit or Loss Account{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Trading &amp; Profit or Loss Account</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; the store as its own cost centre</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('store_parts') }}" class="btn btn-outline"><i data-feather="package"></i> Inventory</a>
+    <a href="{{ url_for('store_sales') }}" class="btn btn-outline"><i data-feather="arrow-up-circle"></i> Sales</a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Sales Revenue</div>
+    <div class="kpi-value">{{ sales_revenue|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-red">
+    <div class="kpi-label">Cost of Sales</div>
+    <div class="kpi-value">{{ cost_of_sales|currency }}</div>
+  </div>
+  <div class="kpi-card {% if gross_profit >= 0 %}kpi-green{% else %}kpi-red{% endif %}">
+    <div class="kpi-label">Gross Profit</div>
+    <div class="kpi-value">{{ gross_profit|currency }}</div>
+    <div class="kpi-sub">Margin: {{ gross_margin|pct }}</div>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Trading &amp; Profit or Loss Account</h3></div>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        <tr><td>Sales</td><td class="text-right">{{ sales_revenue|currency }}</td></tr>
+        <tr><td>Less: Cost of Sales</td><td class="text-right text-danger">({{ cost_of_sales|currency }})</td></tr>
+        <tr class="summary-row"><td><strong>GROSS PROFIT</strong></td><td class="text-right"><strong>{{ gross_profit|currency }}</strong></td></tr>
+        <tr><td colspan="2" class="form-hint" style="padding-top:10px;">No separate store overhead is tracked yet, so Net Profit below equals Gross Profit. Tag an expense to the store's own category and it can be deducted here.</td></tr>
+        <tr class="summary-row"><td>NET PROFIT</td><td class="text-right">{{ gross_profit|currency }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>External vs Internal Sales</h3></div>
+  <div class="form-hint" style="margin:0 16px 8px;">Internal sales (to company vehicles) also post as a maintenance expense on that vehicle's income statement — this is the store's side of the same transaction, not a double-count.</div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Channel</th><th class="text-right">Sales</th><th class="text-right">Cost of Sales</th><th class="text-right">Gross Profit</th><th class="text-right">Margin</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>External Customers</td>
+          <td class="text-right">{{ external_sales|currency }}</td>
+          <td class="text-right">({{ external_cogs|currency }})</td>
+          <td class="text-right {% if external_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ external_profit|currency }}</strong></td>
+          <td class="text-right">{{ (external_profit / external_sales * 100 if external_sales else 0)|pct }}</td>
+        </tr>
+        <tr>
+          <td>Internal (Company Vehicles)</td>
+          <td class="text-right">{{ internal_sales|currency }}</td>
+          <td class="text-right">({{ internal_cogs|currency }})</td>
+          <td class="text-right {% if internal_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ internal_profit|currency }}</strong></td>
+          <td class="text-right">{{ (internal_profit / internal_sales * 100 if internal_sales else 0)|pct }}</td>
+        </tr>
+        <tr class="summary-row">
+          <td>TOTAL</td>
+          <td class="text-right">{{ sales_revenue|currency }}</td>
+          <td class="text-right">({{ cost_of_sales|currency }})</td>
+          <td class="text-right">{{ gross_profit|currency }}</td>
+          <td class="text-right">{{ gross_margin|pct }}</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="kpi-grid mb-24">
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Purchases This Period</div>
+    <div class="kpi-value">{{ purchases_total|currency }}</div>
+    <div class="kpi-sub">Cash spent restocking</div>
+  </div>
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Closing Stock Value</div>
+    <div class="kpi-value">{{ closing_stock_value|currency }}</div>
+    <div class="kpi-sub">At weighted-average cost, as of today</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Gross Profit by Part</h3></div>
+  {% if part_breakdown %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Part</th><th class="text-right">Qty Sold</th><th class="text-right">Sales</th><th class="text-right">Cost of Sales</th><th class="text-right">Gross Profit</th><th class="text-right">Margin</th></tr>
+      </thead>
+      <tbody>
+        {% for row in part_breakdown %}
+        <tr>
+          <td><strong>{{ row.part.name }}</strong>{% if row.part.part_number %} <span class="form-hint">({{ row.part.part_number }})</span>{% endif %}</td>
+          <td class="text-right">{{ row.quantity }} {{ row.part.unit }}</td>
+          <td class="text-right">{{ row.sales|currency }}</td>
+          <td class="text-right">({{ row.cost_of_sales|currency }})</td>
+          <td class="text-right {% if row.gross_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ row.gross_profit|currency }}</strong></td>
+          <td class="text-right">{{ row.margin|pct }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No sales recorded for this period.</p></div>
+  {% endif %}
+</div>
+{% endblock %}
