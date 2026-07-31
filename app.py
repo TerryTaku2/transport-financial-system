@@ -145,6 +145,8 @@ class Vehicle(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     documents = db.relationship('VehicleDocument', backref='vehicle',
                                 lazy=True, cascade='all, delete-orphan')
@@ -195,6 +197,8 @@ class VehicleDocument(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     @property
     def days_to_expiry(self):
@@ -236,6 +240,8 @@ class Driver(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     paired_driver = db.relationship('Driver', remote_side=[id], backref='paired_conductors')
     assigned_vehicle = db.relationship('Vehicle', backref='assigned_crew')
@@ -260,6 +266,8 @@ class Route(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     logs = db.relationship('DailyLog', backref='route', lazy=True)
 
@@ -297,6 +305,8 @@ class DailyLog(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
     updater = db.relationship('User', foreign_keys=[updated_by])
@@ -324,6 +334,8 @@ class FuelLog(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
 
@@ -346,6 +358,8 @@ class MaintenanceLog(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
 
@@ -491,6 +505,8 @@ class Loan(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     payments = db.relationship('LoanPayment', backref='loan', lazy=True,
                                cascade='all, delete-orphan')
@@ -518,6 +534,8 @@ class LoanPayment(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
 
 class Payable(db.Model):
@@ -540,6 +558,8 @@ class Payable(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
 
 class Receivable(db.Model):
@@ -562,6 +582,8 @@ class Receivable(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
 
 class CommissionPayment(db.Model):
@@ -585,6 +607,8 @@ class CommissionPayment(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     driver = db.relationship('Driver')
 
@@ -603,6 +627,8 @@ class CapitalContribution(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
 
 class OwnerDrawing(db.Model):
@@ -618,6 +644,8 @@ class OwnerDrawing(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
 
 class ExpenseCategory(db.Model):
@@ -635,6 +663,8 @@ class ExpenseCategory(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     parent = db.relationship('ExpenseCategory', remote_side=[id], backref='children')
 
@@ -658,6 +688,8 @@ class Expense(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     category = db.relationship('ExpenseCategory', backref='expenses')
     vehicle = db.relationship('Vehicle')
@@ -676,6 +708,8 @@ class Budget(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -714,6 +748,8 @@ class FranchiseDailyIncome(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     @property
     def total_expenditure(self):
@@ -760,6 +796,8 @@ class FranchiseWeeklyIncome(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     @property
     def total_expenditure(self):
@@ -801,6 +839,8 @@ class FranchiseVehicle(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     collections = db.relationship('FranchiseCollection', backref='vehicle', lazy=True,
                                   order_by='FranchiseCollection.entry_date.desc()')
@@ -848,6 +888,8 @@ class FranchiseCollection(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     @property
     def net(self):
@@ -872,6 +914,8 @@ class MaintenanceSchedule(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     vehicle = db.relationship('Vehicle')
 
@@ -900,6 +944,8 @@ class SparePart(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     purchases = db.relationship('StorePurchase', backref='part', lazy=True,
                                 cascade='all, delete-orphan')
@@ -938,6 +984,8 @@ class StorePurchase(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
 
@@ -968,6 +1016,8 @@ class StoreSale(db.Model):
     pending_push = db.Column(db.Boolean, default=False)
     last_modified_site = db.Column(db.String(50))
     deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
     vehicle = db.relationship('Vehicle')
@@ -1635,12 +1685,17 @@ def touch_sync_fields(obj):
     before commit. Mints a sync_uuid the first time (the cross-instance
     identity used instead of the local auto-increment id, since two offline
     sites can independently mint the same integer id), stamps updated_at
-    (the optimistic-concurrency field the sync engine compares to detect a
-    genuine conflict — see /api/sync/push), and marks the row pending_push
-    so the local sync engine's outbox picks it up on its next cycle."""
+    (the LWW conflict-resolution timestamp — see /api/sync/push) and
+    server_touched_at (a purely local, monotonic "I wrote this row just
+    now" marker used only for /api/sync/pull's since= filter — see that
+    field's docstring on why it has to be separate from updated_at), and
+    marks the row pending_push so the local sync engine's outbox picks it
+    up on its next cycle."""
     if not obj.sync_uuid:
         obj.sync_uuid = uuid.uuid4().hex
-    obj.updated_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    obj.updated_at = now
+    obj.server_touched_at = now
     obj.pending_push = True
     obj.last_modified_site = app.config['SITE_ID']
 
@@ -2110,6 +2165,7 @@ def document_add(vehicle_id):
             notes=request.form.get('notes', '').strip(),
         )
         db.session.add(doc)
+        touch_sync_fields(doc)
         log_audit('CREATE', 'vehicle_documents', None,
                   f'Added {doc.doc_type} for {vehicle.registration}')
         db.session.commit()
@@ -3077,6 +3133,7 @@ def maintenance_schedule_add():
         db.session.add(sched)
         db.session.flush()
         log_audit('CREATE', 'maintenance_schedules', sched.id, f'Added maintenance schedule: {sched.description}')
+        touch_sync_fields(sched)
         db.session.commit()
         flash('Maintenance schedule added.', 'success')
         return redirect(url_for('maintenance_schedules'))
@@ -3101,6 +3158,7 @@ def maintenance_schedule_done(sid):
         if (sched.interval_km and sched.last_done_odometer is not None) else None
 
     log_audit('UPDATE', 'maintenance_schedules', sid, f'Marked "{sched.description}" as done')
+    touch_sync_fields(sched)
     db.session.commit()
     flash('Marked as done — next due date recalculated.', 'success')
     return redirect(url_for('maintenance_schedules'))
@@ -4834,6 +4892,7 @@ def franchise_daily_income_add():
                   f'Daily franchise income for {label} on {entry_date}: income {entry.income}, '
                   f'expenditure {entry.total_expenditure}, deposited {entry.deposited}')
         record_offline_sync(client_id, 'franchise_daily_income_add')
+        touch_sync_fields(entry)
         db.session.commit()
         flash('Daily franchise income recorded.', 'success')
         return redirect(url_for('franchise_daily_income_list'))
@@ -4900,6 +4959,7 @@ def franchise_weekly_income_add():
                   f'Weekly franchise income for {label} for week of {week_start}: income {entry.income}, '
                   f'expenditure {entry.total_expenditure}, deposited {entry.deposited}')
         record_offline_sync(client_id, 'franchise_weekly_income_add')
+        touch_sync_fields(entry)
         db.session.commit()
         flash('Weekly franchise income recorded.', 'success')
         return redirect(url_for('franchise_weekly_income_list'))
@@ -4998,6 +5058,7 @@ def franchise_vehicle_add():
         db.session.flush()
         log_audit('CREATE', 'franchise_vehicles', vehicle.id,
                   f'Added franchise vehicle {vehicle.number_plate} ({vehicle.franchisee_name})')
+        touch_sync_fields(vehicle)
         db.session.commit()
         flash('Franchise vehicle added.', 'success')
         return redirect(url_for('franchise_vehicles'))
@@ -5025,6 +5086,7 @@ def franchise_vehicle_edit(vid):
         vehicle.amount_owed = form_float(request.form, 'amount_owed', label='Amount owed', required=False, default=0, min_value=0)
         vehicle.notes = request.form.get('notes', '').strip()
         log_audit('UPDATE', 'franchise_vehicles', vehicle.id, f'Updated franchise vehicle {vehicle.number_plate}')
+        touch_sync_fields(vehicle)
         db.session.commit()
         flash('Franchise vehicle updated.', 'success')
         return redirect(url_for('franchise_vehicles'))
@@ -5099,6 +5161,7 @@ def franchise_collection_add():
                   f'{vehicle.number_plate} paid {collection.amount} ({frequency}), expense {collection.expense}, '
                   f'on {collection.entry_date}')
         record_offline_sync(client_id, 'franchise_collection_add')
+        touch_sync_fields(collection)
         db.session.commit()
         flash('Collection recorded.', 'success')
         return redirect(url_for('franchise_collections'))
@@ -5479,6 +5542,53 @@ def audit_log():
 
 
 # ─────────────────────────────────────────────────────────────
+# Multi-site sync — conflict review. Every last-write-wins resolution
+# apply_incoming_record() makes gets logged here with both full payloads
+# (see SyncConflict, app.py near the sync API), so an unresolved conflict
+# is never just silently overwritten and forgotten.
+# ─────────────────────────────────────────────────────────────
+@app.route('/sync/conflicts')
+@login_required
+@admin_required
+def sync_conflicts():
+    page = request.args.get('page', 1, type=int)
+    status = request.args.get('status', 'unresolved')
+    q = SyncConflict.query
+    if status == 'unresolved':
+        q = q.filter_by(resolved=False)
+    elif status == 'resolved':
+        q = q.filter_by(resolved=True)
+    conflicts = q.order_by(SyncConflict.detected_at.desc()).paginate(page=page, per_page=30)
+    unresolved_count = SyncConflict.query.filter_by(resolved=False).count()
+    return render_template('sync/conflicts.html', conflicts=conflicts, status=status,
+                           unresolved_count=unresolved_count)
+
+
+@app.route('/sync/conflicts/<int:cid>/resolve', methods=['POST'])
+@login_required
+@admin_required
+def sync_conflict_resolve(cid):
+    conflict = SyncConflict.query.get_or_404(cid)
+    conflict.resolved = True
+    conflict.resolved_by = current_user.id
+    conflict.resolved_at = datetime.now(timezone.utc)
+    conflict.resolution_notes = request.form.get('resolution_notes', '').strip()
+    db.session.commit()
+    flash('Conflict marked resolved.', 'success')
+    return redirect(url_for('sync_conflicts', status=request.form.get('return_status', 'unresolved')))
+
+
+@app.context_processor
+def inject_unresolved_sync_conflicts_count():
+    """Powers the "Sync Conflicts" sidebar badge in base.html on every
+    page — only admins see that nav section at all, and only admins can
+    act on a conflict, so the query only runs for them."""
+    if current_user.is_authenticated and current_user.role == 'admin':
+        return {'unresolved_sync_conflicts_count': SyncConflict.query.filter_by(resolved=False).count()}
+    return {}
+
+
+# ─────────────────────────────────────────────────────────────
 # Import Batches — audit trail, quarantine error export, revert
 # ─────────────────────────────────────────────────────────────
 IMPORT_TARGET_PERMISSIONS = {
@@ -5676,13 +5786,16 @@ def api_refdata():
 # Multi-site sync API — Phase 2 of the local-server sync plan. A spoke
 # (a local-server PC at a site) POSTs its pending changes to /api/sync/push
 # and GETs everything changed since its last checkpoint from
-# /api/sync/pull. Both directions funnel through apply_incoming_record()
-# below, so applying a pushed batch and applying a pulled batch behave
-# identically wherever this code eventually also runs on a spoke (Phase 3).
+# /api/sync/pull. Both directions share apply_incoming_record() below for
+# the actual upsert, but use different conflict-detection strategies (see
+# that function's docstring) — a push and a pull aren't symmetric: only
+# the pusher knows what state it edited from, only the puller can know
+# whether it has an unsynced local edit at risk.
 #
-# Scope for now: the 11 Phase-1 operational tables (fleet/spares/expenses).
-# Loans/payables/receivables/franchise/compliance tables are deliberately
-# NOT here yet — see the phased rollout plan. Users are never synced (see
+# Scope so far: the 11 Phase-1 operational tables (fleet/spares/expenses)
+# plus the 6 Phase-5 franchise/compliance tables. Loans/payables/
+# receivables tables are deliberately NOT here yet — see the phased
+# rollout plan. Users are never synced (see
 # SYNC_MODELS below not including 'users') — accounts stay central-only.
 # ─────────────────────────────────────────────────────────────
 
@@ -5736,12 +5849,36 @@ SYNC_MODELS = {
         'sale_date', 'quantity', 'unit_cost', 'unit_price', 'total_amount', 'customer_name',
         'notes', 'created_by', 'created_at',
     ), {'part_id': 'spare_parts', 'vehicle_id': 'vehicles'}),
+    # Phase 5 — franchise/compliance tables.
+    'franchise_vehicles': (FranchiseVehicle, (
+        'number_plate', 'franchisee_name', 'status', 'agreed_amount', 'amount_owed',
+        'notes', 'created_at',
+    ), {}),
+    'vehicle_documents': (VehicleDocument, (
+        'doc_type', 'reference_number', 'issue_date', 'expiry_date', 'notes', 'created_at',
+    ), {'vehicle_id': 'vehicles'}),
+    'maintenance_schedules': (MaintenanceSchedule, (
+        'description', 'interval_days', 'interval_km', 'last_done_date', 'last_done_odometer',
+        'next_due_date', 'next_due_odometer', 'status', 'created_at',
+    ), {'vehicle_id': 'vehicles'}),
+    'franchise_daily_income': (FranchiseDailyIncome, (
+        'entry_date', 'income', 'exp_traffic_fines', 'exp_facilitation_fees', 'exp_workshop',
+        'exp_wages', 'other_expenditure', 'deposited', 'description', 'created_by', 'created_at',
+    ), {'vehicle_id': 'franchise_vehicles'}),
+    'franchise_weekly_income': (FranchiseWeeklyIncome, (
+        'week_start', 'income', 'exp_traffic_fines', 'exp_facilitation_fees', 'exp_workshop',
+        'exp_wages', 'other_expenditure', 'deposited', 'description', 'created_by', 'created_at',
+    ), {'vehicle_id': 'franchise_vehicles'}),
+    'franchise_collections': (FranchiseCollection, (
+        'entry_date', 'frequency', 'amount', 'expense', 'notes', 'created_by', 'created_at',
+    ), {'vehicle_id': 'franchise_vehicles'}),
 }
 
 # Dependency order for apply — parents before children (see FK maps above).
 SYNC_TABLE_ORDER = [
-    'vehicles', 'routes', 'spare_parts', 'expense_categories',
-    'drivers', 'expenses', 'store_purchases',
+    'vehicles', 'routes', 'spare_parts', 'expense_categories', 'franchise_vehicles',
+    'drivers', 'expenses', 'store_purchases', 'vehicle_documents', 'maintenance_schedules',
+    'franchise_daily_income', 'franchise_weekly_income', 'franchise_collections',
     'daily_logs', 'fuel_logs', 'maintenance_logs', 'store_sales',
 ]
 
@@ -5814,17 +5951,35 @@ def serialize_record_for_sync(table, obj):
     return field_values, fk_values
 
 
-def apply_incoming_record(table, item, incoming_site_id):
+def apply_incoming_record(table, item, incoming_site_id, direction):
     """Upsert one incoming sync item by sync_uuid — the idempotency key,
     same principle as the existing already_synced()/client_id pattern for
-    the browser offline queue. Conflict detection is based on
-    pending_push: if this row has a local edit that hasn't been
-    acknowledged by the hub yet (pending_push=True) AND the incoming change
-    came from a different site, both sides changed it independently —
-    that's a genuine conflict, resolved by last-write-wins on updated_at
-    and logged to SyncConflict either way. If there's no unacknowledged
-    local edit, an incoming update is just a normal newer version, applied
-    with no conflict."""
+    the browser offline queue.
+
+    Conflict detection is deliberately DIFFERENT depending on direction,
+    because the two sides of a sync exchange don't have symmetric
+    information:
+
+    - direction='push' (a spoke telling the hub about its own edit): the
+      pusher includes base_updated_at — what IT believed this row's
+      updated_at was right before making its edit (see
+      last_synced_updated_at / sync_push_to_hub). The hub compares that
+      against its OWN CURRENT updated_at for the row. A mismatch means
+      something else changed this row on the hub after the pusher last
+      knew about it — e.g. a DIFFERENT spoke's push already landed — a
+      genuine conflict regardless of the hub's own pending_push (the hub
+      never has "its own" pending edit in this scenario; the race is
+      between two senders, not sender-vs-receiver). Comparing against
+      pending_push here would miss exactly this case: the second spoke's
+      push would silently overwrite the first spoke's edit with no
+      conflict ever logged, since the hub's pending_push is already
+      False by the time the second push arrives.
+    - direction='pull' (a spoke applying what the hub sent it): the hub
+      has no meaningful "base" to offer — it just reports current truth.
+      What matters instead is whether the RECEIVING spoke has its own
+      unpushed local edit that the incoming pull would silently clobber —
+      exactly what pending_push (on the spoke's own row) already tracks.
+    """
     model, fields, fk_map = SYNC_MODELS[table]
     sync_uuid_value = item['sync_uuid']
     existing = model.query.filter_by(sync_uuid=sync_uuid_value).first()
@@ -5846,6 +6001,18 @@ def apply_incoming_record(table, item, incoming_site_id):
         obj.updated_at = incoming_updated_at
         obj.last_modified_site = incoming_site_id
         obj.pending_push = False  # arrived from elsewhere — nothing to push back for this edit
+        obj.last_synced_updated_at = incoming_updated_at  # what we now know the OTHER side also has
+        # NOT incoming_updated_at — this has to be "now," this instance's own
+        # clock, regardless of the edit's original timestamp. Using the
+        # edit's own timestamp here caused a real bug: a conflict-resolved
+        # value can carry an edit time that's earlier than a watermark a
+        # THIRD instance already advanced past (e.g. it arrives late, after
+        # sync delay/conflict resolution) — with pull's since= filter keyed
+        # off that edit time, such a change could fall behind the
+        # watermark and never be seen again. server_touched_at is a
+        # separate, purely-local, always-forward marker of "when did I
+        # last write this row," used only for that filter.
+        obj.server_touched_at = datetime.now(timezone.utc)
 
     if existing is None:
         obj = model(sync_uuid=sync_uuid_value)
@@ -5861,7 +6028,12 @@ def apply_incoming_record(table, item, incoming_site_id):
     if incoming_updated_at == _sync_sortable_dt(existing.updated_at):
         return {'sync_uuid': sync_uuid_value, 'status': 'applied'}  # already have this exact version
 
-    genuine_conflict = existing.pending_push and existing.last_modified_site != incoming_site_id
+    if direction == 'push':
+        incoming_base = _parse_sync_dt(item.get('base_updated_at'))
+        genuine_conflict = (incoming_base is not None
+                            and _sync_sortable_dt(incoming_base) != _sync_sortable_dt(existing.updated_at))
+    else:
+        genuine_conflict = existing.pending_push and existing.last_modified_site != incoming_site_id
 
     if not genuine_conflict:
         if incoming_updated_at > _sync_sortable_dt(existing.updated_at):
@@ -5930,7 +6102,7 @@ def api_sync_push():
     conflicts = 0
     for table in SYNC_TABLE_ORDER:
         for item in batch_by_table.get(table, []):
-            result = apply_incoming_record(table, item, site_id)
+            result = apply_incoming_record(table, item, site_id, direction='push')
             results.append(result)
             if result['status'] == 'applied':
                 accepted += 1
@@ -5964,7 +6136,7 @@ def api_sync_pull():
         if table not in requested_tables:
             continue
         model = SYNC_MODELS[table][0]
-        rows = model.query.filter(model.updated_at > since).all()
+        rows = model.query.filter(model.server_touched_at > since).all()
         for row in rows:
             field_values, fk_values = serialize_record_for_sync(table, row)
             changes.append({
@@ -6026,7 +6198,7 @@ def sync_pull_from_hub():
     resp.raise_for_status()
     body = resp.json()
     for change in body['changes']:
-        apply_incoming_record(change['table'], change, change.get('site_id') or 'hub')
+        apply_incoming_record(change['table'], change, change.get('site_id') or 'hub', direction='pull')
     state.last_pull_at = _parse_sync_dt(body['server_time'])
     state.last_error = None
     db.session.commit()
@@ -6047,6 +6219,12 @@ def sync_push_to_hub():
             batch.append({
                 'table': table, 'sync_uuid': row.sync_uuid,
                 'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+                # What we last confirmed the hub agreed on for this row —
+                # None for a brand-new local row the hub has never seen.
+                # The hub compares this against its own current value to
+                # detect whether some OTHER push landed in between (see
+                # apply_incoming_record's direction='push' branch).
+                'base_updated_at': row.last_synced_updated_at.isoformat() if row.last_synced_updated_at else None,
                 'fields': field_values, 'fk': fk_values,
             })
     if not batch:
@@ -6058,15 +6236,30 @@ def sync_push_to_hub():
     resp.raise_for_status()
     result = resp.json()
 
-    # Only clear pending_push for rows the hub actually accepted — a
-    # rejected row (duplicate_constraint/fk_missing) stays queued for the
-    # next cycle rather than silently vanishing from the outbox.
-    handled_uuids = {r['sync_uuid'] for r in result['results']
-                     if r['status'] in ('applied', 'conflict_logged')}
+    # A rejected row (duplicate_constraint/fk_missing) stays pending_push —
+    # retried next cycle rather than silently vanishing from the outbox.
+    #
+    # For everything else, pending_push clears either way, but
+    # last_synced_updated_at only advances to OUR value when our edit is
+    # what's now actually stored on the hub ('applied', or a conflict we
+    # won). When our push LOSES a conflict, the hub kept its OWN differing
+    # value — stamping last_synced_updated_at to our own updated_at would
+    # falsely claim "the hub agrees with this," and the next pull would
+    # then wrongly treat our now-stale local copy as newer and never
+    # adopt the hub's real value. Leaving last_synced_updated_at
+    # untouched here means the very next pull cycle's normal
+    # newer-timestamp check correctly overwrites our losing edit with
+    # what the hub actually kept.
+    results_by_uuid = {r['sync_uuid']: r for r in result['results']}
     for table in SYNC_TABLE_ORDER:
         model = SYNC_MODELS[table][0]
-        for row in model.query.filter(model.pending_push == True, model.sync_uuid.in_(handled_uuids)).all():  # noqa: E712
+        for row in model.query.filter(model.pending_push == True, model.sync_uuid.in_(results_by_uuid.keys())).all():  # noqa: E712
+            r = results_by_uuid[row.sync_uuid]
+            if r['status'] == 'rejected':
+                continue
             row.pending_push = False
+            if r['status'] == 'applied' or r.get('final') == 'remote_won':
+                row.last_synced_updated_at = row.updated_at
 
     state = _get_peer_state()
     state.last_push_at = datetime.now(timezone.utc)
@@ -6123,6 +6316,16 @@ def currency_filter(value):
 @app.template_filter('pct')
 def pct_filter(value):
     return f'{value:.1f}%' if value is not None else '0.0%'
+
+
+@app.template_filter('pretty_json')
+def pretty_json_filter(value):
+    """Used on sync/conflicts.html to render SyncConflict's stored payload
+    JSON legibly instead of as one long compact line."""
+    try:
+        return json.dumps(json.loads(value), indent=2, default=str)
+    except (TypeError, ValueError):
+        return value or ''
 
 
 # ─────────────────────────────────────────────────────────────
@@ -6369,6 +6572,17 @@ def migrate_db():
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN last_modified_site VARCHAR(50)"))
             if 'deleted_at' not in cols:
                 conn.execute(text(f"ALTER TABLE {table} ADD COLUMN deleted_at DATETIME"))
+            if 'last_synced_updated_at' not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN last_synced_updated_at DATETIME"))
+            if 'server_touched_at' not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN server_touched_at DATETIME"))
+                # Backfill so existing rows are immediately pull-visible —
+                # without this, every pre-sync row would have server_touched_at
+                # NULL, and "NULL > since" is never true in SQL, so they'd
+                # never appear in any /api/sync/pull response.
+                conn.execute(text(
+                    f"UPDATE {table} SET server_touched_at = COALESCE(updated_at, created_at) "
+                    f"WHERE server_touched_at IS NULL"))
 
         conn.commit()
 

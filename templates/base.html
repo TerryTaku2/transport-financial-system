@@ -211,6 +211,11 @@
       <a href="{{ url_for('import_history') }}" class="nav-item {% if request.endpoint == 'import_history' %}active{% endif %}">
         <i data-feather="upload-cloud"></i> Import History
       </a>
+      <a href="{{ url_for('sync_conflicts') }}" class="nav-item {% if 'sync_conflict' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="git-merge"></i> Sync Conflicts
+        {% set unresolved_conflicts = unresolved_sync_conflicts_count|default(0) %}
+        {% if unresolved_conflicts > 0 %}<span class="nav-badge">{{ unresolved_conflicts }}</span>{% endif %}
+      </a>
     </div>
     {% endif %}
   </aside>

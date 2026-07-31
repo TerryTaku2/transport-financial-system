@@ -1,0 +1,82 @@
+{% extends 'base.html' %}
+{% block title %}Sync Conflicts{% endblock %}
+{% block page_title %}Admin — Sync Conflicts{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Multi-Site Sync Conflicts</h1>
+    <div class="subtitle">Every time two sites edited the same record independently, the losing version is kept here for review — nothing is ever silently discarded</div>
+  </div>
+</div>
+
+<div class="btn-group mb-16">
+  <a href="{{ url_for('sync_conflicts', status='unresolved') }}"
+     class="btn {% if status == 'unresolved' %}btn-primary{% else %}btn-outline{% endif %}">
+    Unresolved{% if unresolved_count %} <span class="badge badge-red" style="margin-left:4px;">{{ unresolved_count }}</span>{% endif %}
+  </a>
+  <a href="{{ url_for('sync_conflicts', status='resolved') }}"
+     class="btn {% if status == 'resolved' %}btn-primary{% else %}btn-outline{% endif %}">Resolved</a>
+  <a href="{{ url_for('sync_conflicts', status='all') }}"
+     class="btn {% if status == 'all' %}btn-primary{% else %}btn-outline{% endif %}">All</a>
+</div>
+
+{% if conflicts.items %}
+  {% for c in conflicts.items %}
+  <div class="card mb-16">
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+      <h3>{{ c.table_name }} — {{ c.conflict_type }}</h3>
+      {% if c.resolved %}<span class="badge badge-green">Resolved</span>
+      {% else %}<span class="badge badge-amber">Needs review</span>{% endif %}
+    </div>
+    <div class="card-body">
+      <div class="form-grid mb-16">
+        <div><strong>sync_uuid</strong><div>{{ c.sync_uuid }}</div></div>
+        <div><strong>Detected</strong><div>{{ c.detected_at.strftime('%d %b %Y %H:%M:%S') if c.detected_at else '—' }}</div></div>
+        <div><strong>Won</strong><div>{{ c.winning_site_id or '—' }} @ {{ c.winning_updated_at.strftime('%d %b %Y %H:%M:%S') if c.winning_updated_at else '—' }}</div></div>
+        <div><strong>Lost</strong><div>{{ c.losing_site_id or '—' }} @ {{ c.losing_updated_at.strftime('%d %b %Y %H:%M:%S') if c.losing_updated_at else '—' }}</div></div>
+      </div>
+
+      <details class="mb-16">
+        <summary class="form-hint" style="cursor:pointer;">View both versions</summary>
+        <div class="form-grid" style="margin-top:8px;">
+          <div>
+            <div class="form-hint">Winning version (kept)</div>
+            <pre style="background:var(--page-bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px;font-size:12px;overflow-x:auto;">{{ c.winning_payload|pretty_json }}</pre>
+          </div>
+          <div>
+            <div class="form-hint">Losing version (overwritten — recover manually here if it mattered)</div>
+            <pre style="background:var(--page-bg);border:1px solid var(--border);border-radius:var(--radius);padding:10px;font-size:12px;overflow-x:auto;">{{ c.losing_payload|pretty_json }}</pre>
+          </div>
+        </div>
+      </details>
+
+      {% if c.resolved %}
+      <div class="form-hint">
+        Resolved by {{ c.resolver.username if c.resolver else 'unknown' }} on
+        {{ c.resolved_at.strftime('%d %b %Y %H:%M:%S') if c.resolved_at else '—' }}
+        {% if c.resolution_notes %} — “{{ c.resolution_notes }}”{% endif %}
+      </div>
+      {% else %}
+      <form method="POST" action="{{ url_for('sync_conflict_resolve', cid=c.id) }}" style="display:flex;gap:8px;align-items:flex-start;flex-wrap:wrap;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="return_status" value="{{ status }}">
+        <input type="text" name="resolution_notes" placeholder="Optional note (e.g. 'confirmed the winning version is correct')" style="flex:1;min-width:260px;">
+        <button type="submit" class="btn btn-outline">Mark Resolved</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+
+  <div class="pagination">
+    {% if conflicts.has_prev %}<a href="?page={{ conflicts.prev_num }}&status={{ status }}">&laquo; Prev</a>{% endif %}
+    <span class="active">Page {{ conflicts.page }} of {{ conflicts.pages or 1 }}</span>
+    {% if conflicts.has_next %}<a href="?page={{ conflicts.next_num }}&status={{ status }}">Next &raquo;</a>{% endif %}
+  </div>
+{% else %}
+  <div class="card"><div class="card-body">
+    <div class="empty-state"><p>No {{ status if status != 'all' else '' }} sync conflicts.</p></div>
+  </div></div>
+{% endif %}
+{% endblock %}
