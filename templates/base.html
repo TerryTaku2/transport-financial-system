@@ -225,6 +225,7 @@
         <div class="avatar">{{ current_user.username[0].upper() }}</div>
         <span>{{ current_user.username }}</span>
         <span class="badge badge-blue">{{ current_user.role }}</span>
+        <span id="connectivity-badge" class="badge badge-gray">Offline</span>
         <span id="offline-sync-badge" class="badge" style="display:none;"></span>
         <a href="{{ url_for('change_password') }}" class="btn-logout" style="margin-right:4px;">Change Password</a>
         <a href="{{ url_for('logout') }}" class="btn-logout">Sign out</a>

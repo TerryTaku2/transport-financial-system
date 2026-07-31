@@ -98,6 +98,24 @@
     document.dispatchEvent(new CustomEvent('offline-queue-changed'));
   }
 
+  // Real connectivity, not just navigator.onLine (which only reflects the
+  // network adapter, not whether the server is actually reachable) — set
+  // from real request outcomes wherever we already have one, and otherwise
+  // from a periodic /api/ping probe below.
+  var connectivity = navigator.onLine ? 'online' : 'offline';
+
+  function setConnectivity(state) {
+    if (connectivity === state) return;
+    connectivity = state;
+    document.dispatchEvent(new CustomEvent('connectivity-changed'));
+  }
+
+  function checkConnectivity() {
+    return fetchWithTimeout('/api/ping', { method: 'GET', credentials: 'same-origin', cache: 'no-store' }, FETCH_TIMEOUT_MS)
+      .then(function () { setConnectivity('online'); })
+      .catch(function () { setConnectivity('offline'); });
+  }
+
   // One code path for both a live form submit and a later queue replay:
   // always fetch a fresh CSRF token first, since a token minted at
   // page-load can go stale long before a queued item gets replayed.
@@ -105,7 +123,10 @@
     return freshCsrfToken()
       .catch(function () { return null; })
       .then(function (csrfToken) {
-        if (csrfToken === null) return { outcome: 'network-error' };
+        if (csrfToken === null) {
+          setConnectivity('offline');
+          return { outcome: 'network-error' };
+        }
         var formData = new FormData();
         Object.keys(dataObject).forEach(function (key) {
           formData.set(key, dataObject[key]);
@@ -116,8 +137,8 @@
           body: formData,
           credentials: 'same-origin',
         }, FETCH_TIMEOUT_MS)
-          .then(function (resp) { return { outcome: 'response', response: resp }; })
-          .catch(function () { return { outcome: 'network-error' }; });
+          .then(function (resp) { setConnectivity('online'); return { outcome: 'response', response: resp }; })
+          .catch(function () { setConnectivity('offline'); return { outcome: 'network-error' }; });
       });
   }
 
@@ -274,16 +295,33 @@
     return deleteItem(clientId).then(notifyChanged);
   }
 
+  function updateConnectivityBadge() {
+    var badge = document.getElementById('connectivity-badge');
+    if (!badge) return;
+    if (connectivity === 'online') {
+      badge.className = 'badge badge-green';
+      badge.textContent = 'Online';
+    } else {
+      badge.className = 'badge badge-gray';
+      badge.textContent = 'Offline';
+    }
+  }
+
   document.addEventListener('offline-queue-changed', updateBadge);
-  window.addEventListener('online', syncQueue);
+  document.addEventListener('connectivity-changed', updateConnectivityBadge);
+
+  window.addEventListener('online', function () { checkConnectivity(); syncQueue(); });
+  window.addEventListener('offline', function () { checkConnectivity(); });
   document.addEventListener('visibilitychange', function () {
-    if (!document.hidden) syncQueue();
+    if (!document.hidden) { checkConnectivity(); syncQueue(); }
   });
-  setInterval(syncQueue, SYNC_INTERVAL_MS);
+  setInterval(function () { checkConnectivity(); syncQueue(); }, SYNC_INTERVAL_MS);
 
   document.addEventListener('DOMContentLoaded', function () {
     attachFormInterception();
     updateBadge();
+    updateConnectivityBadge();
+    checkConnectivity();
     syncQueue();
   });
 

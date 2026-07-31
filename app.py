@@ -5394,6 +5394,14 @@ def api_csrf_token():
     return jsonify({'csrf_token': generate_csrf()})
 
 
+@app.route('/api/ping')
+def api_ping():
+    """Unauthenticated connectivity probe for offline.js's topbar
+    Online/Offline indicator — no @login_required, since "is the server
+    reachable" needs to answer true even for a logged-out/expired session."""
+    return jsonify({'status': 'ok'})
+
+
 # ─────────────────────────────────────────────────────────────
 # WhatsApp Webhook stub
 # ─────────────────────────────────────────────────────────────
