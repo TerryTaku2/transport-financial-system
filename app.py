@@ -11,11 +11,14 @@ import io
 import json
 import re
 import secrets
+import threading
+import time
 import uuid
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 
 import openpyxl
+import requests
 from dotenv import load_dotenv
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, jsonify, make_response, session, send_from_directory)
@@ -61,6 +64,9 @@ app.config.update(
     PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
     SITE_ID=os.environ.get('SITE_ID', 'central'),
     SYNC_ENABLED=os.environ.get('SYNC_ENABLED', 'false').lower() == 'true',
+    SYNC_HUB_URL=os.environ.get('SYNC_HUB_URL', '').rstrip('/'),
+    SYNC_API_KEY=os.environ.get('SYNC_API_KEY', ''),
+    SYNC_INTERVAL_SECONDS=int(os.environ.get('SYNC_INTERVAL_SECONDS', '60')),
 )
 
 db = SQLAlchemy(app)
@@ -5974,6 +5980,127 @@ def api_sync_pull():
 
 
 # ─────────────────────────────────────────────────────────────
+# Local sync engine — Phase 3. Only runs on a spoke (SYNC_ENABLED=true,
+# a local-server PC at a site), never on the hub (Render). Deliberately
+# kept as functions here rather than a separate sync_engine.py module: this
+# app has no other internal modules, and every one of these functions
+# needs direct access to `app`, `db`, and the SYNC_MODELS/apply_incoming_
+# record machinery defined just above — splitting it out would only buy a
+# fragile bottom-of-file circular import for no real benefit.
+#
+# Pull and push are structurally the same operation — "upsert a batch of
+# someone else's changes" — just running on different machines, so both
+# reuse apply_incoming_record()/serialize_record_for_sync() from the API
+# above rather than duplicating that logic.
+#
+# Must run single-process: a second worker would each spawn their own
+# thread and race each other's push/pull cycles. Matches the same
+# constraint already documented for Central's own gunicorn (-w 1 in
+# render.yaml) — a spoke should be run as `python app.py`, not gunicorn
+# with multiple workers.
+# ─────────────────────────────────────────────────────────────
+
+def _sync_headers():
+    return {'X-Sync-Api-Key': app.config['SYNC_API_KEY'], 'Content-Type': 'application/json'}
+
+
+def _get_peer_state():
+    peer_url = app.config['SYNC_HUB_URL']
+    state = SyncPeerState.query.filter_by(peer_url=peer_url).first()
+    if not state:
+        state = SyncPeerState(peer_url=peer_url)
+        db.session.add(state)
+        db.session.commit()
+    return state
+
+
+def sync_pull_from_hub():
+    """Pull everything the hub has changed since our last successful pull
+    and apply it locally. The watermark saved afterward is the hub's own
+    server_time, not this machine's clock — two sites' clocks don't need
+    to agree with each other for pull-since to stay correct."""
+    state = _get_peer_state()
+    params = {'since': state.last_pull_at.isoformat()} if state.last_pull_at else {}
+    resp = requests.get(f"{app.config['SYNC_HUB_URL']}/api/sync/pull",
+                        params=params, headers=_sync_headers(), timeout=30)
+    resp.raise_for_status()
+    body = resp.json()
+    for change in body['changes']:
+        apply_incoming_record(change['table'], change, change.get('site_id') or 'hub')
+    state.last_pull_at = _parse_sync_dt(body['server_time'])
+    state.last_error = None
+    db.session.commit()
+    return len(body['changes'])
+
+
+def sync_push_to_hub():
+    """Push this site's pending local changes (pending_push=True),
+    dependency-ordered so a child row's foreign key always resolves
+    against a parent the hub has already seen. Chunked at 200 rows/table
+    per cycle — a large backlog spreads across several cycles rather than
+    risking one oversized request."""
+    batch = []
+    for table in SYNC_TABLE_ORDER:
+        model = SYNC_MODELS[table][0]
+        for row in model.query.filter_by(pending_push=True).limit(200).all():
+            field_values, fk_values = serialize_record_for_sync(table, row)
+            batch.append({
+                'table': table, 'sync_uuid': row.sync_uuid,
+                'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+                'fields': field_values, 'fk': fk_values,
+            })
+    if not batch:
+        return 0
+
+    resp = requests.post(f"{app.config['SYNC_HUB_URL']}/api/sync/push",
+                         json={'site_id': app.config['SITE_ID'], 'batch': batch},
+                         headers=_sync_headers(), timeout=30)
+    resp.raise_for_status()
+    result = resp.json()
+
+    # Only clear pending_push for rows the hub actually accepted — a
+    # rejected row (duplicate_constraint/fk_missing) stays queued for the
+    # next cycle rather than silently vanishing from the outbox.
+    handled_uuids = {r['sync_uuid'] for r in result['results']
+                     if r['status'] in ('applied', 'conflict_logged')}
+    for table in SYNC_TABLE_ORDER:
+        model = SYNC_MODELS[table][0]
+        for row in model.query.filter(model.pending_push == True, model.sync_uuid.in_(handled_uuids)).all():  # noqa: E712
+            row.pending_push = False
+
+    state = _get_peer_state()
+    state.last_push_at = datetime.now(timezone.utc)
+    state.last_error = None
+    db.session.commit()
+    return len(batch)
+
+
+def run_sync_cycle():
+    with app.app_context():
+        try:
+            pulled = sync_pull_from_hub()
+            pushed = sync_push_to_hub()
+            if pulled or pushed:
+                app.logger.info(f'sync cycle: pulled {pulled}, pushed {pushed}')
+        except Exception as e:  # noqa: BLE001 — a bad cycle must never kill the loop
+            db.session.rollback()
+            state = _get_peer_state()
+            state.last_error = str(e)
+            db.session.commit()
+            app.logger.warning(f'sync cycle failed: {e}')
+
+
+def _sync_loop():
+    while True:
+        run_sync_cycle()
+        time.sleep(app.config['SYNC_INTERVAL_SECONDS'])
+
+
+def start_sync_thread():
+    threading.Thread(target=_sync_loop, daemon=True, name='sync-engine').start()
+
+
+# ─────────────────────────────────────────────────────────────
 # WhatsApp Webhook stub
 # ─────────────────────────────────────────────────────────────
 @app.route('/api/whatsapp/webhook', methods=['POST'])
@@ -6266,13 +6393,25 @@ def migrate_db():
         db.session.commit()
 
 
+def _seed_category_uuid(name, parent_name=None):
+    """Deterministic (not random) sync_uuid for the fixed set of default
+    expense categories every instance seeds independently at bootstrap.
+    Using uuid4() here (like touch_sync_fields does for real user-created
+    rows) would give the hub's "Maintenance" and a spoke's own
+    independently-bootstrapped "Maintenance" two different identities —
+    they'd never recognize each other as the same row and just pile up as
+    duplicates once synced. A stable hash of the name means every instance
+    converges on the same sync_uuid for the same default category."""
+    return uuid.uuid5(uuid.NAMESPACE_DNS, f'expense_category:{parent_name or ""}:{name}').hex
+
+
 def create_default_expense_categories():
     """Vehicle Expenses are classified under exactly five top-level
     headings: Maintenance, Wages, Traffic Fines, Insurance, Admin."""
     headings = ('Maintenance', 'Wages', 'Traffic Fines', 'Insurance', 'Admin')
     for name in headings:
         if not ExpenseCategory.query.filter_by(name=name, parent_id=None).first():
-            db.session.add(ExpenseCategory(name=name))
+            db.session.add(ExpenseCategory(name=name, sync_uuid=_seed_category_uuid(name)))
     db.session.flush()
 
     # Retire the older, differently-named default headings this list
@@ -6306,13 +6445,14 @@ def create_default_expense_categories():
 
     maintenance = ExpenseCategory.query.filter_by(name='Maintenance', parent_id=None).first()
     if not maintenance:
-        maintenance = ExpenseCategory(name='Maintenance')
+        maintenance = ExpenseCategory(name='Maintenance', sync_uuid=_seed_category_uuid('Maintenance'))
         db.session.add(maintenance)
         db.session.flush()
     for name in ('Brake Pads and Tyres', 'Brake Shoes', 'Tie Rod Ends',
                  'Wheel Bearing', 'Ball Joints', 'Engine Oil'):
         if not ExpenseCategory.query.filter_by(name=name, parent_id=maintenance.id).first():
-            db.session.add(ExpenseCategory(name=name, parent_id=maintenance.id))
+            db.session.add(ExpenseCategory(name=name, parent_id=maintenance.id,
+                                           sync_uuid=_seed_category_uuid(name, 'Maintenance')))
     db.session.commit()
 
 
@@ -6333,6 +6473,17 @@ with app.app_context():
     db.create_all()  # recreate any tables migrate_db() dropped for a schema change
     create_default_admin()
     create_default_expense_categories()
+
+# Only a spoke (SYNC_ENABLED=true in its .env, pointed at SYNC_HUB_URL)
+# starts this loop — Central (Render) never does; it only serves
+# /api/sync/push and /api/sync/pull. Note: Flask's debug-mode reloader
+# re-executes this whole module in a child process, which could start a
+# second thread alongside the reloader's parent watcher — harmless in
+# practice since every sync cycle is idempotent (see
+# apply_incoming_record), and a real spoke deployment runs without the
+# reloader (FLASK_ENV=production) anyway.
+if app.config['SYNC_ENABLED']:
+    start_sync_thread()
 
 if __name__ == '__main__':
     debug_mode = not IS_PRODUCTION
