@@ -11,6 +11,7 @@ import io
 import json
 import re
 import secrets
+import uuid
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 
@@ -57,6 +58,8 @@ app.config.update(
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=IS_PRODUCTION,
     PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
+    SITE_ID=os.environ.get('SITE_ID', 'central'),
+    SYNC_ENABLED=os.environ.get('SYNC_ENABLED', 'false').lower() == 'true',
 )
 
 db = SQLAlchemy(app)
@@ -130,6 +133,11 @@ class Vehicle(db.Model):
     insurance_policy_number = db.Column(db.String(100))
     insurance_expiry = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     documents = db.relationship('VehicleDocument', backref='vehicle',
                                 lazy=True, cascade='all, delete-orphan')
@@ -175,6 +183,11 @@ class VehicleDocument(db.Model):
     expiry_date = db.Column(db.Date, nullable=False)
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     @property
     def days_to_expiry(self):
@@ -211,6 +224,11 @@ class Driver(db.Model):
     next_of_kin_phone = db.Column(db.String(20))
     next_of_kin_relationship = db.Column(db.String(50))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     paired_driver = db.relationship('Driver', remote_side=[id], backref='paired_conductors')
     assigned_vehicle = db.relationship('Vehicle', backref='assigned_crew')
@@ -230,6 +248,11 @@ class Route(db.Model):
     fare_rate = db.Column(db.Float, nullable=False)
     status = db.Column(db.String(20), default='active')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     logs = db.relationship('DailyLog', backref='route', lazy=True)
 
@@ -263,6 +286,10 @@ class DailyLog(db.Model):
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
     updater = db.relationship('User', foreign_keys=[updated_by])
@@ -285,6 +312,11 @@ class FuelLog(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
 
@@ -302,6 +334,11 @@ class MaintenanceLog(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
 
@@ -331,6 +368,60 @@ class OfflineSyncLog(db.Model):
     endpoint = db.Column(db.String(100), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class SyncSite(db.Model):
+    """One row per remote spoke (a local-server PC at a site) authorized to
+    call /api/sync/push and /api/sync/pull. Per-site keys — rather than one
+    shared secret — so a lost/decommissioned field PC can be revoked on its
+    own without rotating a key every other site depends on."""
+    __tablename__ = 'sync_sites'
+    id = db.Column(db.Integer, primary_key=True)
+    site_id = db.Column(db.String(50), unique=True, nullable=False)
+    api_key_hash = db.Column(db.String(256), nullable=False)
+    display_name = db.Column(db.String(100))
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class SyncPeerState(db.Model):
+    """Local-instance-only bookkeeping for this server's own sync cursor —
+    does not itself get synced. last_pull_at is set from the hub's returned
+    server_time (never this machine's own clock), so clock skew between
+    sites can't silently corrupt the pull watermark."""
+    __tablename__ = 'sync_peer_state'
+    id = db.Column(db.Integer, primary_key=True)
+    peer_url = db.Column(db.String(255), unique=True, nullable=False)
+    last_pull_at = db.Column(db.DateTime)
+    last_push_at = db.Column(db.DateTime)
+    last_error = db.Column(db.Text)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class SyncConflict(db.Model):
+    """A logged last-write-wins resolution where two sites edited the same
+    row differently while both were offline. Both full payloads are kept —
+    not just the diff — so a human reviewing later has everything needed to
+    manually correct the losing side's change if it mattered (see the
+    'last write wins, but log every conflict for review' policy)."""
+    __tablename__ = 'sync_conflicts'
+    id = db.Column(db.Integer, primary_key=True)
+    table_name = db.Column(db.String(50), nullable=False)
+    sync_uuid = db.Column(db.String(36), nullable=False)
+    conflict_type = db.Column(db.String(30), nullable=False)  # 'lww' | 'duplicate_constraint' | 'fk_missing'
+    winning_site_id = db.Column(db.String(50))
+    losing_site_id = db.Column(db.String(50))
+    winning_updated_at = db.Column(db.DateTime)
+    losing_updated_at = db.Column(db.DateTime)
+    winning_payload = db.Column(db.Text)  # JSON
+    losing_payload = db.Column(db.Text)   # JSON
+    detected_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    resolved = db.Column(db.Boolean, default=False)
+    resolved_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    resolved_at = db.Column(db.DateTime)
+    resolution_notes = db.Column(db.Text)
+
+    resolver = db.relationship('User', foreign_keys=[resolved_by])
 
 
 class ImportBatch(db.Model):
@@ -388,6 +479,11 @@ class Loan(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     payments = db.relationship('LoanPayment', backref='loan', lazy=True,
                                cascade='all, delete-orphan')
@@ -410,6 +506,11 @@ class LoanPayment(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
 
 class Payable(db.Model):
@@ -427,6 +528,11 @@ class Payable(db.Model):
     paid_date = db.Column(db.Date)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
 
 class Receivable(db.Model):
@@ -444,6 +550,11 @@ class Receivable(db.Model):
     collected_date = db.Column(db.Date)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
 
 class CommissionPayment(db.Model):
@@ -462,6 +573,11 @@ class CommissionPayment(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     driver = db.relationship('Driver')
 
@@ -475,6 +591,11 @@ class CapitalContribution(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
 
 class OwnerDrawing(db.Model):
@@ -485,6 +606,11 @@ class OwnerDrawing(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
 
 class ExpenseCategory(db.Model):
@@ -497,6 +623,11 @@ class ExpenseCategory(db.Model):
     name = db.Column(db.String(60), nullable=False)
     parent_id = db.Column(db.Integer, db.ForeignKey('expense_categories.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     parent = db.relationship('ExpenseCategory', remote_side=[id], backref='children')
 
@@ -515,6 +646,11 @@ class Expense(db.Model):
     amount = db.Column(db.Float, nullable=False)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     category = db.relationship('ExpenseCategory', backref='expenses')
     vehicle = db.relationship('Vehicle')
@@ -528,6 +664,11 @@ class Budget(db.Model):
     amount = db.Column(db.Float, nullable=False)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -561,6 +702,11 @@ class FranchiseDailyIncome(db.Model):
     description = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     @property
     def total_expenditure(self):
@@ -602,6 +748,11 @@ class FranchiseWeeklyIncome(db.Model):
     description = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     @property
     def total_expenditure(self):
@@ -638,6 +789,11 @@ class FranchiseVehicle(db.Model):
     amount_owed = db.Column(db.Float, nullable=False, default=0)
     notes = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     collections = db.relationship('FranchiseCollection', backref='vehicle', lazy=True,
                                   order_by='FranchiseCollection.entry_date.desc()')
@@ -680,6 +836,11 @@ class FranchiseCollection(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     @property
     def net(self):
@@ -699,6 +860,11 @@ class MaintenanceSchedule(db.Model):
     next_due_odometer = db.Column(db.Float)
     status = db.Column(db.String(20), default='active')
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     vehicle = db.relationship('Vehicle')
 
@@ -722,6 +888,11 @@ class SparePart(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     purchases = db.relationship('StorePurchase', backref='part', lazy=True,
                                 cascade='all, delete-orphan')
@@ -755,6 +926,11 @@ class StorePurchase(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
 
@@ -780,6 +956,11 @@ class StoreSale(db.Model):
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
     vehicle = db.relationship('Vehicle')
@@ -1440,6 +1621,21 @@ def already_synced(client_id):
 def record_offline_sync(client_id, endpoint):
     if client_id:
         db.session.add(OfflineSyncLog(client_id=client_id, endpoint=endpoint, user_id=current_user.id))
+
+
+def touch_sync_fields(obj):
+    """Call on every create/edit of a multi-site-syncable model, right
+    before commit. Mints a sync_uuid the first time (the cross-instance
+    identity used instead of the local auto-increment id, since two offline
+    sites can independently mint the same integer id), stamps updated_at
+    (the optimistic-concurrency field the sync engine compares to detect a
+    genuine conflict — see /api/sync/push), and marks the row pending_push
+    so the local sync engine's outbox picks it up on its next cycle."""
+    if not obj.sync_uuid:
+        obj.sync_uuid = uuid.uuid4().hex
+    obj.updated_at = datetime.now(timezone.utc)
+    obj.pending_push = True
+    obj.last_modified_site = app.config['SITE_ID']
 
 
 def check_unique(model, field_name, value, label=None, exclude_id=None):
@@ -5688,7 +5884,56 @@ def migrate_db():
             if 'notes' not in vehicle_cols:
                 conn.execute(text("ALTER TABLE franchise_vehicles ADD COLUMN notes TEXT"))
 
+        # Multi-site sync columns (see touch_sync_fields()) — added to every
+        # syncable table. sync_uuid/deleted_at go in nullable (SQLite can't
+        # add a NOT NULL column post-hoc without a full table rebuild, same
+        # constraint hit above for license_number/route_id/driver_id);
+        # sync_uuid is backfilled for existing rows just below instead.
+        sync_tables = [
+            'vehicles', 'vehicle_documents', 'drivers', 'routes', 'daily_logs',
+            'fuel_logs', 'maintenance_logs', 'loans', 'loan_payments', 'payables',
+            'receivables', 'commission_payments', 'capital_contributions',
+            'owner_drawings', 'expense_categories', 'expenses', 'budgets',
+            'franchise_daily_income', 'franchise_weekly_income', 'franchise_vehicles',
+            'franchise_collections', 'maintenance_schedules', 'spare_parts',
+            'store_purchases', 'store_sales',
+        ]
+        for table in sync_tables:
+            if not inspector.has_table(table):
+                continue  # brand-new DB — db.create_all() builds it with these columns already
+            cols = [c['name'] for c in inspector.get_columns(table)]
+            if 'updated_at' not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN updated_at DATETIME"))
+            if 'sync_uuid' not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN sync_uuid VARCHAR(36)"))
+            if 'pending_push' not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN pending_push BOOLEAN DEFAULT 0"))
+            if 'last_modified_site' not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN last_modified_site VARCHAR(50)"))
+            if 'deleted_at' not in cols:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN deleted_at DATETIME"))
+
         conn.commit()
+
+    # sync_uuid backfill needs uuid.uuid4() per row via the ORM, not raw SQL
+    # (SQLite has no built-in UUID function) — runs as its own pass, after
+    # the ALTER TABLE connection above has committed and closed, so every
+    # existing row has a real cross-instance identity before the sync
+    # engine (Phase 2/3) starts relying on it.
+    sync_models = (
+        Vehicle, VehicleDocument, Driver, Route, DailyLog, FuelLog, MaintenanceLog,
+        Loan, LoanPayment, Payable, Receivable, CommissionPayment, CapitalContribution,
+        OwnerDrawing, ExpenseCategory, Expense, Budget, FranchiseDailyIncome,
+        FranchiseWeeklyIncome, FranchiseVehicle, FranchiseCollection,
+        MaintenanceSchedule, SparePart, StorePurchase, StoreSale,
+    )
+    for model in sync_models:
+        if not inspector.has_table(model.__tablename__):
+            continue
+        for row in model.query.filter(model.sync_uuid.is_(None)).all():
+            row.sync_uuid = uuid.uuid4().hex
+    if db.session.dirty:
+        db.session.commit()
 
 
 def create_default_expense_categories():
