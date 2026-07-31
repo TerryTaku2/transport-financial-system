@@ -1700,22 +1700,6 @@ def touch_sync_fields(obj):
     obj.last_modified_site = app.config['SITE_ID']
 
 
-def spoke_read_only_guard(redirect_endpoint, **redirect_kwargs):
-    """Phase 6a: the financial tables (loans/payables/receivables/capital/
-    drawings/budget) sync as a PULL-ONLY mirror to spoke instances for a
-    burn-in period — spokes can view current figures offline, but local
-    creates/edits are blocked here rather than allowed and risking a
-    money-data conflict before the sync mechanism (proven so far only on
-    lower-stakes operational data) has a longer track record. Blocks both
-    GET and POST on a spoke, since showing the add form there just to
-    reject the submit is confusing. Returns a redirect response if this
-    instance is a spoke (SYNC_ENABLED=true), else None."""
-    if app.config['SYNC_ENABLED']:
-        flash('Financial records can only be added or edited on the central system for now.', 'warning')
-        return redirect(url_for(redirect_endpoint, **redirect_kwargs))
-    return None
-
-
 def check_unique(model, field_name, value, label=None, exclude_id=None):
     """Raise a friendly ValueError if another row already has this value,
     instead of letting the DB's UNIQUE constraint crash with a 500."""
@@ -3893,9 +3877,6 @@ def report_shortfalls():
 @permission_required('finance')
 @handle_form_errors
 def commission_payment_add():
-    guard = spoke_read_only_guard('report_payroll')
-    if guard:
-        return guard
     payment = CommissionPayment(
         driver_id=form_int(request.form, 'driver_id'),
         payment_date=parse_date(request.form['payment_date']),
@@ -4034,9 +4015,6 @@ def report_budget():
 @handle_form_errors
 def budget_set():
     month_str = request.form.get('month', '')
-    guard = spoke_read_only_guard('report_budget', month=month_str)
-    if guard:
-        return guard
     month_start = datetime.strptime(month_str, '%Y-%m').date().replace(day=1)
     category = request.form['category'].strip()
     amount = form_float(request.form, 'amount', min_value=0)
@@ -4456,9 +4434,6 @@ def loans_list():
 @handle_form_errors
 def loan_add():
     if request.method == 'POST':
-        guard = spoke_read_only_guard('loans_list')
-        if guard:
-            return guard
         loan = Loan(
             lender=request.form['lender'].strip(),
             principal=form_float(request.form, 'principal', min_value=0),
@@ -4496,9 +4471,6 @@ def loan_delete(lid):
 @permission_required('finance')
 @handle_form_errors
 def loan_payment_add(lid):
-    guard = spoke_read_only_guard('loans_list')
-    if guard:
-        return guard
     loan = Loan.query.get_or_404(lid)
     payment = LoanPayment(
         loan_id=lid,
@@ -4545,9 +4517,6 @@ def payables_list():
 @handle_form_errors
 def payable_add():
     if request.method == 'POST':
-        guard = spoke_read_only_guard('payables_list')
-        if guard:
-            return guard
         p = Payable(
             supplier_name=request.form['supplier_name'].strip(),
             description=request.form.get('description', '').strip(),
@@ -4570,9 +4539,6 @@ def payable_add():
 @login_required
 @permission_required('finance')
 def payable_mark_paid(pid):
-    guard = spoke_read_only_guard('payables_list')
-    if guard:
-        return guard
     p = Payable.query.get_or_404(pid)
     p.status = 'paid'
     p.paid_date = date.today()
@@ -4612,9 +4578,6 @@ def receivables_list():
 @handle_form_errors
 def receivable_add():
     if request.method == 'POST':
-        guard = spoke_read_only_guard('receivables_list')
-        if guard:
-            return guard
         r = Receivable(
             client_name=request.form['client_name'].strip(),
             description=request.form.get('description', '').strip(),
@@ -4637,9 +4600,6 @@ def receivable_add():
 @login_required
 @permission_required('finance')
 def receivable_mark_collected(rid):
-    guard = spoke_read_only_guard('receivables_list')
-    if guard:
-        return guard
     r = Receivable.query.get_or_404(rid)
     r.status = 'collected'
     r.collected_date = date.today()
@@ -4680,9 +4640,6 @@ def capital_list():
 @handle_form_errors
 def capital_contribution_add():
     if request.method == 'POST':
-        guard = spoke_read_only_guard('capital_list')
-        if guard:
-            return guard
         c = CapitalContribution(
             contributor=request.form['contributor'].strip(),
             amount=form_float(request.form, 'amount', min_value=0),
@@ -4718,9 +4675,6 @@ def capital_contribution_delete(cid):
 @handle_form_errors
 def owner_drawing_add():
     if request.method == 'POST':
-        guard = spoke_read_only_guard('capital_list')
-        if guard:
-            return guard
         d = OwnerDrawing(
             amount=form_float(request.form, 'amount', min_value=0),
             drawing_date=parse_date(request.form['drawing_date']),
@@ -5932,11 +5886,9 @@ SYNC_MODELS = {
     'franchise_collections': (FranchiseCollection, (
         'entry_date', 'frequency', 'amount', 'expense', 'notes', 'created_by', 'created_at',
     ), {'vehicle_id': 'franchise_vehicles'}),
-    # Phase 6a — financial tables. Pull-only mirror to spokes (see
-    # spoke_read_only_guard): wired here so a hub-side edit becomes
-    # visible to spokes via pull, but spokes can't create/edit these
-    # locally yet, so touch_sync_fields on these models only ever runs on
-    # the hub — no push-side conflict risk on money data during burn-in.
+    # Phase 6 — financial tables. Full read/write on spokes, same as
+    # every other synced table (Phase 6a's pull-only, spoke-write-blocked
+    # burn-in period has ended).
     'loans': (Loan, (
         'lender', 'principal', 'interest_rate', 'start_date', 'term_months', 'status',
         'notes', 'created_by', 'created_at',
