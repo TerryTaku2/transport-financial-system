@@ -27,6 +27,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 
 load_dotenv()
 
@@ -2022,6 +2023,7 @@ def vehicle_add():
         db.session.add(v)
         db.session.flush()
         log_audit('CREATE', 'vehicles', v.id, f'Added vehicle {v.registration}')
+        touch_sync_fields(v)
         db.session.commit()
         flash(f'Vehicle {v.registration} registered successfully.', 'success')
         return redirect(url_for('vehicles'))
@@ -2066,6 +2068,7 @@ def vehicle_edit(vid):
         v.insurance_policy_number = request.form.get('insurance_policy_number', '').strip() or None
         v.insurance_expiry = parse_date(request.form.get('insurance_expiry'))
         log_audit('UPDATE', 'vehicles', v.id, f'Updated vehicle {v.registration}')
+        touch_sync_fields(v)
         db.session.commit()
         flash(f'Vehicle {v.registration} updated.', 'success')
         return redirect(url_for('vehicle_detail', vid=vid))
@@ -2161,6 +2164,7 @@ def driver_add():
         db.session.add(d)
         db.session.flush()
         log_audit('CREATE', 'drivers', d.id, f'Added driver {d.name}')
+        touch_sync_fields(d)
         db.session.commit()
         flash(f'Driver {d.name} registered.', 'success')
         return redirect(url_for('drivers'))
@@ -2197,6 +2201,7 @@ def driver_edit(did):
         d.next_of_kin_phone = request.form.get('next_of_kin_phone', '').strip()
         d.next_of_kin_relationship = request.form.get('next_of_kin_relationship', '').strip()
         log_audit('UPDATE', 'drivers', d.id, f'Updated driver {d.name}')
+        touch_sync_fields(d)
         db.session.commit()
         flash(f'Driver {d.name} updated.', 'success')
         return redirect(url_for('drivers'))
@@ -2247,6 +2252,7 @@ def route_add():
         db.session.add(r)
         db.session.flush()
         log_audit('CREATE', 'routes', r.id, f'Added route {r.name}')
+        touch_sync_fields(r)
         db.session.commit()
         flash(f'Route "{r.name}" added.', 'success')
         return redirect(url_for('routes_list'))
@@ -2267,6 +2273,7 @@ def route_edit(rid):
         r.fare_rate = form_float(request.form, 'fare_rate', min_value=0)
         r.status = request.form.get('status', 'active')
         log_audit('UPDATE', 'routes', r.id, f'Updated route {r.name}')
+        touch_sync_fields(r)
         db.session.commit()
         flash(f'Route "{r.name}" updated.', 'success')
         return redirect(url_for('routes_list'))
@@ -2347,6 +2354,7 @@ def ledger_entry_edit(vehicle_id, log_date_str):
             log.reason_for_shortfall = reason_for_shortfall
             log.updated_by = current_user.id
             log.updated_at = datetime.now(timezone.utc)
+            touch_sync_fields(log)
 
         if diesel_cost is not None or mileage is not None:
             if fuel is None:
@@ -2354,6 +2362,7 @@ def ledger_entry_edit(vehicle_id, log_date_str):
                 db.session.add(fuel)
             fuel.total_cost = diesel_cost or 0
             fuel.odometer = mileage
+            touch_sync_fields(fuel)
         elif fuel is not None:
             db.session.delete(fuel)
 
@@ -2567,6 +2576,7 @@ def driver_ledger_add():
                 created_by=current_user.id,
             )
             db.session.add(daily)
+            touch_sync_fields(daily)
             log_audit('CREATE', 'daily_logs', None,
                        f'Ledger entry for {vehicle.registration} on {log_date}: fare {fare or 0.0}' +
                        (f', garnish {garnish} ({reason_for_shortfall})' if garnish else ''))
@@ -2577,12 +2587,14 @@ def driver_ledger_add():
                 total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
             )
             db.session.add(fuel)
+            touch_sync_fields(fuel)
             log_audit('CREATE', 'fuel_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: diesel ${diesel_cost}')
         elif mileage is not None:
             fuel = FuelLog(
                 vehicle_id=vehicle_id, log_date=log_date, liters=0, odometer=mileage, created_by=current_user.id,
             )
             db.session.add(fuel)
+            touch_sync_fields(fuel)
 
         record_offline_sync(client_id, 'driver_ledger_add')
         db.session.commit()
@@ -2905,6 +2917,7 @@ def fuel_log_add():
         log_audit('CREATE', 'fuel_logs', log.id,
                   f'Fuel log for {log.vehicle.registration}: {liters}L')
         record_offline_sync(client_id, 'fuel_log_add')
+        touch_sync_fields(log)
         db.session.commit()
         flash('Fuel log recorded.', 'success')
         return redirect(url_for('fuel_logs'))
@@ -2972,6 +2985,7 @@ def maintenance_log_add():
         log_audit('CREATE', 'maintenance_logs', log.id,
                   f'Maintenance for {log.vehicle.registration}')
         record_offline_sync(client_id, 'maintenance_log_add')
+        touch_sync_fields(log)
         db.session.commit()
         flash('Maintenance log recorded.', 'success')
         return redirect(url_for('maintenance_logs'))
@@ -3136,6 +3150,7 @@ def store_part_add():
         db.session.add(part)
         db.session.flush()
         log_audit('CREATE', 'spare_parts', part.id, f'Added spare part: {part.name}')
+        touch_sync_fields(part)
         db.session.commit()
         flash('Spare part added. Record a purchase to bring in stock.', 'success')
         return redirect(url_for('store_parts'))
@@ -3159,6 +3174,7 @@ def store_part_edit(pid):
         part.status = request.form.get('status', 'active')
         part.notes = request.form.get('notes', '').strip()
         log_audit('UPDATE', 'spare_parts', part.id, f'Updated spare part: {part.name}')
+        touch_sync_fields(part)
         db.session.commit()
         flash('Spare part updated.', 'success')
         return redirect(url_for('store_parts'))
@@ -3226,6 +3242,8 @@ def store_purchase_add():
         log_audit('CREATE', 'store_purchases', purchase.id,
                   f'Purchased {quantity} x {part.name} @ {unit_cost}')
         record_offline_sync(client_id, 'store_purchase_add')
+        touch_sync_fields(purchase)
+        touch_sync_fields(part)
         db.session.commit()
         flash('Purchase recorded and stock updated.', 'success')
         return redirect(url_for('store_purchases'))
@@ -3304,6 +3322,8 @@ def store_sale_add():
                   (f' to vehicle {sale.vehicle.registration} (booked as an expense on that vehicle)'
                    if sale.vehicle else ''))
         record_offline_sync(client_id, 'store_sale_add')
+        touch_sync_fields(sale)
+        touch_sync_fields(part)
         db.session.commit()
         flash('Sale recorded and stock updated.', 'success')
         return redirect(url_for('store_sales'))
@@ -4640,6 +4660,7 @@ def expense_add():
         db.session.flush()
         log_audit('CREATE', 'expenses', e.id, f'Expense of {e.amount}')
         record_offline_sync(client_id, 'expense_add')
+        touch_sync_fields(e)
         db.session.commit()
         flash('Expense recorded.', 'success')
         return redirect(url_for('expenses_list'))
@@ -4686,6 +4707,7 @@ def expense_category_add():
         db.session.add(new_cat)
         db.session.flush()
         log_audit('CREATE', 'expense_categories', new_cat.id, f'Added expense category {new_cat.display_name}')
+        touch_sync_fields(new_cat)
         db.session.commit()
         flash(f'"{new_cat.display_name}" added.', 'success')
         sep = '&' if '?' in redirect_to else '?'
@@ -4718,6 +4740,7 @@ def expense_category_edit(cid):
         cat.name = name
         cat.parent_id = parent_id
         log_audit('UPDATE', 'expense_categories', cid, f'Renamed expense category {old_label} to {cat.display_name}')
+        touch_sync_fields(cat)
         db.session.commit()
         flash(f'"{cat.display_name}" updated.', 'success')
         return redirect(url_for('expenses_list'))
@@ -5641,6 +5664,313 @@ def api_refdata():
                                for v in franchise_vehicles],
         'expense_categories': expense_categories,
     })
+
+
+# ─────────────────────────────────────────────────────────────
+# Multi-site sync API — Phase 2 of the local-server sync plan. A spoke
+# (a local-server PC at a site) POSTs its pending changes to /api/sync/push
+# and GETs everything changed since its last checkpoint from
+# /api/sync/pull. Both directions funnel through apply_incoming_record()
+# below, so applying a pushed batch and applying a pulled batch behave
+# identically wherever this code eventually also runs on a spoke (Phase 3).
+#
+# Scope for now: the 11 Phase-1 operational tables (fleet/spares/expenses).
+# Loans/payables/receivables/franchise/compliance tables are deliberately
+# NOT here yet — see the phased rollout plan. Users are never synced (see
+# SYNC_MODELS below not including 'users') — accounts stay central-only.
+# ─────────────────────────────────────────────────────────────
+
+# table name -> (Model class, plain data columns to sync, {fk column: referenced table})
+# Order matters: parents (Tier 0) before children (Tier 1/2) — see the FK
+# map dependencies. Foreign keys travel as the referenced row's sync_uuid,
+# never a local integer id, since two offline sites can independently mint
+# the same integer id for different rows. created_by/updated_by are the
+# exception — they reference Users, which are pull-only mirrored with the
+# same id everywhere, so those integers are safe to sync as plain values.
+SYNC_MODELS = {
+    'vehicles': (Vehicle, (
+        'registration', 'make', 'model', 'year', 'acquisition_cost', 'status',
+        'fuel_type', 'daily_target', 'insurance_provider', 'insurance_policy_number',
+        'insurance_expiry', 'created_at',
+    ), {}),
+    'routes': (Route, (
+        'name', 'start_point', 'end_point', 'distance_km', 'fare_rate', 'status', 'created_at',
+    ), {}),
+    'spare_parts': (SparePart, (
+        'name', 'part_number', 'unit', 'cost_price', 'markup_percent', 'quantity_on_hand',
+        'reorder_level', 'status', 'notes', 'created_by', 'created_at',
+    ), {}),
+    'expense_categories': (ExpenseCategory, (
+        'name', 'created_at',
+    ), {'parent_id': 'expense_categories'}),
+    'drivers': (Driver, (
+        'name', 'license_number', 'phone', 'role', 'commission_rate', 'status',
+        'next_of_kin_name', 'next_of_kin_phone', 'next_of_kin_relationship', 'created_at',
+    ), {'paired_driver_id': 'drivers', 'assigned_vehicle_id': 'vehicles'}),
+    'expenses': (Expense, (
+        'expense_date', 'description', 'amount', 'created_by', 'created_at',
+    ), {'category_id': 'expense_categories', 'vehicle_id': 'vehicles'}),
+    'store_purchases': (StorePurchase, (
+        'purchase_date', 'quantity', 'unit_cost', 'total_cost', 'supplier', 'notes',
+        'created_by', 'created_at',
+    ), {'part_id': 'spare_parts'}),
+    'daily_logs': (DailyLog, (
+        'log_date', 'trips_completed', 'gross_revenue', 'garnish', 'reason_for_shortfall',
+        'notes', 'created_by', 'updated_by', 'created_at',
+    ), {'vehicle_id': 'vehicles', 'driver_id': 'drivers', 'conductor_id': 'drivers', 'route_id': 'routes'}),
+    'fuel_logs': (FuelLog, (
+        'log_date', 'liters', 'cost_per_liter', 'total_cost', 'odometer', 'supplier', 'notes',
+        'created_by', 'created_at',
+    ), {'vehicle_id': 'vehicles'}),
+    'maintenance_logs': (MaintenanceLog, (
+        'log_date', 'description', 'parts_cost', 'labor_cost', 'total_cost', 'mechanic', 'notes',
+        'created_by', 'created_at',
+    ), {'vehicle_id': 'vehicles'}),
+    'store_sales': (StoreSale, (
+        'sale_date', 'quantity', 'unit_cost', 'unit_price', 'total_amount', 'customer_name',
+        'notes', 'created_by', 'created_at',
+    ), {'part_id': 'spare_parts', 'vehicle_id': 'vehicles'}),
+}
+
+# Dependency order for apply — parents before children (see FK maps above).
+SYNC_TABLE_ORDER = [
+    'vehicles', 'routes', 'spare_parts', 'expense_categories',
+    'drivers', 'expenses', 'store_purchases',
+    'daily_logs', 'fuel_logs', 'maintenance_logs', 'store_sales',
+]
+
+_SYNC_EPOCH = datetime(1970, 1, 1)  # naive — see _parse_sync_dt
+
+
+def _parse_sync_dt(value):
+    """Parse an incoming ISO datetime string to a naive UTC datetime.
+    SQLite has no timezone-aware column type, so every DateTime column in
+    this app round-trips as naive (implicitly UTC) once read back from the
+    DB — an incoming tz-aware string (e.g. '...+00:00' from another
+    instance's isoformat()) has to be normalized the same way before it's
+    comparable to existing.updated_at, or every comparison raises
+    TypeError: can't compare offset-naive and offset-aware datetimes."""
+    if not value:
+        return None
+    dt = datetime.fromisoformat(value)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _sync_sortable_dt(dt):
+    """None-safe comparison key — a row that's never been touched by
+    touch_sync_fields() sorts as infinitely old, so any real incoming
+    update always wins over it."""
+    return dt if dt is not None else _SYNC_EPOCH
+
+
+def _serialize_sync_value(model, field, value):
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    return value
+
+
+def _deserialize_sync_value(model, field, value):
+    if value is None:
+        return None
+    py_type = model.__table__.columns[field].type.python_type
+    if py_type is datetime:
+        return _parse_sync_dt(value)
+    if py_type is date:
+        return date.fromisoformat(value)
+    return value
+
+
+def _resolve_sync_fk(ref_table, sync_uuid_value):
+    if not sync_uuid_value:
+        return None
+    ref_model = SYNC_MODELS[ref_table][0]
+    ref_obj = ref_model.query.filter_by(sync_uuid=sync_uuid_value).first()
+    return ref_obj.id if ref_obj else None
+
+
+def serialize_record_for_sync(table, obj):
+    """One row -> the (fields, fk) shape /api/sync/pull hands to a caller
+    and apply_incoming_record() expects back — the same shape used in both
+    directions."""
+    model, fields, fk_map = SYNC_MODELS[table]
+    field_values = {f: _serialize_sync_value(model, f, getattr(obj, f)) for f in fields}
+    fk_values = {}
+    for fk_col, ref_table in fk_map.items():
+        ref_id = getattr(obj, fk_col)
+        if ref_id is None:
+            fk_values[fk_col] = None
+        else:
+            ref_model = SYNC_MODELS[ref_table][0]
+            ref_obj = db.session.get(ref_model, ref_id)
+            fk_values[fk_col] = ref_obj.sync_uuid if ref_obj else None
+    return field_values, fk_values
+
+
+def apply_incoming_record(table, item, incoming_site_id):
+    """Upsert one incoming sync item by sync_uuid — the idempotency key,
+    same principle as the existing already_synced()/client_id pattern for
+    the browser offline queue. Conflict detection is based on
+    pending_push: if this row has a local edit that hasn't been
+    acknowledged by the hub yet (pending_push=True) AND the incoming change
+    came from a different site, both sides changed it independently —
+    that's a genuine conflict, resolved by last-write-wins on updated_at
+    and logged to SyncConflict either way. If there's no unacknowledged
+    local edit, an incoming update is just a normal newer version, applied
+    with no conflict."""
+    model, fields, fk_map = SYNC_MODELS[table]
+    sync_uuid_value = item['sync_uuid']
+    existing = model.query.filter_by(sync_uuid=sync_uuid_value).first()
+
+    resolved_fks = {}
+    for fk_col, ref_table in fk_map.items():
+        incoming_ref_uuid = (item.get('fk') or {}).get(fk_col)
+        resolved_fks[fk_col] = _resolve_sync_fk(ref_table, incoming_ref_uuid)
+        if incoming_ref_uuid and resolved_fks[fk_col] is None:
+            return {'sync_uuid': sync_uuid_value, 'status': 'rejected', 'reason': 'fk_missing'}
+
+    incoming_updated_at = _parse_sync_dt(item.get('updated_at')) or datetime.now(timezone.utc).replace(tzinfo=None)
+
+    def _apply_fields(obj):
+        for f in fields:
+            setattr(obj, f, _deserialize_sync_value(model, f, item['fields'].get(f)))
+        for fk_col, local_id in resolved_fks.items():
+            setattr(obj, fk_col, local_id)
+        obj.updated_at = incoming_updated_at
+        obj.last_modified_site = incoming_site_id
+        obj.pending_push = False  # arrived from elsewhere — nothing to push back for this edit
+
+    if existing is None:
+        obj = model(sync_uuid=sync_uuid_value)
+        _apply_fields(obj)
+        try:
+            db.session.add(obj)
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            return {'sync_uuid': sync_uuid_value, 'status': 'rejected', 'reason': 'duplicate_constraint'}
+        return {'sync_uuid': sync_uuid_value, 'status': 'applied'}
+
+    if incoming_updated_at == _sync_sortable_dt(existing.updated_at):
+        return {'sync_uuid': sync_uuid_value, 'status': 'applied'}  # already have this exact version
+
+    genuine_conflict = existing.pending_push and existing.last_modified_site != incoming_site_id
+
+    if not genuine_conflict:
+        if incoming_updated_at > _sync_sortable_dt(existing.updated_at):
+            _apply_fields(existing)
+        # else: existing is already newer (e.g. our own earlier push echoed back) — no-op
+        return {'sync_uuid': sync_uuid_value, 'status': 'applied'}
+
+    # Genuine conflict: both sides changed this row independently while
+    # neither knew about the other's edit. Last-write-wins by updated_at
+    # (tie-break on site_id string), both full payloads logged either way.
+    incoming_key = (incoming_updated_at, incoming_site_id or '')
+    existing_key = (_sync_sortable_dt(existing.updated_at), existing.last_modified_site or '')
+    incoming_wins = incoming_key > existing_key
+    losing_payload = {f: _serialize_sync_value(model, f, getattr(existing, f)) for f in fields}
+    winning_payload = item['fields']
+    conflict = SyncConflict(
+        table_name=table, sync_uuid=sync_uuid_value, conflict_type='lww',
+        winning_site_id=incoming_site_id if incoming_wins else existing.last_modified_site,
+        losing_site_id=existing.last_modified_site if incoming_wins else incoming_site_id,
+        winning_updated_at=incoming_updated_at if incoming_wins else existing.updated_at,
+        losing_updated_at=existing.updated_at if incoming_wins else incoming_updated_at,
+        winning_payload=json.dumps(winning_payload if incoming_wins else losing_payload, default=str),
+        losing_payload=json.dumps(losing_payload if incoming_wins else winning_payload, default=str),
+    )
+    db.session.add(conflict)
+    if incoming_wins:
+        _apply_fields(existing)
+    return {'sync_uuid': sync_uuid_value, 'status': 'conflict_logged',
+            'final': 'remote_won' if incoming_wins else 'local_won'}
+
+
+def sync_auth_required(f):
+    """Auth for the two /api/sync/* routes — a per-site API key, not a
+    human login. A spoke has no browser session to carry, so this checks
+    X-Sync-Api-Key against SyncSite.api_key_hash instead of @login_required."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        api_key = request.headers.get('X-Sync-Api-Key', '')
+        matched_site = None
+        if api_key:
+            for candidate in SyncSite.query.filter_by(is_active=True).all():
+                if check_password_hash(candidate.api_key_hash, api_key):
+                    matched_site = candidate
+                    break
+        if not matched_site:
+            return jsonify({'error': 'invalid or missing sync API key'}), 401
+        request.sync_site = matched_site
+        return f(*args, **kwargs)
+    return decorated
+
+
+@app.route('/api/sync/push', methods=['POST'])
+@csrf.exempt
+@sync_auth_required
+def api_sync_push():
+    data = request.get_json(force=True, silent=True) or {}
+    site_id = data.get('site_id') or request.sync_site.site_id
+    batch = data.get('batch', [])
+
+    batch_by_table = {}
+    for item in batch:
+        batch_by_table.setdefault(item['table'], []).append(item)
+
+    results = []
+    accepted = 0
+    conflicts = 0
+    for table in SYNC_TABLE_ORDER:
+        for item in batch_by_table.get(table, []):
+            result = apply_incoming_record(table, item, site_id)
+            results.append(result)
+            if result['status'] == 'applied':
+                accepted += 1
+            elif result['status'] == 'conflict_logged':
+                conflicts += 1
+
+    # Any table in the batch we don't sync (e.g. 'users') is rejected
+    # explicitly rather than silently dropped, so a spoke's outbox doesn't
+    # spin retrying something that will never be accepted.
+    for table, items in batch_by_table.items():
+        if table not in SYNC_MODELS:
+            for item in items:
+                results.append({'sync_uuid': item.get('sync_uuid'), 'status': 'rejected', 'reason': 'table_not_synced'})
+
+    db.session.commit()
+    return jsonify({'accepted': accepted, 'conflicts': conflicts, 'results': results})
+
+
+@app.route('/api/sync/pull', methods=['GET'])
+@csrf.exempt
+@sync_auth_required
+def api_sync_pull():
+    since_str = request.args.get('since')
+    since = _parse_sync_dt(since_str) or _SYNC_EPOCH
+    tables_param = request.args.get('tables')
+    requested_tables = tables_param.split(',') if tables_param else SYNC_TABLE_ORDER
+    server_time = datetime.now(timezone.utc)
+
+    changes = []
+    for table in SYNC_TABLE_ORDER:
+        if table not in requested_tables:
+            continue
+        model = SYNC_MODELS[table][0]
+        rows = model.query.filter(model.updated_at > since).all()
+        for row in rows:
+            field_values, fk_values = serialize_record_for_sync(table, row)
+            changes.append({
+                'table': table,
+                'sync_uuid': row.sync_uuid,
+                'updated_at': row.updated_at.isoformat() if row.updated_at else None,
+                'site_id': row.last_modified_site,
+                'fields': field_values,
+                'fk': fk_values,
+            })
+
+    return jsonify({'changes': changes, 'server_time': server_time.isoformat()})
 
 
 # ─────────────────────────────────────────────────────────────
