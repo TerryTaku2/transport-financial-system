@@ -18,7 +18,7 @@
       <p>No active franchise vehicles yet. <a href="{{ url_for('franchise_vehicle_add') }}">Add one first</a>.</p>
     </div>
     {% else %}
-    <form method="POST">
+    <form method="POST" data-offline-form>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid mb-16">
         <div class="form-group">

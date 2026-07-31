@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Offline — TransFleet ERP</title>
+<link rel="stylesheet" href="/static/css/style.css">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#2563eb">
+<style>
+  body { padding: 24px; max-width: 720px; margin: 0 auto; }
+  .queue-item { display: flex; justify-content: space-between; align-items: center; gap: 12px;
+                padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 10px; }
+  .queue-item .meta { flex: 1; min-width: 0; }
+  .queue-item .meta .label { font-weight: 600; }
+  .queue-item .meta .sub { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+  .queue-item .error-text { color: var(--danger); font-size: 12px; margin-top: 4px; }
+  .queue-actions { display: flex; gap: 6px; flex-shrink: 0; }
+  .empty-state { text-align: center; padding: 40px 20px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+
+<div class="page-header">
+  <div>
+    <h1>You're offline</h1>
+    <div class="subtitle" id="status-line">Checking queued entries…</div>
+  </div>
+  <a href="/" class="btn btn-outline">Back to app</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <div id="queue-list"></div>
+  </div>
+</div>
+
+<script src="/static/js/offline.js"></script>
+<script>
+(function () {
+  function fmtTime(ts) {
+    return new Date(ts).toLocaleString();
+  }
+
+  function statusBadge(status) {
+    var map = {
+      pending: ['badge-gray', 'Pending sync'],
+      syncing: ['badge-blue', 'Syncing…'],
+      error: ['badge-red', 'Needs attention'],
+      'auth-error': ['badge-amber', 'Sign in to sync'],
+    };
+    var pair = map[status] || ['badge-gray', status];
+    return '<span class="badge ' + pair[0] + '">' + pair[1] + '</span>';
+  }
+
+  function render() {
+    window.TransFleetOffline.getAll().then(function (items) {
+      var list = document.getElementById('queue-list');
+      var statusLine = document.getElementById('status-line');
+
+      if (!items.length) {
+        statusLine.textContent = navigator.onLine
+          ? 'All caught up — nothing queued.'
+          : "No signal, but nothing's waiting to sync either.";
+        list.innerHTML = '<div class="empty-state">No queued entries.</div>';
+        return;
+      }
+
+      statusLine.textContent = items.length + ' ' + (items.length === 1 ? 'entry' : 'entries') + ' queued for sync.';
+      items.sort(function (a, b) { return a.createdAt - b.createdAt; });
+
+      list.innerHTML = items.map(function (item) {
+        var errorHtml = item.lastError ? '<div class="error-text">' + item.lastError + '</div>' : '';
+        return (
+          '<div class="queue-item" data-client-id="' + item.clientId + '">' +
+            '<div class="meta">' +
+              '<div class="label">' + item.label + '</div>' +
+              '<div class="sub">' + fmtTime(item.createdAt) + ' — ' + statusBadge(item.status) + '</div>' +
+              errorHtml +
+            '</div>' +
+            '<div class="queue-actions">' +
+              '<button class="btn btn-outline btn-sm retry-btn" type="button">Retry now</button>' +
+              '<button class="btn btn-outline btn-sm discard-btn" type="button">Discard</button>' +
+            '</div>' +
+          '</div>'
+        );
+      }).join('');
+
+      list.querySelectorAll('.retry-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var clientId = btn.closest('.queue-item').dataset.clientId;
+          window.TransFleetOffline.retryItem(clientId);
+        });
+      });
+      list.querySelectorAll('.discard-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          var clientId = btn.closest('.queue-item').dataset.clientId;
+          if (confirm('Discard this queued entry? This cannot be undone.')) {
+            window.TransFleetOffline.discardItem(clientId);
+          }
+        });
+      });
+    });
+  }
+
+  document.addEventListener('offline-queue-changed', render);
+  window.addEventListener('online', render);
+  document.addEventListener('DOMContentLoaded', render);
+})();
+</script>
+</body>
+</html>

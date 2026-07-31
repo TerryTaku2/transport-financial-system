@@ -80,7 +80,7 @@
 <div class="card mb-24">
   <div class="card-header"><h3>New Entry — {{ vehicle.registration }}</h3></div>
   <div class="card-body">
-    <form method="POST" action="{{ url_for('driver_ledger_add') }}">
+    <form method="POST" action="{{ url_for('driver_ledger_add') }}" data-offline-form>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="vehicle_id" value="{{ vehicle.id }}">
       <input type="hidden" name="period" value="{{ period }}">

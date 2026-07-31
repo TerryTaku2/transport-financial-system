@@ -1,0 +1,4 @@
+ttechconnect.local, 192.168.100.244 {
+	tls certs/ttechconnect.local.pem certs/ttechconnect.local-key.pem
+	reverse_proxy 127.0.0.1:5000
+}

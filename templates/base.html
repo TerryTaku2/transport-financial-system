@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}TransFleet ERP{% endblock %} | T-Tech Solutions</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/icons/apple-touch-icon.png') }}">
+  <meta name="theme-color" content="#2563eb">
   <script src="https://cdn.jsdelivr.net/npm/feather-icons/dist/feather.min.js"></script>
   {% block head %}{% endblock %}
 </head>
@@ -222,6 +225,7 @@
         <div class="avatar">{{ current_user.username[0].upper() }}</div>
         <span>{{ current_user.username }}</span>
         <span class="badge badge-blue">{{ current_user.role }}</span>
+        <span id="offline-sync-badge" class="badge" style="display:none;"></span>
         <a href="{{ url_for('change_password') }}" class="btn-logout" style="margin-right:4px;">Change Password</a>
         <a href="{{ url_for('logout') }}" class="btn-logout">Sign out</a>
       </div>
@@ -251,6 +255,12 @@
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/offline.js') }}"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('/sw.js');
+  }
+</script>
 {% block scripts %}{% endblock %}
 
 </body>

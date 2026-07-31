@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: transport-erp
+    env: python
+    plan: starter
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn -w 1 --threads 4 -b 0.0.0.0:$PORT app:app"
+    disk:
+      name: transport-erp-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        value: sqlite:////var/data/transport_erp.db
+      - key: ADMIN_PASSWORD
+        sync: false

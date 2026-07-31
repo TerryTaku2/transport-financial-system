@@ -10,3 +10,4 @@ instance/
 .env.*
 !.env.example
 *.log
+certs/

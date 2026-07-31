@@ -17,11 +17,11 @@ from functools import wraps
 import openpyxl
 from dotenv import load_dotenv
 from flask import (Flask, render_template, request, redirect, url_for,
-                   flash, jsonify, make_response)
+                   flash, jsonify, make_response, session, send_from_directory)
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (LoginManager, UserMixin, login_user, logout_user,
                          login_required, current_user)
-from flask_wtf.csrf import CSRFProtect
+from flask_wtf.csrf import CSRFProtect, generate_csrf
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -56,6 +56,7 @@ app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
     SESSION_COOKIE_SECURE=IS_PRODUCTION,
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=12),
 )
 
 db = SQLAlchemy(app)
@@ -317,6 +318,19 @@ class AuditLog(db.Model):
     timestamp = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     user = db.relationship('User')
+
+
+class OfflineSyncLog(db.Model):
+    """One row per successfully-synced offline form submission, keyed by the
+    client-generated UUID that offline.js attaches to every queued POST — lets
+    already_synced() reject a replayed submission (e.g. the device retries
+    before seeing the first response) without creating a duplicate record."""
+    __tablename__ = 'offline_sync_log'
+    id = db.Column(db.Integer, primary_key=True)
+    client_id = db.Column(db.String(36), unique=True, nullable=False)
+    endpoint = db.Column(db.String(100), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class ImportBatch(db.Model):
@@ -1416,6 +1430,18 @@ def form_int(form, field, label=None, required=True, default=None, min_value=Non
     return value
 
 
+def already_synced(client_id):
+    """True if this client-generated offline submission id was already
+    recorded — lets an offline-queue replay short-circuit instead of
+    inserting a duplicate row."""
+    return bool(client_id) and OfflineSyncLog.query.filter_by(client_id=client_id).first() is not None
+
+
+def record_offline_sync(client_id, endpoint):
+    if client_id:
+        db.session.add(OfflineSyncLog(client_id=client_id, endpoint=endpoint, user_id=current_user.id))
+
+
 def check_unique(model, field_name, value, label=None, exclude_id=None):
     """Raise a friendly ValueError if another row already has this value,
     instead of letting the DB's UNIQUE constraint crash with a 500."""
@@ -1645,6 +1671,14 @@ def index():
     return redirect(url_for('dashboard') if current_user.is_authenticated else url_for('login'))
 
 
+@app.route('/sw.js')
+def service_worker():
+    """Served from the root (not /static/sw.js) so its default scope is the
+    whole app, not just /static/ — required for it to intercept navigation
+    requests across every page."""
+    return send_from_directory('static', 'sw.js', mimetype='application/javascript')
+
+
 @app.route('/login', methods=['GET', 'POST'])
 @limiter.limit('10 per minute')
 def login():
@@ -1656,6 +1690,7 @@ def login():
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password) and user.is_active:
             login_user(user)
+            session.permanent = True
             log_audit('LOGIN', description=f'User {username} logged in')
             db.session.commit()
             return redirect(first_permitted_url(user))
@@ -2301,6 +2336,10 @@ def driver_ledger_add():
     # are handled locally here and always redirect to the GET ledger page.
     period = request.form.get('period', 'month')
     vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+    client_id = request.form.get('_client_id')
+    if already_synced(client_id):
+        flash('Already recorded.', 'info')
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
     try:
         vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else None
         if not vehicle:
@@ -2349,6 +2388,7 @@ def driver_ledger_add():
             )
             db.session.add(fuel)
 
+        record_offline_sync(client_id, 'driver_ledger_add')
         db.session.commit()
         flash('Ledger entry recorded.', 'success')
 
@@ -2650,6 +2690,10 @@ def fuel_logs():
 @handle_form_errors
 def fuel_log_add():
     if request.method == 'POST':
+        client_id = request.form.get('_client_id')
+        if already_synced(client_id):
+            flash('Already recorded.', 'info')
+            return redirect(url_for('fuel_logs'))
         liters = form_float(request.form, 'liters', min_value=0)
         log = FuelLog(
             vehicle_id=form_int(request.form, 'vehicle_id'),
@@ -2664,6 +2708,7 @@ def fuel_log_add():
         db.session.flush()
         log_audit('CREATE', 'fuel_logs', log.id,
                   f'Fuel log for {log.vehicle.registration}: {liters}L')
+        record_offline_sync(client_id, 'fuel_log_add')
         db.session.commit()
         flash('Fuel log recorded.', 'success')
         return redirect(url_for('fuel_logs'))
@@ -2709,6 +2754,10 @@ def maintenance_logs():
 @handle_form_errors
 def maintenance_log_add():
     if request.method == 'POST':
+        client_id = request.form.get('_client_id')
+        if already_synced(client_id):
+            flash('Already recorded.', 'info')
+            return redirect(url_for('maintenance_logs'))
         parts = form_float(request.form, 'parts_cost', required=False, default=0, min_value=0)
         labor = form_float(request.form, 'labor_cost', required=False, default=0, min_value=0)
         log = MaintenanceLog(
@@ -2726,6 +2775,7 @@ def maintenance_log_add():
         db.session.flush()
         log_audit('CREATE', 'maintenance_logs', log.id,
                   f'Maintenance for {log.vehicle.registration}')
+        record_offline_sync(client_id, 'maintenance_log_add')
         db.session.commit()
         flash('Maintenance log recorded.', 'success')
         return redirect(url_for('maintenance_logs'))
@@ -2952,6 +3002,10 @@ def store_purchases():
 @handle_form_errors
 def store_purchase_add():
     if request.method == 'POST':
+        client_id = request.form.get('_client_id')
+        if already_synced(client_id):
+            flash('Already recorded.', 'info')
+            return redirect(url_for('store_purchases'))
         part = SparePart.query.get_or_404(form_int(request.form, 'part_id'))
         quantity = form_int(request.form, 'quantity', min_value=1)
         unit_cost = form_float(request.form, 'unit_cost', min_value=0)
@@ -2975,6 +3029,7 @@ def store_purchase_add():
         db.session.flush()
         log_audit('CREATE', 'store_purchases', purchase.id,
                   f'Purchased {quantity} x {part.name} @ {unit_cost}')
+        record_offline_sync(client_id, 'store_purchase_add')
         db.session.commit()
         flash('Purchase recorded and stock updated.', 'success')
         return redirect(url_for('store_purchases'))
@@ -3020,6 +3075,10 @@ def store_sales():
 @handle_form_errors
 def store_sale_add():
     if request.method == 'POST':
+        client_id = request.form.get('_client_id')
+        if already_synced(client_id):
+            flash('Already recorded.', 'info')
+            return redirect(url_for('store_sales'))
         part = SparePart.query.get_or_404(form_int(request.form, 'part_id'))
         quantity = form_int(request.form, 'quantity', min_value=1)
         if quantity > part.quantity_on_hand:
@@ -3048,6 +3107,7 @@ def store_sale_add():
                   f'Sold {quantity} x {part.name} @ {unit_price}' +
                   (f' to vehicle {sale.vehicle.registration} (booked as an expense on that vehicle)'
                    if sale.vehicle else ''))
+        record_offline_sync(client_id, 'store_sale_add')
         db.session.commit()
         flash('Sale recorded and stock updated.', 'success')
         return redirect(url_for('store_sales'))
@@ -4368,6 +4428,10 @@ def expenses_list():
 @handle_form_errors
 def expense_add():
     if request.method == 'POST':
+        client_id = request.form.get('_client_id')
+        if already_synced(client_id):
+            flash('Already recorded.', 'info')
+            return redirect(url_for('expenses_list'))
         e = Expense(
             category_id=form_int(request.form, 'category_id'),
             vehicle_id=form_int(request.form, 'vehicle_id', required=False),
@@ -4379,6 +4443,7 @@ def expense_add():
         db.session.add(e)
         db.session.flush()
         log_audit('CREATE', 'expenses', e.id, f'Expense of {e.amount}')
+        record_offline_sync(client_id, 'expense_add')
         db.session.commit()
         flash('Expense recorded.', 'success')
         return redirect(url_for('expenses_list'))
@@ -4514,6 +4579,10 @@ def franchise_daily_income_list():
 @handle_form_errors
 def franchise_daily_income_add():
     if request.method == 'POST':
+        client_id = request.form.get('_client_id')
+        if already_synced(client_id):
+            flash('Already recorded.', 'info')
+            return redirect(url_for('franchise_daily_income_list'))
         entry_date = parse_date(request.form['entry_date'])
         vehicle_id = form_int(request.form, 'vehicle_id', required=False)
         vehicle = FranchiseVehicle.query.get(vehicle_id) if vehicle_id else None
@@ -4539,6 +4608,7 @@ def franchise_daily_income_add():
         log_audit('CREATE', 'franchise_daily_income', entry.id,
                   f'Daily franchise income for {label} on {entry_date}: income {entry.income}, '
                   f'expenditure {entry.total_expenditure}, deposited {entry.deposited}')
+        record_offline_sync(client_id, 'franchise_daily_income_add')
         db.session.commit()
         flash('Daily franchise income recorded.', 'success')
         return redirect(url_for('franchise_daily_income_list'))
@@ -4574,6 +4644,10 @@ def franchise_weekly_income_list():
 @handle_form_errors
 def franchise_weekly_income_add():
     if request.method == 'POST':
+        client_id = request.form.get('_client_id')
+        if already_synced(client_id):
+            flash('Already recorded.', 'info')
+            return redirect(url_for('franchise_weekly_income_list'))
         raw_date = parse_date(request.form['week_start'])
         week_start = raw_date - timedelta(days=raw_date.weekday())  # normalize to that week's Monday
         vehicle_id = form_int(request.form, 'vehicle_id', required=False)
@@ -4600,6 +4674,7 @@ def franchise_weekly_income_add():
         log_audit('CREATE', 'franchise_weekly_income', entry.id,
                   f'Weekly franchise income for {label} for week of {week_start}: income {entry.income}, '
                   f'expenditure {entry.total_expenditure}, deposited {entry.deposited}')
+        record_offline_sync(client_id, 'franchise_weekly_income_add')
         db.session.commit()
         flash('Weekly franchise income recorded.', 'success')
         return redirect(url_for('franchise_weekly_income_list'))
@@ -4773,6 +4848,10 @@ def franchise_collections():
 @handle_form_errors
 def franchise_collection_add():
     if request.method == 'POST':
+        client_id = request.form.get('_client_id')
+        if already_synced(client_id):
+            flash('Already recorded.', 'info')
+            return redirect(url_for('franchise_collections'))
         vehicle_id = form_int(request.form, 'vehicle_id')
         vehicle = FranchiseVehicle.query.get(vehicle_id)
         if not vehicle:
@@ -4794,6 +4873,7 @@ def franchise_collection_add():
         log_audit('CREATE', 'franchise_collections', collection.id,
                   f'{vehicle.number_plate} paid {collection.amount} ({frequency}), expense {collection.expense}, '
                   f'on {collection.entry_date}')
+        record_offline_sync(client_id, 'franchise_collection_add')
         db.session.commit()
         flash('Collection recorded.', 'success')
         return redirect(url_for('franchise_collections'))
@@ -5303,6 +5383,15 @@ def api_expenses_breakdown():
     maint = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
         MaintenanceLog.log_date >= m_start).scalar() or 0
     return jsonify({'maintenance': float(maint)})
+
+
+@app.route('/api/csrf-token')
+@login_required
+def api_csrf_token():
+    """Fresh CSRF token for offline.js — fetched right before every queued
+    submission is (re)sent, since a token minted at page-load can go stale
+    (default 1h) by the time a device that went offline reconnects."""
+    return jsonify({'csrf_token': generate_csrf()})
 
 
 # ─────────────────────────────────────────────────────────────
