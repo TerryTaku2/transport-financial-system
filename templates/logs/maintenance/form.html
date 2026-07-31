@@ -22,7 +22,7 @@
         </div>
         <div class="form-group">
           <label>Vehicle<span class="req">*</span></label>
-          <select name="vehicle_id" required>
+          <select name="vehicle_id" required data-refdata="vehicles">
             <option value="">Select vehicle</option>
             {% for v in vehicles %}
             <option value="{{ v.id }}">{{ v.registration }} — {{ v.make }} {{ v.model }}</option>

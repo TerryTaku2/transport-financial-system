@@ -23,7 +23,7 @@
       <div class="form-grid mb-16">
         <div class="form-group">
           <label>Vehicle<span class="req">*</span></label>
-          <select name="vehicle_id" required>
+          <select name="vehicle_id" required data-refdata="franchise_vehicles">
             <option value="">Select vehicle</option>
             {% for v in vehicles %}
             <option value="{{ v.id }}">{{ v.number_plate }} — {{ v.franchisee_name }}</option>

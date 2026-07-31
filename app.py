@@ -5402,6 +5402,51 @@ def api_ping():
     return jsonify({'status': 'ok'})
 
 
+@app.route('/api/refdata')
+@login_required
+def api_refdata():
+    """Reference data (vehicles/drivers/parts/franchise vehicles/expense
+    categories) for the dropdowns on the 9 offline-capable forms. Fetched
+    and cached in IndexedDB by offline.js on every page that has one of
+    those forms, so a form opened from the service worker's page cache
+    while offline can repopulate its dropdowns from real data instead of
+    whatever happened to be baked into the HTML the last time it was
+    cached. Read-only reference data (names/plates), so gated on being
+    logged in at all rather than a specific module permission."""
+    vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
+    drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
+    parts = SparePart.query.filter_by(status='active').order_by(SparePart.name).all()
+    franchise_vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(
+        FranchiseVehicle.franchisee_name).all()
+    headings = ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all()
+
+    def part_label(p):
+        label = p.name
+        if p.part_number:
+            label += f' ({p.part_number})'
+        label += f' — {p.quantity_on_hand} {p.unit} in stock'
+        return label
+
+    expense_categories = []
+    for h in headings:
+        if h.children:
+            expense_categories.append({'id': h.id, 'label': f'{h.name} (general)'})
+            for c in sorted(h.children, key=lambda x: x.name):
+                expense_categories.append({'id': c.id, 'label': f'{h.name} — {c.name}'})
+        else:
+            expense_categories.append({'id': h.id, 'label': h.name})
+
+    return jsonify({
+        'vehicles': [{'id': v.id, 'label': f'{v.registration} — {v.make} {v.model}'} for v in vehicles],
+        'drivers': [{'id': d.id, 'label': d.name} for d in drivers],
+        'parts': [{'id': p.id, 'label': part_label(p), 'selling_price': p.selling_price,
+                   'quantity_on_hand': p.quantity_on_hand} for p in parts],
+        'franchise_vehicles': [{'id': v.id, 'label': f'{v.number_plate} — {v.franchisee_name}'}
+                               for v in franchise_vehicles],
+        'expense_categories': expense_categories,
+    })
+
+
 # ─────────────────────────────────────────────────────────────
 # WhatsApp Webhook stub
 # ─────────────────────────────────────────────────────────────

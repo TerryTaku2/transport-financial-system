@@ -25,7 +25,7 @@
         </div>
         <div class="form-group">
           <label>Part<span class="req">*</span></label>
-          <select id="sale_part" name="part_id" required>
+          <select id="sale_part" name="part_id" required data-refdata="parts">
             <option value="">Select part</option>
             {% for p in parts %}
             <option value="{{ p.id }}" data-price="{{ p.selling_price }}" data-stock="{{ p.quantity_on_hand }}">
@@ -45,7 +45,7 @@
         </div>
         <div class="form-group">
           <label>Sold To Vehicle (internal)</label>
-          <select name="vehicle_id" id="sale_vehicle">
+          <select name="vehicle_id" id="sale_vehicle" data-refdata="vehicles">
             <option value="">— External customer —</option>
             {% for v in vehicles %}
             <option value="{{ v.id }}">{{ v.registration }} — {{ v.make }} {{ v.model }}</option>

@@ -9,8 +9,9 @@
   'use strict';
 
   var DB_NAME = 'transfleet-offline';
-  var DB_VERSION = 1;
+  var DB_VERSION = 2;
   var STORE = 'queue';
+  var REFDATA_STORE = 'refdata';
   var SYNC_INTERVAL_MS = 30000;
   var FETCH_TIMEOUT_MS = 8000;
 
@@ -26,9 +27,34 @@
           store.createIndex('status', 'status');
           store.createIndex('createdAt', 'createdAt');
         }
+        if (!db.objectStoreNames.contains(REFDATA_STORE)) {
+          db.createObjectStore(REFDATA_STORE, { keyPath: 'key' });
+        }
       };
       req.onsuccess = function () { resolve(req.result); };
       req.onerror = function () { reject(req.error); };
+    });
+  }
+
+  function saveRefData(data) {
+    return openDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(REFDATA_STORE, 'readwrite');
+        tx.objectStore(REFDATA_STORE).put({ key: 'all', data: data, fetchedAt: Date.now() });
+        tx.oncomplete = function () { resolve(); };
+        tx.onerror = function () { reject(tx.error); };
+      });
+    });
+  }
+
+  function getRefData() {
+    return openDb().then(function (db) {
+      return new Promise(function (resolve, reject) {
+        var tx = db.transaction(REFDATA_STORE, 'readonly');
+        var req = tx.objectStore(REFDATA_STORE).get('all');
+        req.onsuccess = function () { resolve(req.result ? req.result.data : null); };
+        req.onerror = function () { reject(req.error); };
+      });
     });
   }
 
@@ -139,6 +165,57 @@
         }, FETCH_TIMEOUT_MS)
           .then(function (resp) { setConnectivity('online'); return { outcome: 'response', response: resp }; })
           .catch(function () { setConnectivity('offline'); return { outcome: 'network-error' }; });
+      });
+  }
+
+  // Rebuilds every <select data-refdata="vehicles|drivers|parts|
+  // franchise_vehicles|expense_categories"> on the page from real data,
+  // instead of whatever was baked into the HTML the last time this page
+  // was cached by the service worker. Preserves the current selection and
+  // the placeholder ("Select vehicle" etc.) option if there is one.
+  function repopulateSelects(data) {
+    if (!data) return;
+    document.querySelectorAll('select[data-refdata]').forEach(function (select) {
+      var list = data[select.getAttribute('data-refdata')];
+      if (!list) return;
+      var currentValue = select.value;
+      var placeholder = select.options.length && select.options[0].value === '' ? select.options[0] : null;
+      select.innerHTML = '';
+      if (placeholder) select.appendChild(placeholder);
+      list.forEach(function (item) {
+        var opt = document.createElement('option');
+        opt.value = item.id;
+        opt.textContent = item.label;
+        if ('selling_price' in item) opt.dataset.price = item.selling_price;
+        if ('quantity_on_hand' in item) opt.dataset.stock = item.quantity_on_hand;
+        select.appendChild(opt);
+      });
+      if (currentValue && select.querySelector('option[value="' + currentValue + '"]')) {
+        select.value = currentValue;
+      }
+    });
+  }
+
+  // Only runs on pages that actually have one of the 9 offline-capable
+  // forms — cheap no-op everywhere else. Online, this just re-confirms
+  // what the server already rendered and refreshes the IndexedDB cache for
+  // next time; offline, it's what lets a form served from the service
+  // worker's stale page cache show real dropdown options instead of
+  // whatever was on the page the last time it was cached.
+  function refreshRefData() {
+    return fetchWithTimeout('/api/refdata', { credentials: 'same-origin', cache: 'no-store' }, FETCH_TIMEOUT_MS)
+      .then(function (resp) {
+        if (!resp.ok) throw new Error('refdata fetch failed');
+        return resp.json();
+      })
+      .then(function (data) {
+        setConnectivity('online');
+        return saveRefData(data).then(function () { repopulateSelects(data); });
+      })
+      .catch(function () {
+        return getRefData().then(function (cached) {
+          if (cached) repopulateSelects(cached);
+        });
       });
   }
 
@@ -323,6 +400,9 @@
     updateConnectivityBadge();
     checkConnectivity();
     syncQueue();
+    if (document.querySelector('select[data-refdata]')) {
+      refreshRefData();
+    }
   });
 
   // Exposed for static/offline.html, which lists/retries/discards queued

@@ -25,7 +25,7 @@
         </div>
         <div class="form-group">
           <label>Part<span class="req">*</span></label>
-          <select name="part_id" required>
+          <select name="part_id" required data-refdata="parts">
             <option value="">Select part</option>
             {% for p in parts %}
             <option value="{{ p.id }}">{{ p.name }}{% if p.part_number %} ({{ p.part_number }}){% endif %} — {{ p.quantity_on_hand }} {{ p.unit }} on hand</option>
