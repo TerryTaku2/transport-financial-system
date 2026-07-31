@@ -29,8 +29,9 @@ from flask_wtf.csrf import CSRFProtect, generate_csrf
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
-from sqlalchemy import func
+from sqlalchemy import event, func
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import with_loader_criteria
 
 load_dotenv()
 
@@ -2095,7 +2096,7 @@ def vehicle_add():
 @login_required
 @permission_required('vehicles')
 def vehicle_detail(vid):
-    v = Vehicle.query.get_or_404(vid)
+    v = Vehicle.query.filter_by(id=vid).first_or_404()
     today = date.today()
     recent_logs = DailyLog.query.filter_by(vehicle_id=vid).order_by(DailyLog.log_date.desc()).limit(10).all()
     recent_fuel = FuelLog.query.filter_by(vehicle_id=vid).order_by(FuelLog.log_date.desc()).limit(5).all()
@@ -2110,7 +2111,7 @@ def vehicle_detail(vid):
 @permission_required('vehicles')
 @handle_form_errors
 def vehicle_edit(vid):
-    v = Vehicle.query.get_or_404(vid)
+    v = Vehicle.query.filter_by(id=vid).first_or_404()
     if request.method == 'POST':
         registration = request.form['registration'].upper().strip()
         check_unique(Vehicle, 'registration', registration, exclude_id=v.id)
@@ -2140,10 +2141,18 @@ def vehicle_edit(vid):
 @login_required
 @admin_required
 def vehicle_delete(vid):
-    v = Vehicle.query.get_or_404(vid)
+    v = Vehicle.query.filter_by(id=vid).first_or_404()
     reg = v.registration
     log_audit('DELETE', 'vehicles', vid, f'Deleted vehicle {reg}')
-    db.session.delete(v)
+    now = datetime.now(timezone.utc)
+    # cascade='all, delete-orphan' only fires on an actual ORM delete of
+    # the parent, not on setting deleted_at — soft-delete documents
+    # explicitly so they don't outlive their (now hidden) vehicle.
+    for doc in v.documents:
+        doc.deleted_at = now
+        touch_sync_fields(doc)
+    v.deleted_at = now
+    touch_sync_fields(v)
     db.session.commit()
     flash(f'Vehicle {reg} removed.', 'warning')
     return redirect(url_for('vehicles'))
@@ -2154,7 +2163,7 @@ def vehicle_delete(vid):
 @permission_required('vehicles')
 @handle_form_errors
 def document_add(vehicle_id):
-    vehicle = Vehicle.query.get_or_404(vehicle_id)
+    vehicle = Vehicle.query.filter_by(id=vehicle_id).first_or_404()
     if request.method == 'POST':
         doc = VehicleDocument(
             vehicle_id=vehicle_id,
@@ -2178,10 +2187,11 @@ def document_add(vehicle_id):
 @login_required
 @permission_required('vehicles')
 def document_delete(did):
-    doc = VehicleDocument.query.get_or_404(did)
+    doc = VehicleDocument.query.filter_by(id=did).first_or_404()
     vid = doc.vehicle_id
     log_audit('DELETE', 'vehicle_documents', did, f'Deleted {doc.doc_type} document')
-    db.session.delete(doc)
+    doc.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(doc)
     db.session.commit()
     flash('Document deleted.', 'warning')
     return redirect(url_for('vehicle_detail', vid=vid))
@@ -2241,7 +2251,7 @@ def driver_add():
 @permission_required('drivers')
 @handle_form_errors
 def driver_edit(did):
-    d = Driver.query.get_or_404(did)
+    d = Driver.query.filter_by(id=did).first_or_404()
     if request.method == 'POST':
         rate_input = form_float(request.form, 'commission_rate', required=False, min_value=0)
         role = request.form.get('role', 'driver')
@@ -2277,10 +2287,11 @@ def driver_edit(did):
 @login_required
 @admin_required
 def driver_delete(did):
-    d = Driver.query.get_or_404(did)
+    d = Driver.query.filter_by(id=did).first_or_404()
     name = d.name
     log_audit('DELETE', 'drivers', did, f'Deleted driver {name}')
-    db.session.delete(d)
+    d.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(d)
     db.session.commit()
     flash(f'Driver {name} removed.', 'warning')
     return redirect(url_for('drivers'))
@@ -2326,7 +2337,7 @@ def route_add():
 @permission_required('routes')
 @handle_form_errors
 def route_edit(rid):
-    r = Route.query.get_or_404(rid)
+    r = Route.query.filter_by(id=rid).first_or_404()
     if request.method == 'POST':
         r.name = request.form['name'].strip()
         r.start_point = request.form['start_point'].strip()
@@ -2346,10 +2357,11 @@ def route_edit(rid):
 @login_required
 @admin_required
 def route_delete(rid):
-    r = Route.query.get_or_404(rid)
+    r = Route.query.filter_by(id=rid).first_or_404()
     name = r.name
     log_audit('DELETE', 'routes', rid, f'Deleted route {name}')
-    db.session.delete(r)
+    r.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(r)
     db.session.commit()
     flash(f'Route "{name}" deleted.', 'warning')
     return redirect(url_for('routes_list'))
@@ -2366,7 +2378,7 @@ def route_delete(rid):
 @permission_required_any('daily_logs', 'crew_portal')
 @handle_form_errors
 def ledger_entry_edit(vehicle_id, log_date_str):
-    vehicle = Vehicle.query.get_or_404(vehicle_id)
+    vehicle = Vehicle.query.filter_by(id=vehicle_id).first_or_404()
     try:
         log_date = parse_date(log_date_str)
     except ValueError:
@@ -2404,7 +2416,7 @@ def ledger_entry_edit(vehicle_id, log_date_str):
             raise ValueError('Enter at least a fare, diesel cost, mileage reading, or garnish.')
 
         if fare is not None:
-            driver = Driver.query.get(driver_id)
+            driver = Driver.query.filter_by(id=driver_id).first()
             conductor = driver.paired_conductors[0] if driver and driver.paired_conductors else None
             if log is None:
                 log = DailyLog(vehicle_id=vehicle_id, log_date=log_date, created_by=current_user.id)
@@ -2426,7 +2438,8 @@ def ledger_entry_edit(vehicle_id, log_date_str):
             fuel.odometer = mileage
             touch_sync_fields(fuel)
         elif fuel is not None:
-            db.session.delete(fuel)
+            fuel.deleted_at = datetime.now(timezone.utc)
+            touch_sync_fields(fuel)
 
         log_audit('UPDATE', 'daily_logs', log.id if log else None,
                   f'Edited ledger entry for {vehicle.registration} on {log_date}')
@@ -2443,7 +2456,7 @@ def ledger_entry_edit(vehicle_id, log_date_str):
 @login_required
 @admin_required
 def ledger_entry_delete(vehicle_id, log_date_str):
-    vehicle = Vehicle.query.get_or_404(vehicle_id)
+    vehicle = Vehicle.query.filter_by(id=vehicle_id).first_or_404()
     try:
         log_date = parse_date(log_date_str)
     except ValueError:
@@ -2451,8 +2464,16 @@ def ledger_entry_delete(vehicle_id, log_date_str):
         return redirect(url_for('driver_ledger', vehicle_id=vehicle_id))
 
     period = request.form.get('period', 'month')
-    DailyLog.query.filter_by(vehicle_id=vehicle_id, log_date=log_date).delete()
-    FuelLog.query.filter_by(vehicle_id=vehicle_id, log_date=log_date).delete()
+    # Soft-delete via a per-row loop, not a bulk .delete() — bulk deletes
+    # issue a raw DELETE and bypass touch_sync_fields entirely, so the
+    # tombstone would never propagate to other instances.
+    now = datetime.now(timezone.utc)
+    for log in DailyLog.query.filter_by(vehicle_id=vehicle_id, log_date=log_date).all():
+        log.deleted_at = now
+        touch_sync_fields(log)
+    for fuel in FuelLog.query.filter_by(vehicle_id=vehicle_id, log_date=log_date).all():
+        fuel.deleted_at = now
+        touch_sync_fields(fuel)
     log_audit('DELETE', 'daily_logs', None, f'Deleted ledger entry for {vehicle.registration} on {log_date}')
     db.session.commit()
     flash('Entry deleted.', 'warning')
@@ -2572,7 +2593,7 @@ def driver_ledger():
 
     all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
     vehicle_id = request.args.get('vehicle_id', '')
-    vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else (all_vehicles[0] if all_vehicles else None)
+    vehicle = Vehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else (all_vehicles[0] if all_vehicles else None)
 
     rows, total_fare, total_diesel_cost, total_garnish = [], 0.0, 0.0, 0.0
     latest_odometer = None
@@ -2608,7 +2629,7 @@ def driver_ledger_add():
         flash('Already recorded.', 'info')
         return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
     try:
-        vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else None
+        vehicle = Vehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
         if not vehicle:
             raise ValueError('Select a vehicle.')
 
@@ -2629,7 +2650,7 @@ def driver_ledger_add():
             raise ValueError('Enter at least a fare, diesel cost, mileage reading, or garnish.')
 
         if fare is not None or garnish is not None:
-            driver = Driver.query.get(driver_id)
+            driver = Driver.query.filter_by(id=driver_id).first()
             conductor = driver.paired_conductors[0] if driver and driver.paired_conductors else None
             daily = DailyLog(
                 vehicle_id=vehicle_id, driver_id=driver_id, conductor_id=conductor.id if conductor else None,
@@ -2687,7 +2708,7 @@ def driver_ledger_add():
 @permission_required_any('daily_logs', 'crew_portal')
 def driver_ledger_export():
     vehicle_id = request.args.get('vehicle_id', '')
-    vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else None
+    vehicle = Vehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
     if not vehicle:
         flash('Select a vehicle to export.', 'danger')
         return redirect(url_for('driver_ledger'))
@@ -2721,7 +2742,7 @@ def driver_ledger_export():
 def _resolve_ledger_import_vehicle():
     period = request.form.get('period', 'month')
     vehicle_id = form_int(request.form, 'vehicle_id', required=False)
-    vehicle = Vehicle.query.get(vehicle_id) if vehicle_id else None
+    vehicle = Vehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
     return vehicle, vehicle_id, period
 
 
@@ -2993,9 +3014,10 @@ def fuel_log_add():
 @login_required
 @admin_required
 def fuel_log_delete(lid):
-    log = FuelLog.query.get_or_404(lid)
+    log = FuelLog.query.filter_by(id=lid).first_or_404()
     log_audit('DELETE', 'fuel_logs', lid, f'Deleted fuel log {lid}')
-    db.session.delete(log)
+    log.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(log)
     db.session.commit()
     flash('Fuel log deleted.', 'warning')
     return redirect(url_for('fuel_logs'))
@@ -3061,9 +3083,10 @@ def maintenance_log_add():
 @login_required
 @admin_required
 def maintenance_log_delete(lid):
-    log = MaintenanceLog.query.get_or_404(lid)
+    log = MaintenanceLog.query.filter_by(id=lid).first_or_404()
     log_audit('DELETE', 'maintenance_logs', lid, f'Deleted maintenance log {lid}')
-    db.session.delete(log)
+    log.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(log)
     db.session.commit()
     flash('Maintenance log deleted.', 'warning')
     return redirect(url_for('maintenance_logs'))
@@ -3147,7 +3170,7 @@ def maintenance_schedule_add():
 @permission_required('maintenance')
 @handle_form_errors
 def maintenance_schedule_done(sid):
-    sched = MaintenanceSchedule.query.get_or_404(sid)
+    sched = MaintenanceSchedule.query.filter_by(id=sid).first_or_404()
     done_date = parse_date(request.form.get('done_date')) or date.today()
     done_odometer = form_float(request.form, 'done_odometer', required=False, min_value=0)
 
@@ -3168,9 +3191,10 @@ def maintenance_schedule_done(sid):
 @login_required
 @admin_required
 def maintenance_schedule_delete(sid):
-    sched = MaintenanceSchedule.query.get_or_404(sid)
+    sched = MaintenanceSchedule.query.filter_by(id=sid).first_or_404()
     log_audit('DELETE', 'maintenance_schedules', sid, f'Deleted maintenance schedule: {sched.description}')
-    db.session.delete(sched)
+    sched.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(sched)
     db.session.commit()
     flash('Maintenance schedule deleted.', 'warning')
     return redirect(url_for('maintenance_schedules'))
@@ -3226,7 +3250,7 @@ def store_part_add():
 @permission_required('store')
 @handle_form_errors
 def store_part_edit(pid):
-    part = SparePart.query.get_or_404(pid)
+    part = SparePart.query.filter_by(id=pid).first_or_404()
     if request.method == 'POST':
         part.name = request.form['name'].strip()
         part.part_number = request.form.get('part_number', '').strip()
@@ -3249,9 +3273,20 @@ def store_part_edit(pid):
 @login_required
 @admin_required
 def store_part_delete(pid):
-    part = SparePart.query.get_or_404(pid)
+    part = SparePart.query.filter_by(id=pid).first_or_404()
     log_audit('DELETE', 'spare_parts', pid, f'Deleted spare part: {part.name}')
-    db.session.delete(part)
+    now = datetime.now(timezone.utc)
+    # cascade='all, delete-orphan' only fires on an actual ORM delete of
+    # the parent, not on setting deleted_at — soft-delete purchase/sale
+    # history explicitly so it doesn't outlive its (now hidden) part.
+    for purchase in part.purchases:
+        purchase.deleted_at = now
+        touch_sync_fields(purchase)
+    for sale in part.sales:
+        sale.deleted_at = now
+        touch_sync_fields(sale)
+    part.deleted_at = now
+    touch_sync_fields(part)
     db.session.commit()
     flash('Spare part deleted.', 'warning')
     return redirect(url_for('store_parts'))
@@ -3282,7 +3317,7 @@ def store_purchase_add():
         if already_synced(client_id):
             flash('Already recorded.', 'info')
             return redirect(url_for('store_purchases'))
-        part = SparePart.query.get_or_404(form_int(request.form, 'part_id'))
+        part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
         quantity = form_int(request.form, 'quantity', min_value=1)
         unit_cost = form_float(request.form, 'unit_cost', min_value=0)
 
@@ -3321,12 +3356,14 @@ def store_purchase_add():
 @login_required
 @admin_required
 def store_purchase_delete(pid):
-    purchase = StorePurchase.query.get_or_404(pid)
+    purchase = StorePurchase.query.filter_by(id=pid).first_or_404()
     part = purchase.part
     part.quantity_on_hand = max(0, part.quantity_on_hand - purchase.quantity)
     log_audit('DELETE', 'store_purchases', pid,
               f'Deleted purchase of {purchase.quantity} x {part.name}')
-    db.session.delete(purchase)
+    purchase.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(purchase)
+    touch_sync_fields(part)
     db.session.commit()
     flash('Purchase deleted and stock reduced accordingly. Note: this does not '
          'recompute historical average cost.', 'warning')
@@ -3357,7 +3394,7 @@ def store_sale_add():
         if already_synced(client_id):
             flash('Already recorded.', 'info')
             return redirect(url_for('store_sales'))
-        part = SparePart.query.get_or_404(form_int(request.form, 'part_id'))
+        part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
         quantity = form_int(request.form, 'quantity', min_value=1)
         if quantity > part.quantity_on_hand:
             raise ValueError(f'Only {part.quantity_on_hand} {part.unit}(s) of {part.name} in stock.')
@@ -3403,11 +3440,13 @@ def store_sale_add():
 @login_required
 @admin_required
 def store_sale_delete(sid):
-    sale = StoreSale.query.get_or_404(sid)
+    sale = StoreSale.query.filter_by(id=sid).first_or_404()
     part = sale.part
     part.quantity_on_hand += sale.quantity
     log_audit('DELETE', 'store_sales', sid, f'Deleted sale of {sale.quantity} x {part.name}')
-    db.session.delete(sale)
+    sale.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(sale)
+    touch_sync_fields(part)
     db.session.commit()
     flash('Sale deleted and stock restored.', 'warning')
     return redirect(url_for('store_sales'))
@@ -3901,9 +3940,10 @@ def commission_payment_add():
 @login_required
 @admin_required
 def commission_payment_delete(pid):
-    payment = CommissionPayment.query.get_or_404(pid)
+    payment = CommissionPayment.query.filter_by(id=pid).first_or_404()
     log_audit('DELETE', 'commission_payments', pid, f'Deleted commission payment of {payment.amount}')
-    db.session.delete(payment)
+    payment.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(payment)
     db.session.commit()
     flash('Commission payment deleted.', 'warning')
     return redirect(request.referrer or url_for('report_payroll'))
@@ -4242,7 +4282,7 @@ def export_income():
 
     vehicle_label = 'Consolidated (fleet-wide)'
     if vehicle_id:
-        v = Vehicle.query.get(vehicle_id)
+        v = Vehicle.query.filter_by(id=vehicle_id).first()
         vehicle_label = f'{v.registration} — {v.make} {v.model}' if v else f'Vehicle #{vehicle_id}'
         daily_q = daily_q.filter(DailyLog.vehicle_id == vehicle_id)
         fuel_q = fuel_q.filter(FuelLog.vehicle_id == vehicle_id)
@@ -4458,9 +4498,17 @@ def loan_add():
 @login_required
 @admin_required
 def loan_delete(lid):
-    loan = Loan.query.get_or_404(lid)
+    loan = Loan.query.filter_by(id=lid).first_or_404()
     log_audit('DELETE', 'loans', lid, f'Deleted loan from {loan.lender}')
-    db.session.delete(loan)
+    now = datetime.now(timezone.utc)
+    # The model's cascade='all, delete-orphan' only fires on an actual ORM
+    # delete of the parent, not on setting deleted_at — soft-delete
+    # payments explicitly so they don't outlive their (now hidden) loan.
+    for payment in loan.payments:
+        payment.deleted_at = now
+        touch_sync_fields(payment)
+    loan.deleted_at = now
+    touch_sync_fields(loan)
     db.session.commit()
     flash('Loan deleted.', 'warning')
     return redirect(url_for('loans_list'))
@@ -4471,7 +4519,7 @@ def loan_delete(lid):
 @permission_required('finance')
 @handle_form_errors
 def loan_payment_add(lid):
-    loan = Loan.query.get_or_404(lid)
+    loan = Loan.query.filter_by(id=lid).first_or_404()
     payment = LoanPayment(
         loan_id=lid,
         payment_date=parse_date(request.form['payment_date']),
@@ -4492,9 +4540,10 @@ def loan_payment_add(lid):
 @login_required
 @admin_required
 def loan_payment_delete(pid):
-    payment = LoanPayment.query.get_or_404(pid)
+    payment = LoanPayment.query.filter_by(id=pid).first_or_404()
     log_audit('DELETE', 'loan_payments', pid, f'Deleted loan repayment of {payment.amount}')
-    db.session.delete(payment)
+    payment.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(payment)
     db.session.commit()
     flash('Loan repayment deleted.', 'warning')
     return redirect(url_for('loans_list'))
@@ -4539,7 +4588,7 @@ def payable_add():
 @login_required
 @permission_required('finance')
 def payable_mark_paid(pid):
-    p = Payable.query.get_or_404(pid)
+    p = Payable.query.filter_by(id=pid).first_or_404()
     p.status = 'paid'
     p.paid_date = date.today()
     log_audit('UPDATE', 'payables', pid, f'Marked payable to {p.supplier_name} as paid')
@@ -4553,9 +4602,10 @@ def payable_mark_paid(pid):
 @login_required
 @admin_required
 def payable_delete(pid):
-    p = Payable.query.get_or_404(pid)
+    p = Payable.query.filter_by(id=pid).first_or_404()
     log_audit('DELETE', 'payables', pid, f'Deleted payable to {p.supplier_name}')
-    db.session.delete(p)
+    p.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(p)
     db.session.commit()
     flash('Payable deleted.', 'warning')
     return redirect(url_for('payables_list'))
@@ -4600,7 +4650,7 @@ def receivable_add():
 @login_required
 @permission_required('finance')
 def receivable_mark_collected(rid):
-    r = Receivable.query.get_or_404(rid)
+    r = Receivable.query.filter_by(id=rid).first_or_404()
     r.status = 'collected'
     r.collected_date = date.today()
     log_audit('UPDATE', 'receivables', rid, f'Marked receivable from {r.client_name} as collected')
@@ -4614,9 +4664,10 @@ def receivable_mark_collected(rid):
 @login_required
 @admin_required
 def receivable_delete(rid):
-    r = Receivable.query.get_or_404(rid)
+    r = Receivable.query.filter_by(id=rid).first_or_404()
     log_audit('DELETE', 'receivables', rid, f'Deleted receivable from {r.client_name}')
-    db.session.delete(r)
+    r.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(r)
     db.session.commit()
     flash('Receivable deleted.', 'warning')
     return redirect(url_for('receivables_list'))
@@ -4661,9 +4712,10 @@ def capital_contribution_add():
 @login_required
 @admin_required
 def capital_contribution_delete(cid):
-    c = CapitalContribution.query.get_or_404(cid)
+    c = CapitalContribution.query.filter_by(id=cid).first_or_404()
     log_audit('DELETE', 'capital_contributions', cid, f'Deleted capital contribution from {c.contributor}')
-    db.session.delete(c)
+    c.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(c)
     db.session.commit()
     flash('Capital contribution deleted.', 'warning')
     return redirect(url_for('capital_list'))
@@ -4695,9 +4747,10 @@ def owner_drawing_add():
 @login_required
 @admin_required
 def owner_drawing_delete(did):
-    d = OwnerDrawing.query.get_or_404(did)
+    d = OwnerDrawing.query.filter_by(id=did).first_or_404()
     log_audit('DELETE', 'owner_drawings', did, f'Deleted owner drawing of {d.amount}')
-    db.session.delete(d)
+    d.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(d)
     db.session.commit()
     flash('Owner drawing deleted.', 'warning')
     return redirect(url_for('capital_list'))
@@ -4754,9 +4807,10 @@ def expense_add():
 @login_required
 @admin_required
 def expense_delete(eid):
-    e = Expense.query.get_or_404(eid)
+    e = Expense.query.filter_by(id=eid).first_or_404()
     log_audit('DELETE', 'expenses', eid, f'Deleted expense of {e.amount}')
-    db.session.delete(e)
+    e.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(e)
     db.session.commit()
     flash('Expense deleted.', 'warning')
     return redirect(url_for('expenses_list'))
@@ -4771,7 +4825,7 @@ def expense_category_add():
     if not name:
         raise ValueError('Category name is required.')
     parent_id = form_int(request.form, 'parent_id', required=False)
-    parent = ExpenseCategory.query.get(parent_id) if parent_id else None
+    parent = ExpenseCategory.query.filter_by(id=parent_id).first() if parent_id else None
     if parent_id and not parent:
         raise ValueError('Selected heading does not exist.')
 
@@ -4798,7 +4852,7 @@ def expense_category_add():
 @permission_required('finance')
 @handle_form_errors
 def expense_category_edit(cid):
-    cat = ExpenseCategory.query.get_or_404(cid)
+    cat = ExpenseCategory.query.filter_by(id=cid).first_or_404()
     if request.method == 'POST':
         name = request.form.get('name', '').strip()
         if not name:
@@ -4808,7 +4862,7 @@ def expense_category_edit(cid):
             raise ValueError('A category cannot be its own heading.')
         if parent_id and any(child.id == parent_id for child in cat.children):
             raise ValueError('Cannot move a heading under one of its own sub-headings.')
-        parent = ExpenseCategory.query.get(parent_id) if parent_id else None
+        parent = ExpenseCategory.query.filter_by(id=parent_id).first() if parent_id else None
         if parent_id and not parent:
             raise ValueError('Selected heading does not exist.')
         if parent_id and cat.children:
@@ -4831,7 +4885,7 @@ def expense_category_edit(cid):
 @login_required
 @permission_required('finance')
 def expense_category_delete(cid):
-    cat = ExpenseCategory.query.get_or_404(cid)
+    cat = ExpenseCategory.query.filter_by(id=cid).first_or_404()
     if cat.children:
         flash(f'Cannot delete "{cat.name}" — it has sub-headings under it. Delete those first.', 'danger')
         return redirect(request.referrer or url_for('expenses_list'))
@@ -4840,7 +4894,8 @@ def expense_category_delete(cid):
         return redirect(request.referrer or url_for('expenses_list'))
     name = cat.display_name
     log_audit('DELETE', 'expense_categories', cid, f'Deleted expense category {name}')
-    db.session.delete(cat)
+    cat.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(cat)
     db.session.commit()
     flash(f'"{name}" deleted.', 'warning')
     return redirect(request.referrer or url_for('expenses_list'))
@@ -4882,7 +4937,7 @@ def franchise_daily_income_add():
             return redirect(url_for('franchise_daily_income_list'))
         entry_date = parse_date(request.form['entry_date'])
         vehicle_id = form_int(request.form, 'vehicle_id', required=False)
-        vehicle = FranchiseVehicle.query.get(vehicle_id) if vehicle_id else None
+        vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
         if vehicle_id and not vehicle:
             raise ValueError('Select a valid franchise vehicle.')
         label = vehicle.number_plate if vehicle else 'the whole franchise'
@@ -4890,17 +4945,25 @@ def franchise_daily_income_add():
             raise ValueError(f'A daily income entry for {label} on {entry_date} already exists — delete it first to re-enter.')
         amounts = {f: form_float(request.form, f, label=lbl, required=False, default=0)
                    for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS}
-        entry = FranchiseDailyIncome(
-            entry_date=entry_date,
-            vehicle_id=vehicle.id if vehicle else None,
-            income=form_float(request.form, 'income', required=False, default=0),
-            other_expenditure=form_float(request.form, 'other_expenditure', required=False, default=0),
-            deposited=form_float(request.form, 'deposited', required=False, default=0),
-            description=request.form.get('description', '').strip(),
-            created_by=current_user.id,
-            **amounts,
-        )
-        db.session.add(entry)
+        # The (entry_date, vehicle_id) uniqueness is enforced at the DB
+        # level, and a soft-deleted row still occupies that slot — restore
+        # it in place instead of inserting a fresh row, or the INSERT
+        # below would fail with an IntegrityError the very next time
+        # someone re-enters a date they'd previously deleted.
+        entry = (FranchiseDailyIncome.query.execution_options(include_deleted=True)
+                .filter_by(entry_date=entry_date, vehicle_id=vehicle.id if vehicle else None).first())
+        if entry:
+            entry.deleted_at = None
+        else:
+            entry = FranchiseDailyIncome(entry_date=entry_date, vehicle_id=vehicle.id if vehicle else None)
+            db.session.add(entry)
+        entry.income = form_float(request.form, 'income', required=False, default=0)
+        entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
+        entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
+        entry.description = request.form.get('description', '').strip()
+        entry.created_by = current_user.id
+        for f, value in amounts.items():
+            setattr(entry, f, value)
         db.session.flush()
         log_audit('CREATE', 'franchise_daily_income', entry.id,
                   f'Daily franchise income for {label} on {entry_date}: income {entry.income}, '
@@ -4918,9 +4981,10 @@ def franchise_daily_income_add():
 @login_required
 @admin_required
 def franchise_daily_income_delete(eid):
-    entry = FranchiseDailyIncome.query.get_or_404(eid)
+    entry = FranchiseDailyIncome.query.filter_by(id=eid).first_or_404()
     log_audit('DELETE', 'franchise_daily_income', eid, f'Deleted daily franchise income entry for {entry.entry_date}')
-    db.session.delete(entry)
+    entry.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(entry)
     db.session.commit()
     flash('Daily franchise income entry deleted.', 'warning')
     return redirect(url_for('franchise_daily_income_list'))
@@ -4949,7 +5013,7 @@ def franchise_weekly_income_add():
         raw_date = parse_date(request.form['week_start'])
         week_start = raw_date - timedelta(days=raw_date.weekday())  # normalize to that week's Monday
         vehicle_id = form_int(request.form, 'vehicle_id', required=False)
-        vehicle = FranchiseVehicle.query.get(vehicle_id) if vehicle_id else None
+        vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
         if vehicle_id and not vehicle:
             raise ValueError('Select a valid franchise vehicle.')
         label = vehicle.number_plate if vehicle else 'the whole franchise'
@@ -4957,17 +5021,23 @@ def franchise_weekly_income_add():
             raise ValueError(f'A weekly income entry for {label} for the week of {week_start} already exists — delete it first to re-enter.')
         amounts = {f: form_float(request.form, f, label=lbl, required=False, default=0)
                    for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS}
-        entry = FranchiseWeeklyIncome(
-            week_start=week_start,
-            vehicle_id=vehicle.id if vehicle else None,
-            income=form_float(request.form, 'income', required=False, default=0),
-            other_expenditure=form_float(request.form, 'other_expenditure', required=False, default=0),
-            deposited=form_float(request.form, 'deposited', required=False, default=0),
-            description=request.form.get('description', '').strip(),
-            created_by=current_user.id,
-            **amounts,
-        )
-        db.session.add(entry)
+        # See franchise_daily_income_add — restore a soft-deleted row at
+        # the same (week_start, vehicle_id) instead of inserting a fresh
+        # one, since that DB-level uniqueness still applies to it.
+        entry = (FranchiseWeeklyIncome.query.execution_options(include_deleted=True)
+                .filter_by(week_start=week_start, vehicle_id=vehicle.id if vehicle else None).first())
+        if entry:
+            entry.deleted_at = None
+        else:
+            entry = FranchiseWeeklyIncome(week_start=week_start, vehicle_id=vehicle.id if vehicle else None)
+            db.session.add(entry)
+        entry.income = form_float(request.form, 'income', required=False, default=0)
+        entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
+        entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
+        entry.description = request.form.get('description', '').strip()
+        entry.created_by = current_user.id
+        for f, value in amounts.items():
+            setattr(entry, f, value)
         db.session.flush()
         log_audit('CREATE', 'franchise_weekly_income', entry.id,
                   f'Weekly franchise income for {label} for week of {week_start}: income {entry.income}, '
@@ -4985,9 +5055,10 @@ def franchise_weekly_income_add():
 @login_required
 @admin_required
 def franchise_weekly_income_delete(eid):
-    entry = FranchiseWeeklyIncome.query.get_or_404(eid)
+    entry = FranchiseWeeklyIncome.query.filter_by(id=eid).first_or_404()
     log_audit('DELETE', 'franchise_weekly_income', eid, f'Deleted weekly franchise income entry for week of {entry.week_start}')
-    db.session.delete(entry)
+    entry.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(entry)
     db.session.commit()
     flash('Weekly franchise income entry deleted.', 'warning')
     return redirect(url_for('franchise_weekly_income_list'))
@@ -5084,7 +5155,7 @@ def franchise_vehicle_add():
 @permission_required('franchise')
 @handle_form_errors
 def franchise_vehicle_edit(vid):
-    vehicle = FranchiseVehicle.query.get_or_404(vid)
+    vehicle = FranchiseVehicle.query.filter_by(id=vid).first_or_404()
     if request.method == 'POST':
         number_plate = request.form.get('number_plate', '').strip().upper()
         if not number_plate:
@@ -5111,12 +5182,13 @@ def franchise_vehicle_edit(vid):
 @login_required
 @admin_required
 def franchise_vehicle_delete(vid):
-    vehicle = FranchiseVehicle.query.get_or_404(vid)
+    vehicle = FranchiseVehicle.query.filter_by(id=vid).first_or_404()
     if FranchiseCollection.query.filter_by(vehicle_id=vid).first():
         flash('Cannot delete this vehicle — it has collection history. Mark it Inactive instead.', 'danger')
         return redirect(url_for('franchise_vehicles'))
     log_audit('DELETE', 'franchise_vehicles', vid, f'Deleted franchise vehicle {vehicle.number_plate}')
-    db.session.delete(vehicle)
+    vehicle.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(vehicle)
     db.session.commit()
     flash('Franchise vehicle deleted.', 'warning')
     return redirect(url_for('franchise_vehicles'))
@@ -5154,7 +5226,7 @@ def franchise_collection_add():
             flash('Already recorded.', 'info')
             return redirect(url_for('franchise_collections'))
         vehicle_id = form_int(request.form, 'vehicle_id')
-        vehicle = FranchiseVehicle.query.get(vehicle_id)
+        vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first()
         if not vehicle:
             raise ValueError('Select a valid franchise vehicle.')
         frequency = request.form.get('frequency', '')
@@ -5188,10 +5260,11 @@ def franchise_collection_add():
 @login_required
 @admin_required
 def franchise_collection_delete(cid):
-    collection = FranchiseCollection.query.get_or_404(cid)
+    collection = FranchiseCollection.query.filter_by(id=cid).first_or_404()
     log_audit('DELETE', 'franchise_collections', cid,
               f'Deleted collection of {collection.amount} for {collection.vehicle.number_plate} on {collection.entry_date}')
-    db.session.delete(collection)
+    collection.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(collection)
     db.session.commit()
     flash('Collection entry deleted.', 'warning')
     return redirect(url_for('franchise_collections'))
@@ -5661,9 +5734,14 @@ def import_batch_revert(batch_id):
     deleted = 0
     for rec in batch.records:
         model = IMPORT_REVERT_MODELS.get(rec.target_table)
+        # Deliberately .get(), not filter_by().first() — this must still
+        # find a record even if it was already soft-deleted by a normal
+        # user action, so reverting stays idempotent instead of silently
+        # skipping it.
         obj = model.query.get(rec.record_id) if model else None
         if obj:
-            db.session.delete(obj)
+            obj.deleted_at = datetime.now(timezone.utc)
+            touch_sync_fields(obj)
             deleted += 1
 
     batch.status = 'reverted'
@@ -5824,98 +5902,98 @@ SYNC_MODELS = {
     'vehicles': (Vehicle, (
         'registration', 'make', 'model', 'year', 'acquisition_cost', 'status',
         'fuel_type', 'daily_target', 'insurance_provider', 'insurance_policy_number',
-        'insurance_expiry', 'created_at',
+        'insurance_expiry', 'created_at', 'deleted_at',
     ), {}),
     'routes': (Route, (
-        'name', 'start_point', 'end_point', 'distance_km', 'fare_rate', 'status', 'created_at',
+        'name', 'start_point', 'end_point', 'distance_km', 'fare_rate', 'status', 'created_at', 'deleted_at',
     ), {}),
     'spare_parts': (SparePart, (
         'name', 'part_number', 'unit', 'cost_price', 'markup_percent', 'quantity_on_hand',
-        'reorder_level', 'status', 'notes', 'created_by', 'created_at',
+        'reorder_level', 'status', 'notes', 'created_by', 'created_at', 'deleted_at',
     ), {}),
     'expense_categories': (ExpenseCategory, (
-        'name', 'created_at',
+        'name', 'created_at', 'deleted_at',
     ), {'parent_id': 'expense_categories'}),
     'drivers': (Driver, (
         'name', 'license_number', 'phone', 'role', 'commission_rate', 'status',
-        'next_of_kin_name', 'next_of_kin_phone', 'next_of_kin_relationship', 'created_at',
+        'next_of_kin_name', 'next_of_kin_phone', 'next_of_kin_relationship', 'created_at', 'deleted_at',
     ), {'paired_driver_id': 'drivers', 'assigned_vehicle_id': 'vehicles'}),
     'expenses': (Expense, (
-        'expense_date', 'description', 'amount', 'created_by', 'created_at',
+        'expense_date', 'description', 'amount', 'created_by', 'created_at', 'deleted_at',
     ), {'category_id': 'expense_categories', 'vehicle_id': 'vehicles'}),
     'store_purchases': (StorePurchase, (
         'purchase_date', 'quantity', 'unit_cost', 'total_cost', 'supplier', 'notes',
-        'created_by', 'created_at',
+        'created_by', 'created_at', 'deleted_at',
     ), {'part_id': 'spare_parts'}),
     'daily_logs': (DailyLog, (
         'log_date', 'trips_completed', 'gross_revenue', 'garnish', 'reason_for_shortfall',
-        'notes', 'created_by', 'updated_by', 'created_at',
+        'notes', 'created_by', 'updated_by', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'vehicles', 'driver_id': 'drivers', 'conductor_id': 'drivers', 'route_id': 'routes'}),
     'fuel_logs': (FuelLog, (
         'log_date', 'liters', 'cost_per_liter', 'total_cost', 'odometer', 'supplier', 'notes',
-        'created_by', 'created_at',
+        'created_by', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'vehicles'}),
     'maintenance_logs': (MaintenanceLog, (
         'log_date', 'description', 'parts_cost', 'labor_cost', 'total_cost', 'mechanic', 'notes',
-        'created_by', 'created_at',
+        'created_by', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'vehicles'}),
     'store_sales': (StoreSale, (
         'sale_date', 'quantity', 'unit_cost', 'unit_price', 'total_amount', 'customer_name',
-        'notes', 'created_by', 'created_at',
+        'notes', 'created_by', 'created_at', 'deleted_at',
     ), {'part_id': 'spare_parts', 'vehicle_id': 'vehicles'}),
     # Phase 5 — franchise/compliance tables.
     'franchise_vehicles': (FranchiseVehicle, (
         'number_plate', 'franchisee_name', 'status', 'agreed_amount', 'amount_owed',
-        'notes', 'created_at',
+        'notes', 'created_at', 'deleted_at',
     ), {}),
     'vehicle_documents': (VehicleDocument, (
-        'doc_type', 'reference_number', 'issue_date', 'expiry_date', 'notes', 'created_at',
+        'doc_type', 'reference_number', 'issue_date', 'expiry_date', 'notes', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'vehicles'}),
     'maintenance_schedules': (MaintenanceSchedule, (
         'description', 'interval_days', 'interval_km', 'last_done_date', 'last_done_odometer',
-        'next_due_date', 'next_due_odometer', 'status', 'created_at',
+        'next_due_date', 'next_due_odometer', 'status', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'vehicles'}),
     'franchise_daily_income': (FranchiseDailyIncome, (
         'entry_date', 'income', 'exp_traffic_fines', 'exp_facilitation_fees', 'exp_workshop',
-        'exp_wages', 'other_expenditure', 'deposited', 'description', 'created_by', 'created_at',
+        'exp_wages', 'other_expenditure', 'deposited', 'description', 'created_by', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'franchise_vehicles'}),
     'franchise_weekly_income': (FranchiseWeeklyIncome, (
         'week_start', 'income', 'exp_traffic_fines', 'exp_facilitation_fees', 'exp_workshop',
-        'exp_wages', 'other_expenditure', 'deposited', 'description', 'created_by', 'created_at',
+        'exp_wages', 'other_expenditure', 'deposited', 'description', 'created_by', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'franchise_vehicles'}),
     'franchise_collections': (FranchiseCollection, (
-        'entry_date', 'frequency', 'amount', 'expense', 'notes', 'created_by', 'created_at',
+        'entry_date', 'frequency', 'amount', 'expense', 'notes', 'created_by', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'franchise_vehicles'}),
     # Phase 6 — financial tables. Full read/write on spokes, same as
     # every other synced table (Phase 6a's pull-only, spoke-write-blocked
     # burn-in period has ended).
     'loans': (Loan, (
         'lender', 'principal', 'interest_rate', 'start_date', 'term_months', 'status',
-        'notes', 'created_by', 'created_at',
+        'notes', 'created_by', 'created_at', 'deleted_at',
     ), {}),
     'payables': (Payable, (
         'supplier_name', 'description', 'amount', 'invoice_date', 'due_date', 'status',
-        'paid_date', 'created_by', 'created_at',
+        'paid_date', 'created_by', 'created_at', 'deleted_at',
     ), {}),
     'receivables': (Receivable, (
         'client_name', 'description', 'amount', 'invoice_date', 'due_date', 'status',
-        'collected_date', 'created_by', 'created_at',
+        'collected_date', 'created_by', 'created_at', 'deleted_at',
     ), {}),
     'capital_contributions': (CapitalContribution, (
-        'contributor', 'amount', 'contribution_date', 'notes', 'created_by', 'created_at',
+        'contributor', 'amount', 'contribution_date', 'notes', 'created_by', 'created_at', 'deleted_at',
     ), {}),
     'owner_drawings': (OwnerDrawing, (
-        'amount', 'drawing_date', 'notes', 'created_by', 'created_at',
+        'amount', 'drawing_date', 'notes', 'created_by', 'created_at', 'deleted_at',
     ), {}),
     'budgets': (Budget, (
-        'category', 'month', 'amount', 'created_by', 'created_at',
+        'category', 'month', 'amount', 'created_by', 'created_at', 'deleted_at',
     ), {}),
     'loan_payments': (LoanPayment, (
-        'payment_date', 'amount', 'notes', 'created_by', 'created_at',
+        'payment_date', 'amount', 'notes', 'created_by', 'created_at', 'deleted_at',
     ), {'loan_id': 'loans'}),
     'commission_payments': (CommissionPayment, (
         'payment_date', 'amount', 'period_start', 'period_end', 'method', 'notes',
-        'created_by', 'created_at',
+        'created_by', 'created_at', 'deleted_at',
     ), {'driver_id': 'drivers'}),
 }
 
@@ -5928,6 +6006,46 @@ SYNC_TABLE_ORDER = [
     'loan_payments', 'commission_payments',
     'daily_logs', 'fuel_logs', 'maintenance_logs', 'store_sales',
 ]
+
+# ─────────────────────────────────────────────────────────────
+# Phase 7 — soft-delete / tombstone sync. Deleting a record now sets
+# deleted_at instead of removing the row (see the delete routes below),
+# so the deletion itself can propagate to other instances as a normal
+# synced field change, the same way any other edit does — an actually
+# DELETE'd row would just look like the record never existed to a spoke
+# that hadn't synced it yet, with no way to tell "never existed" apart
+# from "existed, then got removed."
+#
+# Rather than manually auditing and adding "WHERE deleted_at IS NULL" to
+# every list/report query across this file (the largest, most
+# error-prone mechanical change the phased plan called out — trivial to
+# miss a call site, and a manual audit can't reach relationship-based
+# access like vehicle.fuel_logs at all), a single global SQLAlchemy query
+# filter excludes soft-deleted rows from every SELECT against a synced
+# model, automatically, everywhere, including relationship loads.
+#
+# The sync engine's own bookkeeping queries (apply_incoming_record's
+# upsert lookup, FK resolution, the push/pull selection queries) need to
+# see soft-deleted rows too — that's the whole point of a tombstone — so
+# those explicitly opt out via .execution_options(include_deleted=True).
+_SOFT_DELETE_MODELS = tuple(model for model, _fields, _fk in SYNC_MODELS.values())
+# with_loader_criteria takes one entity (or a common base) per call, not an
+# arbitrary tuple of unrelated classes — build one option per model, once,
+# and apply the whole set to every query rather than re-building it per call.
+_SOFT_DELETE_CRITERIA_OPTIONS = tuple(
+    with_loader_criteria(model, lambda cls: cls.deleted_at.is_(None), include_aliases=True)
+    for model in _SOFT_DELETE_MODELS
+)
+
+
+@event.listens_for(db.session, 'do_orm_execute')
+def _exclude_soft_deleted_rows(execute_state):
+    if not execute_state.is_select:
+        return
+    if execute_state.execution_options.get('include_deleted', False):
+        return
+    execute_state.statement = execute_state.statement.options(*_SOFT_DELETE_CRITERIA_OPTIONS)
+
 
 _SYNC_EPOCH = datetime(1970, 1, 1)  # naive — see _parse_sync_dt
 
@@ -5976,7 +6094,8 @@ def _resolve_sync_fk(ref_table, sync_uuid_value):
     if not sync_uuid_value:
         return None
     ref_model = SYNC_MODELS[ref_table][0]
-    ref_obj = ref_model.query.filter_by(sync_uuid=sync_uuid_value).first()
+    ref_obj = (ref_model.query.execution_options(include_deleted=True)
+              .filter_by(sync_uuid=sync_uuid_value).first())
     return ref_obj.id if ref_obj else None
 
 
@@ -6029,7 +6148,7 @@ def apply_incoming_record(table, item, incoming_site_id, direction):
     """
     model, fields, fk_map = SYNC_MODELS[table]
     sync_uuid_value = item['sync_uuid']
-    existing = model.query.filter_by(sync_uuid=sync_uuid_value).first()
+    existing = model.query.execution_options(include_deleted=True).filter_by(sync_uuid=sync_uuid_value).first()
 
     resolved_fks = {}
     for fk_col, ref_table in fk_map.items():
@@ -6183,7 +6302,7 @@ def api_sync_pull():
         if table not in requested_tables:
             continue
         model = SYNC_MODELS[table][0]
-        rows = model.query.filter(model.server_touched_at > since).all()
+        rows = model.query.execution_options(include_deleted=True).filter(model.server_touched_at > since).all()
         for row in rows:
             field_values, fk_values = serialize_record_for_sync(table, row)
             changes.append({
@@ -6261,7 +6380,7 @@ def sync_push_to_hub():
     batch = []
     for table in SYNC_TABLE_ORDER:
         model = SYNC_MODELS[table][0]
-        for row in model.query.filter_by(pending_push=True).limit(200).all():
+        for row in model.query.execution_options(include_deleted=True).filter_by(pending_push=True).limit(200).all():
             field_values, fk_values = serialize_record_for_sync(table, row)
             batch.append({
                 'table': table, 'sync_uuid': row.sync_uuid,
@@ -6300,7 +6419,8 @@ def sync_push_to_hub():
     results_by_uuid = {r['sync_uuid']: r for r in result['results']}
     for table in SYNC_TABLE_ORDER:
         model = SYNC_MODELS[table][0]
-        for row in model.query.filter(model.pending_push == True, model.sync_uuid.in_(results_by_uuid.keys())).all():  # noqa: E712
+        for row in (model.query.execution_options(include_deleted=True)
+                    .filter(model.pending_push == True, model.sync_uuid.in_(results_by_uuid.keys())).all()):  # noqa: E712
             r = results_by_uuid[row.sync_uuid]
             if r['status'] == 'rejected':
                 continue
@@ -6648,7 +6768,7 @@ def migrate_db():
     for model in sync_models:
         if not inspector.has_table(model.__tablename__):
             continue
-        for row in model.query.filter(model.sync_uuid.is_(None)).all():
+        for row in model.query.execution_options(include_deleted=True).filter(model.sync_uuid.is_(None)).all():
             row.sync_uuid = uuid.uuid4().hex
     if db.session.dirty:
         db.session.commit()
@@ -6701,6 +6821,11 @@ def create_default_expense_categories():
                 Expense.query.filter_by(category_id=old.id).update({'category_id': new.id})
                 for child in list(old.children):
                     child.parent_id = new.id
+        # Deliberately a real delete, not soft-delete + touch_sync_fields —
+        # this is one-time bootstrap cleanup of legacy category names that
+        # runs identically on every instance's own first boot, not a user
+        # action, so there's nothing here that needs to propagate as a
+        # tombstone to any other instance.
         db.session.delete(old)
     db.session.flush()
 
