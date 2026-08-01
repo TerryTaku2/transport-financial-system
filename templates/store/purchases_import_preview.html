@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}Import Preview{% endblock %}
+{% block page_title %}Spares Store — Stock Import Preview{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Confirm Column Mapping</h1>
+    <div class="subtitle">{{ filename }} — {{ row_count }} row(s) detected</div>
+  </div>
+  <a href="{{ url_for('store_purchases') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Cancel</a>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Match Your Columns</h3></div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('store_purchases_import_preview') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="filename" value="{{ filename }}">
+      <input type="hidden" name="raw_data" value="{{ raw_data }}">
+      <p class="form-hint" style="margin-bottom:14px;">Tell us which column in your file holds each field, then confirm. Columns that don't apply can be left as "Not in file". Each row is a separate restock, so a file can bring in stock for many different dates at once.</p>
+      <div class="form-grid mb-16">
+        {% for field_key, label, _synonyms in fields %}
+        <div class="form-group">
+          <label>{{ label }}{% if field_key in ('date', 'part', 'quantity', 'unit_cost') %}<span class="req">*</span>{% endif %}</label>
+          <select name="map_{{ field_key }}">
+            <option value="">— Not in file —</option>
+            {% for h in headers %}
+            <option value="{{ h }}" {% if mapping.get(field_key) == h %}selected{% endif %}>{{ h }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endfor %}
+      </div>
+      <label style="display:flex;gap:6px;align-items:center;font-size:13px;font-weight:normal;margin-bottom:16px;">
+        <input type="checkbox" name="auto_create_parts" value="1" checked style="width:auto;">
+        Auto-create parts not already in Spares Store inventory
+      </label>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-outline"><i data-feather="refresh-cw"></i> Re-preview</button>
+        <button type="submit" formaction="{{ url_for('store_purchases_import_confirm') }}" class="btn btn-primary"><i data-feather="upload"></i> Confirm Import</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Preview — first {{ preview_rows|length }} of {{ row_count }} row(s)</h3></div>
+  {% if preview_rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Part</th><th>Quantity</th><th>Unit Cost</th><th>Supplier</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        {% for row in preview_rows %}
+        <tr>
+          <td>{{ row.get('date') if row.get('date') not in (None, '') else '—' }}</td>
+          <td>{{ row.get('part') if row.get('part') not in (None, '') else '—' }}</td>
+          <td>{{ row.get('quantity') if row.get('quantity') not in (None, '') else '—' }}</td>
+          <td>{{ row.get('unit_cost') if row.get('unit_cost') not in (None, '') else '—' }}</td>
+          <td>{{ row.get('supplier') if row.get('supplier') not in (None, '') else '—' }}</td>
+          <td>{{ row.get('notes') if row.get('notes') not in (None, '') else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p>No columns are mapped yet, so no data would import — pick the matching columns above and click Re-preview.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

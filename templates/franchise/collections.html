@@ -11,6 +11,21 @@
   <a href="{{ url_for('franchise_collection_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Record Collection</a>
 </div>
 
+<div class="card mb-24" style="padding:10px 14px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+    <div class="form-hint" style="margin:0;">Import daily or weekly collections as CSV/Excel — same import flow as Daily Transactions</div>
+    <form method="POST" action="{{ url_for('franchise_collections_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <select name="frequency" style="font-size:12px;">
+        <option value="daily">Daily</option>
+        <option value="weekly">Weekly</option>
+      </select>
+      <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required style="font-size:12px;">
+      <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload"></i> Import</button>
+    </form>
+  </div>
+</div>
+
 <form method="GET" class="filter-bar mb-16">
   <div class="form-group">
     <label>Vehicle</label>

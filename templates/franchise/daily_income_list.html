@@ -11,6 +11,18 @@
   <a href="{{ url_for('franchise_daily_income_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Daily Income</a>
 </div>
 
+<div class="card mb-24" style="padding:10px 14px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+    <div class="form-hint" style="margin:0;">Import daily income and expenses as CSV/Excel</div>
+    <form method="POST" action="{{ url_for('franchise_income_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="kind" value="daily">
+      <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required style="font-size:12px;">
+      <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload"></i> Import</button>
+    </form>
+  </div>
+</div>
+
 <div class="card">
   {% if entries.items %}
   <div class="table-wrap">

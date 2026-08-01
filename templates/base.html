@@ -89,6 +89,9 @@
     {% if current_user.has_permission('reports') %}
     <div class="nav-section">
       <div class="nav-section-label">Finance</div>
+      <a href="{{ url_for('report_consolidated') }}" class="nav-item {% if request.endpoint == 'report_consolidated' %}active{% endif %}">
+        <i data-feather="layers"></i> Consolidated Overview
+      </a>
       <a href="{{ url_for('report_income') }}" class="nav-item {% if request.endpoint == 'report_income' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Income Statement
       </a>

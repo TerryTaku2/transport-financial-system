@@ -1665,6 +1665,303 @@ def import_franchise_workbook(file, created_by=None):
     )
 
 
+# ─────────────────────────────────────────────────────────────
+# Franchise Collections Import — flat-row CSV/Excel import with a confirmed
+# column mapping, mirroring the Daily Transactions (driver ledger) importer
+# above. Unlike import_franchise_workbook (which auto-detects a vehicle x
+# date matrix with no header row), this expects one row per collection,
+# same shape as a franchise's own spreadsheet export.
+# ─────────────────────────────────────────────────────────────
+CANONICAL_FRANCHISE_FIELDS = [
+    ('date', 'Date', ['date', 'entry date', 'collection date', 'day']),
+    ('vehicle', 'Vehicle / Number Plate', ['vehicle', 'number plate', 'plate', 'registration',
+                                           'reg', 'vehicle reg', 'number']),
+    ('franchisee', 'Franchisee Name', ['franchisee', 'franchisee name', 'owner', 'name']),
+    ('amount', 'Amount', ['amount', 'collection', 'collections', 'income', 'revenue',
+                          'takings', 'paid', 'amount paid']),
+    ('expense', 'Expense', ['expense', 'expenses', 'deductions', 'cost']),
+    ('notes', 'Notes', ['notes', 'note', 'remarks', 'comment', 'comments']),
+]
+
+FRANCHISE_ROW_KEY_MAP = {
+    'date': 'date', 'vehicle': 'vehicle', 'franchisee': 'franchisee',
+    'amount': 'amount', 'expense': 'expense', 'notes': 'notes',
+}
+
+
+def import_franchise_collection_rows(file_rows, frequency, auto_register_vehicles=False):
+    """Validate and persist already-mapped franchise collection rows (keyed by
+    'date', 'vehicle', 'franchisee', 'amount', 'expense', 'notes') as
+    FranchiseCollection entries of the given frequency ('daily'/'weekly').
+    Returns (imported_count, error_messages, error_rows, created_vehicle_plates,
+    created_records); does not commit — the caller decides when to commit/rollback.
+
+    If auto_register_vehicles is True, a row naming a plate that isn't on file
+    registers a new active FranchiseVehicle instead of erroring — mirrors
+    import_ledger_rows' auto_register_drivers behavior."""
+    vehicle_by_plate = {_normalize_registration(v.number_plate): v for v in FranchiseVehicle.query.all()}
+    created_vehicles = []
+    created_records = []
+
+    imported = 0
+    errors = []
+    error_rows = []
+    for i, raw_row in enumerate(file_rows, start=2):  # row 1 is the header
+        row = {(k or '').strip().lower(): v for k, v in raw_row.items()}
+        try:
+            date_raw = row.get('date')
+            if date_raw in (None, ''):
+                continue
+            entry_date = parse_import_date(date_raw)
+
+            plate_raw = str(row.get('vehicle') or '').strip()
+            amount = parse_import_number(row.get('amount'), 'Amount')
+            expense = parse_import_number(row.get('expense'), 'Expense')
+            if not plate_raw and amount is None and expense is None:
+                continue
+            if not plate_raw:
+                raise ValueError('vehicle / number plate is required.')
+
+            plate = _normalize_registration(plate_raw)
+            vehicle = vehicle_by_plate.get(plate)
+            if not vehicle:
+                if auto_register_vehicles:
+                    franchisee_name = str(row.get('franchisee') or '').strip() or plate_raw.strip().title()
+                    vehicle = FranchiseVehicle(number_plate=plate, franchisee_name=franchisee_name, status='active')
+                    db.session.add(vehicle)
+                    db.session.flush()
+                    vehicle_by_plate[plate] = vehicle
+                    created_vehicles.append(plate)
+                    created_records.append(('franchise_vehicles', vehicle.id))
+                else:
+                    raise ValueError(f'unknown vehicle "{plate_raw}" — add it under Franchise Vehicles first, '
+                                     'or tick "Auto-register new vehicles".')
+
+            if amount is None:
+                raise ValueError('Amount is required.')
+
+            if FranchiseCollection.query.filter_by(
+                    vehicle_id=vehicle.id, entry_date=entry_date, frequency=frequency).first():
+                raise ValueError(f'a {frequency} collection for {vehicle.number_plate} on {entry_date} '
+                                 'already exists — skipped.')
+
+            collection = FranchiseCollection(
+                vehicle_id=vehicle.id, entry_date=entry_date, frequency=frequency,
+                amount=amount, expense=expense or 0,
+                notes=str(row.get('notes') or '').strip(), created_by=current_user.id,
+            )
+            db.session.add(collection)
+            db.session.flush()
+            created_records.append(('franchise_collections', collection.id))
+            imported += 1
+        except ValueError as e:
+            errors.append(f'Row {i}: {e}')
+            error_rows.append({**row, 'System_Error': str(e)})
+
+    return imported, errors, error_rows, created_vehicles, created_records
+
+
+# ─────────────────────────────────────────────────────────────
+# Franchise Income Import — flat-row CSV/Excel import for the Daily/Weekly
+# Income reconciliation pages (FranchiseDailyIncome/FranchiseWeeklyIncome),
+# same two-step confirmed-mapping flow as the collections importer above.
+# Each row is a whole-franchise (or, if a Vehicle column is mapped, a single
+# vehicle's) reconciliation for one date — income, the four expense
+# categories, other expenditure, and cash deposited.
+# ─────────────────────────────────────────────────────────────
+CANONICAL_FRANCHISE_INCOME_FIELDS = [
+    ('date', 'Date', ['date', 'entry date', 'week start', 'week of', 'day']),
+    ('vehicle', 'Vehicle / Number Plate', ['vehicle', 'number plate', 'plate']),
+    ('income', 'Income', ['income', 'total income', 'revenue', 'collections']),
+    ('exp_traffic_fines', 'Traffic Fines', ['traffic fines', 'fines']),
+    ('exp_facilitation_fees', 'Facilitation Fees', ['facilitation fees', 'facilitation']),
+    ('exp_workshop', 'Workshop', ['workshop', 'workshop all', 'repairs']),
+    ('exp_wages', 'Wages', ['wages', 'salaries']),
+    ('other_expenditure', 'Other Expenditure', ['other expenditure', 'other expenses', 'other']),
+    ('deposited', 'Deposited', ['deposited', 'deposit', 'banked', 'cash deposited']),
+    ('description', 'Description', ['description', 'notes', 'remarks', 'comment', 'comments']),
+]
+
+FRANCHISE_INCOME_ROW_KEY_MAP = {key: key for key, _label, _syn in CANONICAL_FRANCHISE_INCOME_FIELDS}
+
+
+def import_franchise_income_rows(file_rows, model_cls, date_field, week_normalize=False):
+    """Validate and persist already-mapped franchise income/expense
+    reconciliation rows (keyed by the CANONICAL_FRANCHISE_INCOME_FIELDS
+    field names) into model_cls (FranchiseDailyIncome or
+    FranchiseWeeklyIncome), one entry per date_field ('entry_date' or
+    'week_start'). A blank Vehicle column leaves the entry whole-franchise
+    (vehicle_id=None), matching the manual Add form's default. If
+    week_normalize is True, each row's date is normalized to that week's
+    Monday before being used as the key — mirrors franchise_weekly_income_add,
+    since FranchiseWeeklyIncome holds one row per calendar week, not per day;
+    a source file with several days in the same week must already be
+    aggregated to one row per week, or later days will collide with the
+    first on the unique (week_start, vehicle_id) constraint and be quarantined
+    as duplicates rather than silently overwriting it.
+    Returns (imported_count, error_messages, error_rows, created_records);
+    does not commit — the caller decides when to commit/rollback."""
+    vehicle_by_plate = {_normalize_registration(v.number_plate): v for v in FranchiseVehicle.query.all()}
+    table_name = model_cls.__tablename__
+    created_records = []
+
+    imported = 0
+    errors = []
+    error_rows = []
+    for i, raw_row in enumerate(file_rows, start=2):  # row 1 is the header
+        row = {(k or '').strip().lower(): v for k, v in raw_row.items()}
+        try:
+            date_raw = row.get('date')
+            if date_raw in (None, ''):
+                continue
+            entry_date = parse_import_date(date_raw)
+            if week_normalize:
+                entry_date = entry_date - timedelta(days=entry_date.weekday())
+
+            plate_raw = str(row.get('vehicle') or '').strip()
+            vehicle = None
+            if plate_raw:
+                vehicle = vehicle_by_plate.get(_normalize_registration(plate_raw))
+                if not vehicle:
+                    raise ValueError(f'unknown vehicle "{plate_raw}" — add it under Franchise Vehicles first, '
+                                     'or leave the Vehicle column blank for a whole-franchise entry.')
+
+            existing = model_cls.query.execution_options(include_deleted=True).filter_by(
+                **{date_field: entry_date}, vehicle_id=vehicle.id if vehicle else None).first()
+            if existing and existing.deleted_at is None:
+                label = vehicle.number_plate if vehicle else 'the whole franchise'
+                raise ValueError(f'an entry for {label} on {entry_date} already exists — skipped.')
+
+            entry = existing or model_cls(vehicle_id=vehicle.id if vehicle else None)
+            if existing:
+                existing.deleted_at = None
+            else:
+                db.session.add(entry)
+            setattr(entry, date_field, entry_date)
+            entry.income = parse_import_number(row.get('income'), 'Income') or 0
+            entry.exp_traffic_fines = parse_import_number(row.get('exp_traffic_fines'), 'Traffic Fines') or 0
+            entry.exp_facilitation_fees = parse_import_number(row.get('exp_facilitation_fees'), 'Facilitation Fees') or 0
+            entry.exp_workshop = parse_import_number(row.get('exp_workshop'), 'Workshop') or 0
+            entry.exp_wages = parse_import_number(row.get('exp_wages'), 'Wages') or 0
+            entry.other_expenditure = parse_import_number(row.get('other_expenditure'), 'Other Expenditure') or 0
+            entry.deposited = parse_import_number(row.get('deposited'), 'Deposited') or 0
+            entry.description = str(row.get('description') or '').strip()
+            entry.created_by = current_user.id
+            db.session.flush()
+            created_records.append((table_name, entry.id))
+            imported += 1
+        except ValueError as e:
+            errors.append(f'Row {i}: {e}')
+            error_rows.append({**row, 'System_Error': str(e)})
+
+    return imported, errors, error_rows, created_records
+
+
+# ─────────────────────────────────────────────────────────────
+# Spares Store Stock Import — flat-row CSV/Excel import for restocking.
+# Each row is one StorePurchase (a restock) for a named part on a given
+# date, so — unlike the franchise collections/income importers, which
+# reject a second row for the same date/vehicle — the same part can
+# legitimately appear on many different dates (or even the same date
+# twice, e.g. two separate deliveries) in a single file.
+# ─────────────────────────────────────────────────────────────
+CANONICAL_STOCK_FIELDS = [
+    ('date', 'Date', ['date', 'purchase date', 'restock date', 'day']),
+    ('part', 'Part Name / Part Number', ['part', 'part name', 'name', 'part number',
+                                         'item', 'item name', 'description']),
+    ('quantity', 'Quantity', ['quantity', 'qty', 'qty received', 'units', 'quantity received']),
+    ('unit_cost', 'Unit Cost', ['unit cost', 'cost', 'price', 'unit price', 'cost price']),
+    ('supplier', 'Supplier', ['supplier', 'vendor', 'source']),
+    ('notes', 'Notes', ['notes', 'note', 'remarks', 'comment', 'comments']),
+]
+
+STOCK_ROW_KEY_MAP = {key: key for key, _label, _syn in CANONICAL_STOCK_FIELDS}
+
+
+def import_stock_purchase_rows(file_rows, auto_create_parts=False):
+    """Validate and persist already-mapped stock rows (keyed by 'date', 'part',
+    'quantity', 'unit_cost', 'supplier', 'notes') as StorePurchase entries,
+    rolling each into its part's quantity_on_hand and weighted-average
+    cost_price exactly like the manual Record Purchase form does. Returns
+    (imported_count, error_messages, error_rows, created_parts, created_records);
+    does not commit — the caller decides when to commit/rollback.
+
+    If auto_create_parts is True, a row naming a part that isn't on file
+    (matched by part_number first, then by name) creates a new active
+    SparePart instead of erroring — mirrors import_franchise_collection_rows'
+    auto_register_vehicles behavior."""
+    parts = SparePart.query.all()
+    part_by_number = {p.part_number.strip().upper(): p for p in parts if p.part_number and p.part_number.strip()}
+    part_by_name = {p.name.strip().lower(): p for p in parts}
+    created_parts = []
+    created_records = []
+
+    imported = 0
+    errors = []
+    error_rows = []
+    for i, raw_row in enumerate(file_rows, start=2):  # row 1 is the header
+        row = {(k or '').strip().lower(): v for k, v in raw_row.items()}
+        try:
+            date_raw = row.get('date')
+            if date_raw in (None, ''):
+                continue
+            purchase_date = parse_import_date(date_raw)
+
+            part_raw = str(row.get('part') or '').strip()
+            quantity_raw = parse_import_number(row.get('quantity'), 'Quantity')
+            if not part_raw and quantity_raw is None:
+                continue
+            if not part_raw:
+                raise ValueError('part name / part number is required.')
+            if quantity_raw is None:
+                raise ValueError('Quantity is required.')
+            if quantity_raw <= 0 or quantity_raw != int(quantity_raw):
+                raise ValueError(f'Quantity "{quantity_raw}" must be a whole number greater than 0.')
+            quantity = int(quantity_raw)
+
+            unit_cost = parse_import_number(row.get('unit_cost'), 'Unit Cost')
+            if unit_cost is None:
+                raise ValueError('Unit Cost is required.')
+            if unit_cost < 0:
+                raise ValueError('Unit Cost cannot be negative.')
+
+            part = part_by_number.get(part_raw.upper()) or part_by_name.get(part_raw.lower())
+            if not part:
+                if auto_create_parts:
+                    part = SparePart(name=part_raw, unit='pc', cost_price=0, quantity_on_hand=0,
+                                     created_by=current_user.id)
+                    db.session.add(part)
+                    db.session.flush()
+                    part_by_name[part_raw.lower()] = part
+                    created_parts.append(part_raw)
+                    created_records.append(('spare_parts', part.id))
+                else:
+                    raise ValueError(f'unknown part "{part_raw}" — add it under Spares Store first, '
+                                     'or tick "Auto-create new parts".')
+
+            purchase = StorePurchase(
+                part_id=part.id, purchase_date=purchase_date, quantity=quantity, unit_cost=unit_cost,
+                total_cost=quantity * unit_cost, supplier=str(row.get('supplier') or '').strip(),
+                notes=str(row.get('notes') or '').strip(), created_by=current_user.id,
+            )
+            new_total_qty = part.quantity_on_hand + quantity
+            part.cost_price = ((part.quantity_on_hand * part.cost_price) +
+                               (quantity * unit_cost)) / new_total_qty
+            part.quantity_on_hand = new_total_qty
+            touch_sync_fields(part)
+
+            db.session.add(purchase)
+            db.session.flush()
+            touch_sync_fields(purchase)
+            created_records.append(('store_purchases', purchase.id))
+            imported += 1
+        except ValueError as e:
+            errors.append(f'Row {i}: {e}')
+            error_rows.append({**row, 'System_Error': str(e)})
+
+    return imported, errors, error_rows, created_parts, created_records
+
+
 def form_float(form, field, label=None, required=True, default=None, min_value=None):
     label = label or field.replace('_', ' ').capitalize()
     raw = (form.get(field) or '').strip()
@@ -3398,6 +3695,101 @@ def store_purchase_delete(pid):
     return redirect(url_for('store_purchases'))
 
 
+@app.route('/store/purchases/import/preview', methods=['POST'])
+@login_required
+@permission_required('store')
+def store_purchases_import_preview():
+    """Same two-step confirmed-mapping flow as the Franchise Collections
+    importer: parse the file, auto-map its columns onto the canonical stock
+    fields, and show a confirmation/adjustment step before writing anything.
+    Also re-entered (without a fresh file) when the user adjusts the mapping
+    and clicks Re-preview — the parsed rows travel via raw_data."""
+    file = request.files.get('file')
+    if file and file.filename:
+        filename = file.filename
+        try:
+            headers, raw_rows = read_uploaded_table(file)
+        except ValueError as e:
+            flash(str(e), 'danger')
+            return redirect(url_for('store_purchases'))
+        mapping = auto_map_columns(headers, fields=CANONICAL_STOCK_FIELDS)
+    else:
+        try:
+            filename = request.form.get('filename', 'uploaded file')
+            payload = json.loads(request.form.get('raw_data') or '{}')
+            headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
+            if not headers or not raw_rows:
+                raise ValueError('Choose a CSV or Excel file to import.')
+            mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
+                       for field_key, _label, _syn in CANONICAL_STOCK_FIELDS}
+        except (ValueError, json.JSONDecodeError, TypeError):
+            flash('Choose a CSV or Excel file to import — the previous preview session expired.', 'danger')
+            return redirect(url_for('store_purchases'))
+
+    if not raw_rows:
+        flash('That file has no data rows to import — it only has a header row. '
+              'Add rows with a Date, Part and Quantity, then re-import.', 'warning')
+        return redirect(url_for('store_purchases'))
+
+    preview_rows = apply_column_mapping(headers, raw_rows[:10], mapping, row_key_map=STOCK_ROW_KEY_MAP)
+    return render_template('store/purchases_import_preview.html',
+                           filename=filename, headers=headers, mapping=mapping,
+                           fields=CANONICAL_STOCK_FIELDS, preview_rows=preview_rows,
+                           row_count=len(raw_rows),
+                           raw_data=json.dumps({'headers': headers, 'rows': raw_rows}))
+
+
+@app.route('/store/purchases/import/confirm', methods=['POST'])
+@login_required
+@permission_required('store')
+def store_purchases_import_confirm():
+    filename = request.form.get('filename', 'uploaded file')
+    try:
+        payload = json.loads(request.form.get('raw_data') or '{}')
+        headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
+        if not raw_rows:
+            raise ValueError('empty')
+    except (ValueError, json.JSONDecodeError, TypeError):
+        flash('That preview session expired — please choose the file again.', 'danger')
+        return redirect(url_for('store_purchases'))
+
+    mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
+               for field_key, _label, _syn in CANONICAL_STOCK_FIELDS}
+    file_rows = apply_column_mapping(headers, raw_rows, mapping, row_key_map=STOCK_ROW_KEY_MAP)
+    auto_create = request.form.get('auto_create_parts') == '1'
+    imported, errors, error_rows, created_parts, created_records = import_stock_purchase_rows(
+        file_rows, auto_create_parts=auto_create)
+
+    if imported or error_rows:
+        # Commit even when imported == 0: a batch made only of failed rows
+        # still needs to persist so its quarantine CSV can be downloaded.
+        save_import_batch('store_purchases', filename, len(raw_rows), imported, error_rows, created_records)
+        if imported:
+            log_audit('CREATE', 'store_purchases', None,
+                      f'Imported {imported} stock purchase row(s) from {filename}')
+        created_part_ids = [rid for table, rid in created_records if table == 'spare_parts']
+        for part_name, part_id in zip(created_parts, created_part_ids):
+            log_audit('CREATE', 'spare_parts', part_id,
+                      f'Auto-created spare part "{part_name}" from stock import ({filename}) — '
+                      'not on file, added because a purchase row named it.')
+        db.session.commit()
+    else:
+        db.session.rollback()
+
+    if imported:
+        flash(f'Imported {imported} stock purchase row(s).', 'success')
+    if created_parts:
+        flash(f'Auto-created new part(s): {", ".join(created_parts)}.', 'success')
+    if errors:
+        shown = errors[:10]
+        more = f' (+{len(errors) - 10} more)' if len(errors) > 10 else ''
+        flash('Skipped rows — ' + '; '.join(shown) + more, 'warning')
+    if not imported and not errors:
+        flash('No rows found to import.', 'warning')
+
+    return redirect(url_for('store_purchases'))
+
+
 @app.route('/store/sales')
 @login_required
 @permission_required('store')
@@ -4012,6 +4404,166 @@ def export_payroll_pdf():
     resp = make_response(out.getvalue())
     resp.headers['Content-Type'] = 'application/pdf'
     resp.headers['Content-Disposition'] = f'attachment; filename=payroll_{date_from_str}_to_{date_to_str}.pdf'
+    return resp
+
+
+def compute_consolidated_overview(df, dt):
+    """Company-wide P&L for [df, dt], combining the three standalone income
+    statements (Fleet, Franchise, Spares Store) into one set of segment
+    totals, pulled from the same helpers each of those pages already uses
+    so this can never drift from what they show individually.
+
+    Naively summing revenue/expenses across segments is still correct here
+    even though a store sale to a company vehicle shows up twice — once as
+    Store revenue, once as a Fleet expense (see vehicle_income_totals) — at
+    the same marked-up price. On combination the markup cancels out (Store
+    revenue includes it, Fleet expense includes it), leaving only the
+    store's real supplier cost as the company-wide expense, which is the
+    economically correct combined figure."""
+    gross_revenue, maintenance_cost, general_expenses, spares_cost = vehicle_income_totals(df, dt, None)
+    vehicle_expenses = db.session.query(func.sum(Expense.amount)).filter(
+        Expense.expense_date.between(df, dt), Expense.vehicle_id.isnot(None)).scalar() or 0
+    fleet_expenses = maintenance_cost + vehicle_expenses + general_expenses + spares_cost
+
+    daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
+    weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
+    daily_totals = _income_entry_totals(daily_entries)
+    weekly_totals = _income_entry_totals(weekly_entries)
+    franchise_income = daily_totals['income'] + weekly_totals['income']
+    franchise_expenses = daily_totals['total_expenditure'] + weekly_totals['total_expenditure']
+
+    sales = StoreSale.query.filter(StoreSale.sale_date.between(df, dt)).all()
+    store_revenue = sum(s.total_amount for s in sales)
+    store_cost = sum(s.unit_cost * s.quantity for s in sales)
+
+    segments = [
+        {'name': 'Fleet Operations', 'revenue': gross_revenue, 'expenses': fleet_expenses,
+         'net_profit': gross_revenue - fleet_expenses,
+         'count': DailyLog.query.filter(DailyLog.log_date.between(df, dt)).count()},
+        {'name': 'Franchise', 'revenue': franchise_income, 'expenses': franchise_expenses,
+         'net_profit': franchise_income - franchise_expenses,
+         'count': len(daily_entries) + len(weekly_entries)},
+        {'name': 'Spares Store', 'revenue': store_revenue, 'expenses': store_cost,
+         'net_profit': store_revenue - store_cost, 'count': len(sales)},
+    ]
+    totals = {
+        'revenue': sum(s['revenue'] for s in segments),
+        'expenses': sum(s['expenses'] for s in segments),
+        'net_profit': sum(s['net_profit'] for s in segments),
+    }
+    return segments, totals
+
+
+@app.route('/reports/consolidated')
+@login_required
+@permission_required('reports')
+def report_consolidated():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    segments, totals = compute_consolidated_overview(df, dt)
+    return render_template('reports/consolidated.html',
+        segments=segments, totals=totals,
+        date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/reports/consolidated/export.xlsx')
+@login_required
+@permission_required('reports')
+def export_consolidated_excel():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    segments, totals = compute_consolidated_overview(df, dt)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Consolidated'
+    bold = Font(bold=True)
+    money_fmt = '#,##0.00'
+
+    ws.append(['Company-Wide Consolidated Statement'])
+    ws['A1'].font = Font(bold=True, size=14)
+    ws.append([f'Period: {date_from_str} to {date_to_str}'])
+    ws.append([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
+    ws.append([])
+
+    headers = ['Segment', 'Entries', 'Revenue', 'Expenses', 'Net Profit']
+    ws.append(headers)
+    for cell in ws[ws.max_row]:
+        cell.font = bold
+
+    for s in segments:
+        ws.append([s['name'], s['count'], s['revenue'], s['expenses'], s['net_profit']])
+        r = ws.max_row
+        for col in ('C', 'D', 'E'):
+            ws[f'{col}{r}'].number_format = money_fmt
+
+    ws.append([])
+    ws.append(['TOTAL', '', totals['revenue'], totals['expenses'], totals['net_profit']])
+    r = ws.max_row
+    for cell in ws[r]:
+        cell.font = bold
+    for col in ('C', 'D', 'E'):
+        ws[f'{col}{r}'].number_format = money_fmt
+
+    for i, width in enumerate([22, 10, 16, 16, 16], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    resp.headers['Content-Disposition'] = f'attachment; filename=consolidated_{date_from_str}_to_{date_to_str}.xlsx'
+    return resp
+
+
+@app.route('/reports/consolidated/export.pdf')
+@login_required
+@permission_required('reports')
+def export_consolidated_pdf():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    segments, totals = compute_consolidated_overview(df, dt)
+
+    styles = getSampleStyleSheet()
+    elements = [
+        Paragraph('Company-Wide Consolidated Statement', styles['Title']),
+        Paragraph(f'Period: {date_from_str} to {date_to_str}', styles['Normal']),
+        Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}', styles['Normal']),
+        Spacer(1, 10),
+    ]
+
+    headers = ['Segment', 'Entries', 'Revenue', 'Expenses', 'Net Profit']
+    data = [headers]
+    for s in segments:
+        data.append([s['name'], str(s['count']), f"${s['revenue']:,.2f}",
+                     f"${s['expenses']:,.2f}", f"${s['net_profit']:,.2f}"])
+    data.append(['TOTAL', '', f"${totals['revenue']:,.2f}",
+                 f"${totals['expenses']:,.2f}", f"${totals['net_profit']:,.2f}"])
+
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f1f5f9')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8fafc')]),
+    ]))
+    elements.append(table)
+
+    out = io.BytesIO()
+    doc = SimpleDocTemplate(out, pagesize=A4,
+                             leftMargin=14 * mm, rightMargin=14 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
+    doc.build(elements)
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'application/pdf'
+    resp.headers['Content-Disposition'] = f'attachment; filename=consolidated_{date_from_str}_to_{date_to_str}.pdf'
     return resp
 
 
@@ -5218,6 +5770,104 @@ def franchise_weekly_income_delete(eid):
     return redirect(url_for('franchise_weekly_income_list'))
 
 
+@app.route('/franchise/income/import/preview', methods=['POST'])
+@login_required
+@permission_required('franchise')
+def franchise_income_import_preview():
+    """Same two-step flow as the Collections import: parse the file,
+    auto-map its columns onto the canonical income/expense fields, and show
+    a confirmation/adjustment step before writing anything. 'kind' picks
+    which page this import targets — Daily or Weekly Income — since they're
+    separate models with a different date grain."""
+    kind = request.form.get('kind', 'daily')
+    if kind not in ('daily', 'weekly'):
+        kind = 'daily'
+
+    file = request.files.get('file')
+    if file and file.filename:
+        filename = file.filename
+        try:
+            headers, raw_rows = read_uploaded_table(file)
+        except ValueError as e:
+            flash(str(e), 'danger')
+            return redirect(url_for('franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list'))
+        mapping = auto_map_columns(headers, fields=CANONICAL_FRANCHISE_INCOME_FIELDS)
+    else:
+        try:
+            filename = request.form.get('filename', 'uploaded file')
+            payload = json.loads(request.form.get('raw_data') or '{}')
+            headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
+            if not headers or not raw_rows:
+                raise ValueError('Choose a CSV or Excel file to import.')
+            mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
+                       for field_key, _label, _syn in CANONICAL_FRANCHISE_INCOME_FIELDS}
+        except (ValueError, json.JSONDecodeError, TypeError):
+            flash('Choose a CSV or Excel file to import — the previous preview session expired.', 'danger')
+            return redirect(url_for('franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list'))
+
+    if not raw_rows:
+        flash('That file has no data rows to import — it only has a header row. '
+              'Add rows with a Date and Income/expense figures, then re-import.', 'warning')
+        return redirect(url_for('franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list'))
+
+    preview_rows = apply_column_mapping(headers, raw_rows[:10], mapping, row_key_map=FRANCHISE_INCOME_ROW_KEY_MAP)
+    return render_template('franchise/income_import_preview.html',
+                           kind=kind, filename=filename,
+                           headers=headers, mapping=mapping, fields=CANONICAL_FRANCHISE_INCOME_FIELDS,
+                           preview_rows=preview_rows, row_count=len(raw_rows),
+                           raw_data=json.dumps({'headers': headers, 'rows': raw_rows}))
+
+
+@app.route('/franchise/income/import/confirm', methods=['POST'])
+@login_required
+@permission_required('franchise')
+def franchise_income_import_confirm():
+    kind = request.form.get('kind', 'daily')
+    if kind not in ('daily', 'weekly'):
+        kind = 'daily'
+    list_endpoint = 'franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list'
+    model_cls = FranchiseDailyIncome if kind == 'daily' else FranchiseWeeklyIncome
+    date_field = 'entry_date' if kind == 'daily' else 'week_start'
+
+    filename = request.form.get('filename', 'uploaded file')
+    try:
+        payload = json.loads(request.form.get('raw_data') or '{}')
+        headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
+        if not raw_rows:
+            raise ValueError('empty')
+    except (ValueError, json.JSONDecodeError, TypeError):
+        flash('That preview session expired — please choose the file again.', 'danger')
+        return redirect(url_for(list_endpoint))
+
+    mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
+               for field_key, _label, _syn in CANONICAL_FRANCHISE_INCOME_FIELDS}
+    file_rows = apply_column_mapping(headers, raw_rows, mapping, row_key_map=FRANCHISE_INCOME_ROW_KEY_MAP)
+    imported, errors, error_rows, created_records = import_franchise_income_rows(
+        file_rows, model_cls, date_field, week_normalize=(kind == 'weekly'))
+
+    if imported or error_rows:
+        # Commit even when imported == 0: a batch made only of failed rows
+        # still needs to persist so its quarantine CSV can be downloaded.
+        save_import_batch(model_cls.__tablename__, filename, len(raw_rows), imported, error_rows, created_records)
+        if imported:
+            log_audit('CREATE', model_cls.__tablename__, None,
+                      f'Imported {imported} {kind} income row(s) from {filename}')
+        db.session.commit()
+    else:
+        db.session.rollback()
+
+    if imported:
+        flash(f'Imported {imported} {kind} income row(s).', 'success')
+    if errors:
+        shown = errors[:10]
+        more = f' (+{len(errors) - 10} more)' if len(errors) > 10 else ''
+        flash('Skipped rows — ' + '; '.join(shown) + more, 'warning')
+    if not imported and not errors:
+        flash('No rows found to import.', 'warning')
+
+    return redirect(url_for(list_endpoint))
+
+
 @app.route('/franchise/import/workbook', methods=['POST'])
 @login_required
 @permission_required('franchise')
@@ -5422,6 +6072,108 @@ def franchise_collection_delete(cid):
     db.session.commit()
     flash('Collection entry deleted.', 'warning')
     return redirect(url_for('franchise_collections'))
+
+
+@app.route('/franchise/collections/import/preview', methods=['POST'])
+@login_required
+@permission_required('franchise')
+def franchise_collections_import_preview():
+    """Same two-step flow as the Daily Transactions ledger import: parse the
+    file, auto-map its columns onto the canonical franchise-collection
+    fields, and show the user a confirmation/adjustment step before writing
+    anything. Also re-entered (without a fresh file) when the user adjusts
+    the mapping and clicks Re-preview — the parsed rows travel via raw_data."""
+    frequency = request.form.get('frequency', 'daily')
+    if frequency not in ('daily', 'weekly'):
+        frequency = 'daily'
+
+    file = request.files.get('file')
+    if file and file.filename:
+        filename = file.filename
+        try:
+            headers, raw_rows = read_uploaded_table(file)
+        except ValueError as e:
+            flash(str(e), 'danger')
+            return redirect(url_for('franchise_collections'))
+        mapping = auto_map_columns(headers, fields=CANONICAL_FRANCHISE_FIELDS)
+    else:
+        try:
+            filename = request.form.get('filename', 'uploaded file')
+            payload = json.loads(request.form.get('raw_data') or '{}')
+            headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
+            if not headers or not raw_rows:
+                raise ValueError('Choose a CSV or Excel file to import.')
+            mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
+                       for field_key, _label, _syn in CANONICAL_FRANCHISE_FIELDS}
+        except (ValueError, json.JSONDecodeError, TypeError):
+            flash('Choose a CSV or Excel file to import — the previous preview session expired.', 'danger')
+            return redirect(url_for('franchise_collections'))
+
+    if not raw_rows:
+        flash('That file has no data rows to import — it only has a header row. '
+              'Add rows with a Date, Vehicle and Amount, then re-import.', 'warning')
+        return redirect(url_for('franchise_collections'))
+
+    preview_rows = apply_column_mapping(headers, raw_rows[:10], mapping, row_key_map=FRANCHISE_ROW_KEY_MAP)
+    return render_template('franchise/collections_import_preview.html',
+                           frequency=frequency, filename=filename,
+                           headers=headers, mapping=mapping, fields=CANONICAL_FRANCHISE_FIELDS,
+                           preview_rows=preview_rows, row_count=len(raw_rows),
+                           raw_data=json.dumps({'headers': headers, 'rows': raw_rows}))
+
+
+@app.route('/franchise/collections/import/confirm', methods=['POST'])
+@login_required
+@permission_required('franchise')
+def franchise_collections_import_confirm():
+    frequency = request.form.get('frequency', 'daily')
+    if frequency not in ('daily', 'weekly'):
+        frequency = 'daily'
+    filename = request.form.get('filename', 'uploaded file')
+    try:
+        payload = json.loads(request.form.get('raw_data') or '{}')
+        headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
+        if not raw_rows:
+            raise ValueError('empty')
+    except (ValueError, json.JSONDecodeError, TypeError):
+        flash('That preview session expired — please choose the file again.', 'danger')
+        return redirect(url_for('franchise_collections'))
+
+    mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
+               for field_key, _label, _syn in CANONICAL_FRANCHISE_FIELDS}
+    file_rows = apply_column_mapping(headers, raw_rows, mapping, row_key_map=FRANCHISE_ROW_KEY_MAP)
+    auto_register = request.form.get('auto_register') == '1'
+    imported, errors, error_rows, created_vehicles, created_records = import_franchise_collection_rows(
+        file_rows, frequency, auto_register_vehicles=auto_register)
+
+    if imported or error_rows:
+        # Commit even when imported == 0: a batch made only of failed rows
+        # still needs to persist so its quarantine CSV can be downloaded.
+        save_import_batch('franchise_collections', filename, len(raw_rows), imported, error_rows, created_records)
+        if imported:
+            log_audit('CREATE', 'franchise_collections', None,
+                      f'Imported {imported} {frequency} collection row(s) from {filename}')
+        created_vehicle_ids = [rid for table, rid in created_records if table == 'franchise_vehicles']
+        for plate, vid in zip(created_vehicles, created_vehicle_ids):
+            log_audit('CREATE', 'franchise_vehicles', vid,
+                      f'Auto-registered franchise vehicle "{plate}" from collections import ({filename}) — '
+                      f'not on file, added because a collection row named it.')
+        db.session.commit()
+    else:
+        db.session.rollback()
+
+    if imported:
+        flash(f'Imported {imported} {frequency} collection row(s).', 'success')
+    if created_vehicles:
+        flash(f'Auto-registered new franchise vehicle(s): {", ".join(created_vehicles)}.', 'success')
+    if errors:
+        shown = errors[:10]
+        more = f' (+{len(errors) - 10} more)' if len(errors) > 10 else ''
+        flash('Skipped rows — ' + '; '.join(shown) + more, 'warning')
+    if not imported and not errors:
+        flash('No rows found to import.', 'warning')
+
+    return redirect(url_for('franchise_collections', frequency=frequency))
 
 
 def _collections_by_day(frequency, df, dt):
@@ -5948,6 +6700,7 @@ def inject_unresolved_sync_conflicts_count():
 IMPORT_TARGET_PERMISSIONS = {
     'ledger': ('daily_logs', 'crew_portal'),
     'franchise_workbook': ('franchise',),
+    'store_purchases': ('store',),
 }
 
 IMPORT_REVERT_MODELS = {
@@ -5955,6 +6708,8 @@ IMPORT_REVERT_MODELS = {
     'fuel_logs': FuelLog,
     'franchise_vehicles': FranchiseVehicle,
     'franchise_collections': FranchiseCollection,
+    'store_purchases': StorePurchase,
+    'spare_parts': SparePart,
 }
 
 
@@ -5999,7 +6754,13 @@ def import_batch_revert(batch_id):
         return redirect(url_for('import_history'))
 
     deleted = 0
-    for rec in batch.records:
+    # store_purchases must be reverted before spare_parts: rolling back a
+    # purchase reads obj.part, which the global soft-delete query filter
+    # (see _exclude_soft_deleted_rows) would hide once that part itself has
+    # been soft-deleted — so a part auto-created by this same import (whose
+    # ImportBatchRecord can land in either order) must not be deleted first.
+    revert_order = {'spare_parts': 1}
+    for rec in sorted(batch.records, key=lambda r: revert_order.get(r.target_table, 0)):
         model = IMPORT_REVERT_MODELS.get(rec.target_table)
         # Deliberately .get(), not filter_by().first() — this must still
         # find a record even if it was already soft-deleted by a normal
@@ -6007,6 +6768,16 @@ def import_batch_revert(batch_id):
         # skipping it.
         obj = model.query.get(rec.record_id) if model else None
         if obj:
+            # A StorePurchase rolled quantity into its part's stock on hand
+            # (and cost into its weighted-average cost_price) at import time —
+            # unlike the other revertible models, undoing it means more than
+            # a soft-delete, or the part's stock would stay inflated forever.
+            # Mirrors store_purchase_delete's own manual-delete behavior,
+            # including its same caveat: historical average cost isn't
+            # recomputed, only quantity.
+            if rec.target_table == 'store_purchases' and obj.deleted_at is None:
+                obj.part.quantity_on_hand = max(0, obj.part.quantity_on_hand - obj.quantity)
+                touch_sync_fields(obj.part)
             obj.deleted_at = datetime.now(timezone.utc)
             touch_sync_fields(obj)
             deleted += 1

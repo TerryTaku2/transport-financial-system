@@ -1,0 +1,93 @@
+{% extends 'base.html' %}
+{% block title %}Consolidated Overview{% endblock %}
+{% block page_title %}Finance — Consolidated Overview{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Company-Wide Consolidated Statement</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; Fleet, Franchise &amp; Spares Store combined</div>
+  </div>
+  <div style="display:flex;gap:8px;">
+    <a href="{{ url_for('export_consolidated_excel', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
+      <i data-feather="download"></i> Export Excel
+    </a>
+    <a href="{{ url_for('export_consolidated_pdf', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
+      <i data-feather="download"></i> Export PDF
+    </a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Total Revenue</div>
+    <div class="kpi-value">{{ totals.revenue|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Total Expenses</div>
+    <div class="kpi-value">{{ totals.expenses|currency }}</div>
+  </div>
+  <div class="kpi-card {% if totals.net_profit < 0 %}kpi-red{% else %}kpi-green{% endif %}">
+    <div class="kpi-label">Net Profit</div>
+    <div class="kpi-value">{{ totals.net_profit|currency }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>By Segment</h3></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Segment</th>
+          <th class="text-right">Entries</th>
+          <th class="text-right">Revenue</th>
+          <th class="text-right">Expenses</th>
+          <th class="text-right">Net Profit</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for s in segments %}
+        <tr>
+          <td>{{ s.name }}</td>
+          <td class="text-right">{{ s.count }}</td>
+          <td class="text-right">{{ s.revenue|currency }}</td>
+          <td class="text-right">{{ s.expenses|currency }}</td>
+          <td class="text-right">{{ s.net_profit|currency }}</td>
+          <td class="text-right">
+            {% if s.name == 'Fleet Operations' %}
+            <a href="{{ url_for('report_income', date_from=date_from, date_to=date_to) }}" class="btn btn-xs btn-outline">Details</a>
+            {% elif s.name == 'Franchise' %}
+            <a href="{{ url_for('report_franchise_consolidated', date_from=date_from, date_to=date_to) }}" class="btn btn-xs btn-outline">Details</a>
+            {% elif s.name == 'Spares Store' %}
+            <a href="{{ url_for('store_trading_account', date_from=date_from, date_to=date_to) }}" class="btn btn-xs btn-outline">Details</a>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+        <tr class="summary-row">
+          <td>TOTAL</td>
+          <td></td>
+          <td class="text-right">{{ totals.revenue|currency }}</td>
+          <td class="text-right">{{ totals.expenses|currency }}</td>
+          <td class="text-right">{{ totals.net_profit|currency }}</td>
+          <td></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

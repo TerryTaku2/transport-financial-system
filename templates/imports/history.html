@@ -21,7 +21,11 @@
         {% for batch in batches.items %}
         <tr>
           <td>{{ batch.created_at.strftime('%d %b %Y %H:%M:%S') }}</td>
-          <td>{{ 'Ledger' if batch.target_type == 'ledger' else 'Franchise Workbook' }}</td>
+          <td>
+            {% if batch.target_type == 'ledger' %}Ledger
+            {% elif batch.target_type == 'store_purchases' %}Stock (Spares Store)
+            {% else %}Franchise Workbook{% endif %}
+          </td>
           <td>{{ batch.filename }}</td>
           <td>{{ batch.creator.username if batch.creator else '—' }}</td>
           <td>{{ batch.total_rows }}</td>
