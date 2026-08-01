@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% block title %}Import Preview{% endblock %}
+{% block page_title %}Franchise Vehicles — Import Preview{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Confirm Column Mapping</h1>
+    <div class="subtitle">{{ filename }} — {{ row_count }} row(s) detected, Vehicle Registration</div>
+  </div>
+  <a href="{{ url_for('franchise_vehicles') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Cancel</a>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Match Your Columns</h3></div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('franchise_vehicles_import_preview') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="filename" value="{{ filename }}">
+      <input type="hidden" name="raw_data" value="{{ raw_data }}">
+      <p class="form-hint" style="margin-bottom:14px;">Tell us which column in your file holds each field, then confirm. Columns that don't apply can be left as "Not in file". A plate already on file gets updated (fees, franchisee, status) instead of duplicated.</p>
+      <div class="form-grid mb-16">
+        {% for field_key, label, _synonyms in fields %}
+        <div class="form-group">
+          <label>{{ label }}{% if field_key == 'vehicle' %}<span class="req">*</span>{% endif %}</label>
+          <select name="map_{{ field_key }}">
+            <option value="">— Not in file —</option>
+            {% for h in headers %}
+            <option value="{{ h }}" {% if mapping.get(field_key) == h %}selected{% endif %}>{{ h }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-outline"><i data-feather="refresh-cw"></i> Re-preview</button>
+        <button type="submit" formaction="{{ url_for('franchise_vehicles_import_confirm') }}" class="btn btn-primary"><i data-feather="upload"></i> Confirm Import</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Preview — first {{ preview_rows|length }} of {{ row_count }} row(s)</h3></div>
+  {% if preview_rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Vehicle</th><th>Franchisee</th><th>Daily Fee</th><th>Weekly Fee</th><th>Status</th><th>Notes</th></tr>
+      </thead>
+      <tbody>
+        {% for row in preview_rows %}
+        <tr>
+          <td>{{ row.get('vehicle') if row.get('vehicle') not in (None, '') else '—' }}</td>
+          <td>{{ row.get('franchisee') if row.get('franchisee') not in (None, '') else '—' }}</td>
+          <td>{{ row.get('daily_fee') if row.get('daily_fee') not in (None, '') else '—' }}</td>
+          <td>{{ row.get('weekly_fee') if row.get('weekly_fee') not in (None, '') else '—' }}</td>
+          <td>{{ row.get('status') if row.get('status') not in (None, '') else '—' }}</td>
+          <td>{{ row.get('notes') if row.get('notes') not in (None, '') else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p>No columns are mapped yet, so no data would import — pick the matching columns above and click Re-preview.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

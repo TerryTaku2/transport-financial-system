@@ -32,9 +32,14 @@
           </select>
         </div>
         <div class="form-group">
-          <label>Agreed Franchise Amount (USD)</label>
-          <input type="number" name="agreed_amount" step="0.01" min="0" value="{{ vehicle.agreed_amount if vehicle else 0 }}" placeholder="0.00">
-          <div class="form-hint">The standalone fee this vehicle agreed to pay.</div>
+          <label>Daily Fee (USD)</label>
+          <input type="number" name="daily_fee" step="0.01" min="0" value="{{ vehicle.daily_fee if vehicle and vehicle.daily_fee is not none else '' }}" placeholder="0.00">
+          <div class="form-hint">The agreed fee this vehicle pays per day. Leave blank if it doesn't pay daily.</div>
+        </div>
+        <div class="form-group">
+          <label>Weekly Fee (USD)</label>
+          <input type="number" name="weekly_fee" step="0.01" min="0" value="{{ vehicle.weekly_fee if vehicle and vehicle.weekly_fee is not none else '' }}" placeholder="0.00">
+          <div class="form-hint">The agreed fee this vehicle pays per week. Leave blank if it doesn't pay weekly.</div>
         </div>
         <div class="form-group">
           <label>Amount Owed (USD)</label>

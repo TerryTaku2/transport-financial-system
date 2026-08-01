@@ -853,10 +853,13 @@ class FranchiseVehicle(db.Model):
     number_plate = db.Column(db.String(20), nullable=False, unique=True)
     franchisee_name = db.Column(db.String(100), nullable=False)
     status = db.Column(db.String(20), default='active')
-    # The standalone fee this vehicle agreed to pay (e.g. $10/day) — kept on
-    # the vehicle rather than derived, since it's a negotiated figure, not
-    # something computed from collections.
-    agreed_amount = db.Column(db.Float, nullable=False, default=0)
+    # The negotiated fee this vehicle owes per collection cycle — kept on the
+    # vehicle rather than derived, since it's an agreed figure, not something
+    # computed from collections. Separate daily/weekly columns (both nullable)
+    # since the same vehicle can owe a daily due, a weekly fee, or both — see
+    # FranchiseCollection.frequency.
+    daily_fee = db.Column(db.Float, nullable=True)
+    weekly_fee = db.Column(db.Float, nullable=True)
     # Running arrears balance — tracked manually rather than computed,
     # since "how much is owed" depends on a payment schedule this system
     # doesn't model (which days were actually due).
@@ -1370,10 +1373,14 @@ def auto_map_columns(headers, fields=None):
             match = next((h for h in candidates
                           if any(re.search(rf'\b{re.escape(s)}\b', h) for s in synonyms)), None)
         if not match:
-            close = difflib.get_close_matches(synonyms[0], candidates, n=1, cutoff=0.6)
+            # cutoff 0.72: high enough to reject coincidental look-alikes between
+            # unrelated words (e.g. "registration" vs "description", "owner" vs
+            # "other" both score ~0.6 by pure chance) while still catching genuine
+            # misspellings of the synonym itself (e.g. "Vehcle" scores ~0.92).
+            close = difflib.get_close_matches(synonyms[0], candidates, n=1, cutoff=0.72)
             if not close:
                 for syn in synonyms[1:]:
-                    close = difflib.get_close_matches(syn, candidates, n=1, cutoff=0.6)
+                    close = difflib.get_close_matches(syn, candidates, n=1, cutoff=0.72)
                     if close:
                         break
             match = close[0] if close else None
@@ -1782,12 +1789,12 @@ CANONICAL_FRANCHISE_INCOME_FIELDS = [
     ('date', 'Date', ['date', 'entry date', 'week start', 'week of', 'day']),
     ('vehicle', 'Vehicle / Number Plate', ['vehicle', 'number plate', 'plate']),
     ('franchisee', 'Franchisee', ['franchisee', 'franchisee name', 'owner', 'franchise owner']),
-    ('income', 'Income', ['income', 'total income', 'revenue', 'collections']),
+    ('income', 'Income', ['income', 'total income', 'revenue', 'collections', 'amount', 'amount paid']),
     ('exp_traffic_fines', 'Traffic Fines', ['traffic fines', 'fines']),
     ('exp_facilitation_fees', 'Facilitation Fees', ['facilitation fees', 'facilitation']),
     ('exp_workshop', 'Workshop', ['workshop', 'workshop all', 'repairs']),
     ('exp_wages', 'Wages', ['wages', 'salaries']),
-    ('other_expenditure', 'Other Expenditure', ['other expenditure', 'other expenses', 'other']),
+    ('other_expenditure', 'Other Expenditure', ['other expenditure', 'other expenses', 'other', 'expense', 'expenses']),
     ('deposited', 'Deposited', ['deposited', 'deposit', 'banked', 'cash deposited']),
     ('description', 'Description', ['description', 'notes', 'remarks', 'comment', 'comments']),
 ]
@@ -1894,6 +1901,100 @@ def import_franchise_income_rows(file_rows, model_cls, date_field, week_normaliz
             error_rows.append({**row, 'System_Error': str(e)})
 
     return imported, errors, error_rows, created_vehicles, created_records
+
+
+# ─────────────────────────────────────────────────────────────
+# Franchise Vehicle Registration Import — bulk-register/update FranchiseVehicle
+# rows by plate, same two-step confirmed-mapping flow as the imports above.
+# This is the only import that can set a vehicle's daily/weekly fee, since the
+# Collections/Income imports only carry transactional rows, not fee data —
+# it's the franchise-side counterpart to the fleet ledger workbook's
+# auto-register-by-sheet-name behavior, but as a first-class action.
+# ─────────────────────────────────────────────────────────────
+CANONICAL_FRANCHISE_VEHICLE_FIELDS = [
+    ('vehicle', 'Vehicle / Number Plate', ['vehicle', 'number plate', 'plate', 'registration',
+                                           'reg', 'vehicle reg', 'number']),
+    ('franchisee', 'Franchisee Name', ['franchisee', 'franchisee name', 'owner', 'name']),
+    ('daily_fee', 'Daily Fee', ['daily fee', 'daily rate', 'daily amount', 'daily']),
+    ('weekly_fee', 'Weekly Fee', ['weekly fee', 'weekly rate', 'weekly amount', 'weekly']),
+    ('status', 'Status', ['status']),
+    ('notes', 'Notes', ['notes', 'note', 'remarks', 'comment', 'comments', 'details']),
+]
+
+FRANCHISE_VEHICLE_ROW_KEY_MAP = {key: key for key, _label, _syn in CANONICAL_FRANCHISE_VEHICLE_FIELDS}
+
+
+def import_franchise_vehicle_rows(file_rows):
+    """Validate and persist already-mapped franchise vehicle registration rows
+    (keyed by the CANONICAL_FRANCHISE_VEHICLE_FIELDS field names) as
+    FranchiseVehicle records.
+
+    Upserts by normalized plate: a row naming a plate already on file (even
+    soft-deleted) updates that vehicle in place — reviving it if needed —
+    rather than erroring, so the same file can be re-imported later to
+    update fees without duplicating vehicles. Only columns present in the
+    file overwrite existing values; a blank/unmapped column leaves the
+    existing value alone (a new vehicle gets 'active' status and no fees
+    by default, matching the manual Add form's defaults).
+
+    Returns (imported_count, error_messages, error_rows, created_records);
+    does not commit — the caller decides when to commit/rollback."""
+    vehicle_by_plate = {_normalize_registration(v.number_plate): v
+                         for v in FranchiseVehicle.query.execution_options(include_deleted=True).all()}
+    created_records = []
+
+    imported = 0
+    errors = []
+    error_rows = []
+    for i, raw_row in enumerate(file_rows, start=2):  # row 1 is the header
+        row = {(k or '').strip().lower(): v for k, v in raw_row.items()}
+        try:
+            plate_raw = str(row.get('vehicle') or '').strip()
+            if not plate_raw:
+                continue
+            if len(plate_raw) > 20:
+                raise ValueError(f'"{plate_raw[:40]}…" is too long to be a number plate — check the Vehicle '
+                                 'column is mapped to the right column in your file.')
+            plate = _normalize_registration(plate_raw)
+
+            franchisee_raw = str(row.get('franchisee') or '').strip()
+            daily_fee = parse_import_number(row.get('daily_fee'), 'Daily Fee')
+            weekly_fee = parse_import_number(row.get('weekly_fee'), 'Weekly Fee')
+            status_raw = str(row.get('status') or '').strip().lower()
+            if status_raw and status_raw not in ('active', 'inactive'):
+                raise ValueError(f'status "{status_raw}" must be "active" or "inactive".')
+            notes_raw = row.get('notes')
+
+            vehicle = vehicle_by_plate.get(plate)
+            is_new = vehicle is None
+            if is_new:
+                vehicle = FranchiseVehicle(number_plate=plate,
+                                           franchisee_name=franchisee_raw or plate_raw.strip().title())
+                db.session.add(vehicle)
+            else:
+                vehicle.deleted_at = None
+                if franchisee_raw:
+                    vehicle.franchisee_name = franchisee_raw
+            if daily_fee is not None:
+                vehicle.daily_fee = daily_fee
+            if weekly_fee is not None:
+                vehicle.weekly_fee = weekly_fee
+            if status_raw:
+                vehicle.status = status_raw
+            elif is_new:
+                vehicle.status = 'active'
+            if notes_raw not in (None, ''):
+                vehicle.notes = str(notes_raw).strip()
+            touch_sync_fields(vehicle)
+            db.session.flush()
+            vehicle_by_plate[plate] = vehicle
+            created_records.append(('franchise_vehicles', vehicle.id))
+            imported += 1
+        except ValueError as e:
+            errors.append(f'Row {i}: {e}')
+            error_rows.append({**row, 'System_Error': str(e)})
+
+    return imported, errors, error_rows, created_records
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2659,6 +2760,37 @@ def driver_delete(did):
     db.session.commit()
     flash(f'Driver {name} removed.', 'warning')
     return redirect(url_for('drivers'))
+
+
+@app.route('/drivers/roster')
+@login_required
+@permission_required('drivers')
+def driver_roster():
+    """Which vehicle each driver (and conductor) actually drove over a date
+    range (a single day up to a full month or more) — read straight off
+    each day's Daily Transaction entries rather than a separate
+    planned-assignment table, since the vehicle is already captured
+    alongside the fare/trips when the entry is logged."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    driver_id = request.args.get('driver_id', type=int)
+
+    q = DailyLog.query.filter(DailyLog.log_date.between(df, dt), DailyLog.driver_id.isnot(None))
+    if driver_id:
+        q = q.filter(DailyLog.driver_id == driver_id)
+    logs = q.join(Driver, DailyLog.driver_id == Driver.id).order_by(
+        Driver.name, DailyLog.log_date, DailyLog.id).all()
+
+    # How many distinct vehicles each driver used in the period, so a driver
+    # who bounced between vehicles stands out at a glance in a multi-day view.
+    vehicles_by_driver = {}
+    for log in logs:
+        vehicles_by_driver.setdefault(log.driver_id, set()).add(log.vehicle_id)
+
+    all_drivers = Driver.query.filter_by(status='active').order_by(Driver.name).all()
+    return render_template('drivers/roster.html', logs=logs, drivers=all_drivers,
+        vehicles_by_driver=vehicles_by_driver,
+        date_from=date_from_str, date_to=date_to_str, driver_id=driver_id)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -5997,7 +6129,8 @@ def franchise_vehicle_add():
             number_plate=number_plate,
             franchisee_name=request.form.get('franchisee_name', '').strip(),
             status=request.form.get('status', 'active'),
-            agreed_amount=form_float(request.form, 'agreed_amount', label='Agreed franchise amount', required=False, default=0, min_value=0),
+            daily_fee=form_float(request.form, 'daily_fee', label='Daily fee', required=False, min_value=0),
+            weekly_fee=form_float(request.form, 'weekly_fee', label='Weekly fee', required=False, min_value=0),
             amount_owed=form_float(request.form, 'amount_owed', label='Amount owed', required=False, default=0, min_value=0),
             notes=request.form.get('notes', '').strip(),
         )
@@ -6031,7 +6164,8 @@ def franchise_vehicle_edit(vid):
         vehicle.number_plate = number_plate
         vehicle.franchisee_name = franchisee_name
         vehicle.status = request.form.get('status', 'active')
-        vehicle.agreed_amount = form_float(request.form, 'agreed_amount', label='Agreed franchise amount', required=False, default=0, min_value=0)
+        vehicle.daily_fee = form_float(request.form, 'daily_fee', label='Daily fee', required=False, min_value=0)
+        vehicle.weekly_fee = form_float(request.form, 'weekly_fee', label='Weekly fee', required=False, min_value=0)
         vehicle.amount_owed = form_float(request.form, 'amount_owed', label='Amount owed', required=False, default=0, min_value=0)
         vehicle.notes = request.form.get('notes', '').strip()
         log_audit('UPDATE', 'franchise_vehicles', vehicle.id, f'Updated franchise vehicle {vehicle.number_plate}')
@@ -6055,6 +6189,88 @@ def franchise_vehicle_delete(vid):
     touch_sync_fields(vehicle)
     db.session.commit()
     flash('Franchise vehicle deleted.', 'warning')
+    return redirect(url_for('franchise_vehicles'))
+
+
+@app.route('/franchise/vehicles/import/preview', methods=['POST'])
+@login_required
+@permission_required('franchise')
+def franchise_vehicles_import_preview():
+    """Same two-step flow as the Collections/Income imports: parse the file,
+    auto-map its columns onto the canonical vehicle-registration fields, and
+    show a confirmation/adjustment step before writing anything."""
+    file = request.files.get('file')
+    if file and file.filename:
+        filename = file.filename
+        try:
+            headers, raw_rows = read_uploaded_table(file)
+        except ValueError as e:
+            flash(str(e), 'danger')
+            return redirect(url_for('franchise_vehicles'))
+        mapping = auto_map_columns(headers, fields=CANONICAL_FRANCHISE_VEHICLE_FIELDS)
+    else:
+        try:
+            filename = request.form.get('filename', 'uploaded file')
+            payload = json.loads(request.form.get('raw_data') or '{}')
+            headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
+            if not headers or not raw_rows:
+                raise ValueError('Choose a CSV or Excel file to import.')
+            mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
+                       for field_key, _label, _syn in CANONICAL_FRANCHISE_VEHICLE_FIELDS}
+        except (ValueError, json.JSONDecodeError, TypeError):
+            flash('Choose a CSV or Excel file to import — the previous preview session expired.', 'danger')
+            return redirect(url_for('franchise_vehicles'))
+
+    if not raw_rows:
+        flash('That file has no data rows to import — it only has a header row. '
+              'Add rows with at least a Vehicle / Number Plate, then re-import.', 'warning')
+        return redirect(url_for('franchise_vehicles'))
+
+    preview_rows = apply_column_mapping(headers, raw_rows[:10], mapping, row_key_map=FRANCHISE_VEHICLE_ROW_KEY_MAP)
+    return render_template('franchise/vehicles_import_preview.html',
+                           filename=filename,
+                           headers=headers, mapping=mapping, fields=CANONICAL_FRANCHISE_VEHICLE_FIELDS,
+                           preview_rows=preview_rows, row_count=len(raw_rows),
+                           raw_data=json.dumps({'headers': headers, 'rows': raw_rows}))
+
+
+@app.route('/franchise/vehicles/import/confirm', methods=['POST'])
+@login_required
+@permission_required('franchise')
+def franchise_vehicles_import_confirm():
+    filename = request.form.get('filename', 'uploaded file')
+    try:
+        payload = json.loads(request.form.get('raw_data') or '{}')
+        headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
+        if not raw_rows:
+            raise ValueError('empty')
+    except (ValueError, json.JSONDecodeError, TypeError):
+        flash('That preview session expired — please choose the file again.', 'danger')
+        return redirect(url_for('franchise_vehicles'))
+
+    mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
+               for field_key, _label, _syn in CANONICAL_FRANCHISE_VEHICLE_FIELDS}
+    file_rows = apply_column_mapping(headers, raw_rows, mapping, row_key_map=FRANCHISE_VEHICLE_ROW_KEY_MAP)
+    imported, errors, error_rows, created_records = import_franchise_vehicle_rows(file_rows)
+
+    if imported or error_rows:
+        save_import_batch('franchise_vehicles', filename, len(raw_rows), imported, error_rows, created_records)
+        if imported:
+            log_audit('CREATE', 'franchise_vehicles', None,
+                      f'Registered/updated {imported} franchise vehicle(s) from {filename}')
+        db.session.commit()
+    else:
+        db.session.rollback()
+
+    if imported:
+        flash(f'Registered/updated {imported} franchise vehicle(s).', 'success')
+    if errors:
+        shown = errors[:10]
+        more = f' (+{len(errors) - 10} more)' if len(errors) > 10 else ''
+        flash('Skipped rows — ' + '; '.join(shown) + more, 'warning')
+    if not imported and not errors:
+        flash('No rows found to import.', 'warning')
+
     return redirect(url_for('franchise_vehicles'))
 
 
@@ -7041,7 +7257,7 @@ SYNC_MODELS = {
     ), {'part_id': 'spare_parts', 'vehicle_id': 'vehicles'}),
     # Phase 5 — franchise/compliance tables.
     'franchise_vehicles': (FranchiseVehicle, (
-        'number_plate', 'franchisee_name', 'status', 'agreed_amount', 'amount_owed',
+        'number_plate', 'franchisee_name', 'status', 'daily_fee', 'weekly_fee', 'amount_owed',
         'notes', 'created_at', 'deleted_at',
     ), {}),
     'vehicle_documents': (VehicleDocument, (
@@ -7800,17 +8016,19 @@ def migrate_db():
                 conn.execute(text(
                     "ALTER TABLE franchise_collections ADD COLUMN expense FLOAT NOT NULL DEFAULT 0"))
 
-        # franchise_vehicles gained agreed_amount/amount_owed/notes — added
+        # franchise_vehicles gained amount_owed/notes/daily_fee/weekly_fee — added
         # in place (not drop-and-recreate) since this table holds real
         # registered vehicles, unlike the income tables above.
         if inspector.has_table('franchise_vehicles'):
             vehicle_cols = [c['name'] for c in inspector.get_columns('franchise_vehicles')]
-            if 'agreed_amount' not in vehicle_cols:
-                conn.execute(text("ALTER TABLE franchise_vehicles ADD COLUMN agreed_amount FLOAT NOT NULL DEFAULT 0"))
             if 'amount_owed' not in vehicle_cols:
                 conn.execute(text("ALTER TABLE franchise_vehicles ADD COLUMN amount_owed FLOAT NOT NULL DEFAULT 0"))
             if 'notes' not in vehicle_cols:
                 conn.execute(text("ALTER TABLE franchise_vehicles ADD COLUMN notes TEXT"))
+            if 'daily_fee' not in vehicle_cols:
+                conn.execute(text("ALTER TABLE franchise_vehicles ADD COLUMN daily_fee FLOAT"))
+            if 'weekly_fee' not in vehicle_cols:
+                conn.execute(text("ALTER TABLE franchise_vehicles ADD COLUMN weekly_fee FLOAT"))
 
         # Multi-site sync columns (see touch_sync_fields()) — added to every
         # syncable table. sync_uuid/deleted_at go in nullable (SQLite can't

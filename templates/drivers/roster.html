@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+{% block title %}Driver Roster{% endblock %}
+{% block page_title %}Fleet — Driver Roster{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Driver Roster</h1>
+    <div class="subtitle">Which vehicle each driver drove, {{ date_from }} to {{ date_to }} &mdash; from Daily Transaction entries</div>
+  </div>
+  <a href="{{ url_for('drivers') }}" class="btn btn-outline"><i data-feather="users"></i> Crew</a>
+</div>
+
+<form method="GET" class="filter-bar mb-16">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <div class="form-group">
+    <label>Driver</label>
+    <select name="driver_id">
+      <option value="">All Drivers</option>
+      {% for d in drivers %}
+      <option value="{{ d.id }}" {% if driver_id == d.id %}selected{% endif %}>{{ d.name }} ({{ d.role|title }})</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="card">
+  {% if logs %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Driver</th>
+          <th>Role</th>
+          <th>Date</th>
+          <th>Vehicle</th>
+          <th>Conductor</th>
+          <th>Route</th>
+          <th class="text-right">Trips</th>
+          <th class="text-right">Revenue</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for log in logs %}
+        <tr>
+          <td>
+            <strong>{{ log.driver.name }}</strong>
+            {% if vehicles_by_driver.get(log.driver_id, [])|length > 1 %}
+            <span class="badge badge-amber" title="Drove more than one vehicle in this period">multiple vehicles</span>
+            {% endif %}
+          </td>
+          <td><span class="badge badge-blue">{{ log.driver.role|title }}</span></td>
+          <td>{{ log.log_date }}</td>
+          <td>{{ log.vehicle.registration }}</td>
+          <td>{{ log.conductor.name if log.conductor else '—' }}</td>
+          <td>{{ log.route.name if log.route else '—' }}</td>
+          <td class="text-right">{{ log.trips_completed }}</td>
+          <td class="text-right">{{ log.gross_revenue|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <p>No Daily Transaction entries with a driver assigned for {{ date_from }} to {{ date_to }}{% if driver_id %} matching this driver{% endif %}.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

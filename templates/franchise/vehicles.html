@@ -11,6 +11,17 @@
   <a href="{{ url_for('franchise_vehicle_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Vehicle</a>
 </div>
 
+<div class="card mb-24" style="padding:10px 14px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+    <div class="form-hint" style="margin:0;">Register vehicles in bulk as CSV/Excel</div>
+    <form method="POST" action="{{ url_for('franchise_vehicles_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required style="font-size:12px;">
+      <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload"></i> Import</button>
+    </form>
+  </div>
+</div>
+
 <div class="card">
   {% if vehicles %}
   <div class="table-wrap">
@@ -20,7 +31,8 @@
           <th>Number Plate</th>
           <th>Franchisee</th>
           <th>Status</th>
-          <th class="text-right">Agreed Amount</th>
+          <th class="text-right">Daily Fee</th>
+          <th class="text-right">Weekly Fee</th>
           <th class="text-right">Amount Owed</th>
           <th class="text-right">Total Collected</th>
           <th class="text-right">Total Expense</th>
@@ -35,7 +47,8 @@
           <td>{{ v.number_plate }}</td>
           <td>{{ v.franchisee_name }}</td>
           <td><span class="badge {% if v.status == 'active' %}badge-green{% else %}badge-gray{% endif %}">{{ v.status|capitalize }}</span></td>
-          <td class="text-right">{{ v.agreed_amount|currency }}</td>
+          <td class="text-right">{{ v.daily_fee|currency if v.daily_fee is not none else '—' }}</td>
+          <td class="text-right">{{ v.weekly_fee|currency if v.weekly_fee is not none else '—' }}</td>
           <td class="text-right"><span class="{% if v.amount_owed > 0 %}text-danger{% endif %}">{{ v.amount_owed|currency }}</span></td>
           <td class="text-right">{{ v.total_collected|currency }}</td>
           <td class="text-right">{{ v.total_expense|currency }}</td>

@@ -55,8 +55,11 @@
       </a>
       {% endif %}
       {% if current_user.has_permission('drivers') %}
-      <a href="{{ url_for('drivers') }}" class="nav-item {% if 'driver' in (request.endpoint or '') %}active{% endif %}">
+      <a href="{{ url_for('drivers') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('driver') and request.endpoint != 'driver_roster' %}active{% endif %}">
         <i data-feather="users"></i> Crew
+      </a>
+      <a href="{{ url_for('driver_roster') }}" class="nav-item {% if request.endpoint == 'driver_roster' %}active{% endif %}">
+        <i data-feather="calendar"></i> Driver Roster
       </a>
       {% endif %}
       {% if current_user.has_permission('routes') %}
