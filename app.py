@@ -404,6 +404,12 @@ class SyncSite(db.Model):
     display_name = db.Column(db.String(100))
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    # Stamped by the hub itself on every authenticated call (see
+    # sync_auth_required) so /sync/health can show which spokes are
+    # actually checking in versus stale/offline, without the spoke needing
+    # to report anything extra about its own health.
+    last_push_at = db.Column(db.DateTime)
+    last_pull_at = db.Column(db.DateTime)
 
 
 class SyncPeerState(db.Model):
@@ -5665,6 +5671,59 @@ def sync_conflict_resolve(cid):
     return redirect(url_for('sync_conflicts', status=request.form.get('return_status', 'unresolved')))
 
 
+@app.route('/sync/health')
+@login_required
+@admin_required
+def sync_health():
+    """Multi-site sync status at a glance. On the hub this is the only
+    place any site's last-seen time is visible at all — SyncPeerState is
+    deliberately local-instance-only (see its docstring), so the hub has
+    no other record of who's actually checking in versus gone stale.
+    Doubles as the same page on a spoke, where it instead shows that
+    instance's own peer_state against the hub."""
+    stale_cutoff = datetime.now(timezone.utc) - timedelta(minutes=15)
+
+    site_rows = []
+    for site in SyncSite.query.order_by(SyncSite.display_name).all():
+        last_push = site.last_push_at.replace(tzinfo=timezone.utc) if site.last_push_at else None
+        last_pull = site.last_pull_at.replace(tzinfo=timezone.utc) if site.last_pull_at else None
+        last_seen = max([t for t in (last_push, last_pull) if t], default=None)
+        if not site.is_active:
+            status = 'disabled'
+        elif last_seen is None:
+            status = 'never'
+        elif last_seen < stale_cutoff:
+            status = 'stale'
+        else:
+            status = 'online'
+        site_rows.append({'site': site, 'last_push': last_push, 'last_pull': last_pull,
+                          'last_seen': last_seen, 'status': status})
+
+    peer_state = None
+    if app.config['SYNC_ENABLED']:
+        peer_state = SyncPeerState.query.filter_by(peer_url=app.config['SYNC_HUB_URL']).first()
+
+    unresolved_conflicts = SyncConflict.query.filter_by(resolved=False).count()
+    conflicts_by_table = dict(
+        db.session.query(SyncConflict.table_name, func.count(SyncConflict.id))
+        .filter_by(resolved=False).group_by(SyncConflict.table_name).all())
+
+    table_counts = []
+    for table in SYNC_TABLE_ORDER:
+        model = SYNC_MODELS[table][0]
+        total = model.query.execution_options(include_deleted=True).count()
+        pending = model.query.filter_by(pending_push=True).execution_options(include_deleted=True).count()
+        table_counts.append({'table': table, 'total': total, 'pending': pending,
+                             'conflicts': conflicts_by_table.get(table, 0)})
+
+    return render_template('sync/health.html',
+                           site_rows=site_rows, peer_state=peer_state,
+                           unresolved_conflicts=unresolved_conflicts,
+                           table_counts=table_counts,
+                           site_id=app.config['SITE_ID'], sync_enabled=app.config['SYNC_ENABLED'],
+                           sync_hub_url=app.config['SYNC_HUB_URL'])
+
+
 @app.context_processor
 def inject_unresolved_sync_conflicts_count():
     """Powers the "Sync Conflicts" sidebar badge in base.html on every
@@ -6258,6 +6317,7 @@ def api_sync_push():
     data = request.get_json(force=True, silent=True) or {}
     site_id = data.get('site_id') or request.sync_site.site_id
     batch = data.get('batch', [])
+    request.sync_site.last_push_at = datetime.now(timezone.utc)
 
     batch_by_table = {}
     for item in batch:
@@ -6296,6 +6356,7 @@ def api_sync_pull():
     tables_param = request.args.get('tables')
     requested_tables = tables_param.split(',') if tables_param else SYNC_TABLE_ORDER
     server_time = datetime.now(timezone.utc)
+    request.sync_site.last_pull_at = server_time
 
     changes = []
     for table in SYNC_TABLE_ORDER:
@@ -6314,6 +6375,7 @@ def api_sync_pull():
                 'fk': fk_values,
             })
 
+    db.session.commit()
     return jsonify({'changes': changes, 'server_time': server_time.isoformat()})
 
 
@@ -6750,6 +6812,13 @@ def migrate_db():
                 conn.execute(text(
                     f"UPDATE {table} SET server_touched_at = COALESCE(updated_at, created_at) "
                     f"WHERE server_touched_at IS NULL"))
+
+        if inspector.has_table('sync_sites'):
+            site_cols = [c['name'] for c in inspector.get_columns('sync_sites')]
+            if 'last_push_at' not in site_cols:
+                conn.execute(text("ALTER TABLE sync_sites ADD COLUMN last_push_at DATETIME"))
+            if 'last_pull_at' not in site_cols:
+                conn.execute(text("ALTER TABLE sync_sites ADD COLUMN last_pull_at DATETIME"))
 
         conn.commit()
 

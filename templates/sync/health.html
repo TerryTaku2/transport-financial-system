@@ -1,0 +1,88 @@
+{% extends 'base.html' %}
+{% block title %}Sync Health{% endblock %}
+{% block page_title %}Admin — Sync Health{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Multi-Site Sync Health</h1>
+    <div class="subtitle">
+      This instance is <strong>{{ site_id }}</strong> —
+      {% if sync_enabled %}a spoke, syncing against {{ sync_hub_url }}{% else %}the hub{% endif %}
+    </div>
+  </div>
+</div>
+
+{% if sync_enabled %}
+<div class="card mb-16">
+  <div class="card-header"><h3>This site's connection to the hub</h3></div>
+  <div class="card-body">
+    {% if peer_state %}
+    <div class="form-grid">
+      <div><strong>Last successful pull</strong><div>{{ peer_state.last_pull_at.strftime('%d %b %Y %H:%M:%S') if peer_state.last_pull_at else 'never' }}</div></div>
+      <div><strong>Last successful push</strong><div>{{ peer_state.last_push_at.strftime('%d %b %Y %H:%M:%S') if peer_state.last_push_at else 'never' }}</div></div>
+      <div><strong>Last error</strong><div>{{ peer_state.last_error or '—' }}</div></div>
+    </div>
+    {% else %}
+    <div class="empty-state"><p>No sync cycle has run yet on this instance.</p></div>
+    {% endif %}
+  </div>
+</div>
+{% else %}
+<div class="card mb-16">
+  <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+    <h3>Spoke sites</h3>
+    {% if unresolved_conflicts %}
+    <a href="{{ url_for('sync_conflicts') }}" class="badge badge-red">{{ unresolved_conflicts }} unresolved conflict{{ 's' if unresolved_conflicts != 1 }}</a>
+    {% endif %}
+  </div>
+  {% if site_rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Site</th><th>Status</th><th>Last pull (from us)</th><th>Last push (to us)</th></tr>
+      </thead>
+      <tbody>
+        {% for row in site_rows %}
+        <tr>
+          <td>{{ row.site.display_name or row.site.site_id }} <span class="form-hint">({{ row.site.site_id }})</span></td>
+          <td>
+            {% if row.status == 'online' %}<span class="badge badge-green">Online</span>
+            {% elif row.status == 'stale' %}<span class="badge badge-amber">Stale — hasn't checked in for 15+ min</span>
+            {% elif row.status == 'disabled' %}<span class="badge badge-gray">Disabled</span>
+            {% else %}<span class="badge badge-gray">Never connected</span>{% endif %}
+          </td>
+          <td>{{ row.last_pull.strftime('%d %b %Y %H:%M:%S') if row.last_pull else '—' }}</td>
+          <td>{{ row.last_push.strftime('%d %b %Y %H:%M:%S') if row.last_push else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body"><div class="empty-state"><p>No spoke sites registered yet — see <code>provision_sync_site.py</code>.</p></div></div>
+  {% endif %}
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header"><h3>Synced tables</h3></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Table</th><th>Rows (incl. deleted)</th><th>Pending push</th><th>Unresolved conflicts</th></tr>
+      </thead>
+      <tbody>
+        {% for row in table_counts %}
+        <tr>
+          <td>{{ row.table }}</td>
+          <td>{{ row.total }}</td>
+          <td>{{ row.pending }}</td>
+          <td>{% if row.conflicts %}<span class="badge badge-red">{{ row.conflicts }}</span>{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

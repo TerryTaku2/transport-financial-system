@@ -216,6 +216,9 @@
         {% set unresolved_conflicts = unresolved_sync_conflicts_count|default(0) %}
         {% if unresolved_conflicts > 0 %}<span class="nav-badge">{{ unresolved_conflicts }}</span>{% endif %}
       </a>
+      <a href="{{ url_for('sync_health') }}" class="nav-item {% if request.endpoint == 'sync_health' %}active{% endif %}">
+        <i data-feather="activity"></i> Sync Health
+      </a>
     </div>
     {% endif %}
   </aside>
