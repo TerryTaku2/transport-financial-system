@@ -1721,14 +1721,23 @@ def import_franchise_collection_rows(file_rows, frequency, auto_register_vehicle
                 continue
             if not plate_raw:
                 raise ValueError('vehicle / number plate is required.')
+            if len(plate_raw) > 20:
+                raise ValueError(f'"{plate_raw[:40]}…" is too long to be a number plate — check the Vehicle '
+                                 'column is mapped to the right column in your file, not a notes/description one.')
 
             plate = _normalize_registration(plate_raw)
             vehicle = vehicle_by_plate.get(plate)
             if not vehicle:
                 if auto_register_vehicles:
-                    franchisee_name = str(row.get('franchisee') or '').strip() or plate_raw.strip().title()
-                    vehicle = FranchiseVehicle(number_plate=plate, franchisee_name=franchisee_name, status='active')
-                    db.session.add(vehicle)
+                    vehicle = FranchiseVehicle.query.execution_options(include_deleted=True).filter_by(
+                        number_plate=plate).first()
+                    if vehicle:
+                        vehicle.deleted_at = None
+                        vehicle.status = 'active'
+                    else:
+                        franchisee_name = str(row.get('franchisee') or '').strip() or plate_raw.strip().title()
+                        vehicle = FranchiseVehicle(number_plate=plate, franchisee_name=franchisee_name, status='active')
+                        db.session.add(vehicle)
                     db.session.flush()
                     vehicle_by_plate[plate] = vehicle
                     created_vehicles.append(plate)
@@ -1772,6 +1781,7 @@ def import_franchise_collection_rows(file_rows, frequency, auto_register_vehicle
 CANONICAL_FRANCHISE_INCOME_FIELDS = [
     ('date', 'Date', ['date', 'entry date', 'week start', 'week of', 'day']),
     ('vehicle', 'Vehicle / Number Plate', ['vehicle', 'number plate', 'plate']),
+    ('franchisee', 'Franchisee', ['franchisee', 'franchisee name', 'owner', 'franchise owner']),
     ('income', 'Income', ['income', 'total income', 'revenue', 'collections']),
     ('exp_traffic_fines', 'Traffic Fines', ['traffic fines', 'fines']),
     ('exp_facilitation_fees', 'Facilitation Fees', ['facilitation fees', 'facilitation']),
@@ -1785,7 +1795,8 @@ CANONICAL_FRANCHISE_INCOME_FIELDS = [
 FRANCHISE_INCOME_ROW_KEY_MAP = {key: key for key, _label, _syn in CANONICAL_FRANCHISE_INCOME_FIELDS}
 
 
-def import_franchise_income_rows(file_rows, model_cls, date_field, week_normalize=False):
+def import_franchise_income_rows(file_rows, model_cls, date_field, week_normalize=False,
+                                  auto_register_vehicles=False):
     """Validate and persist already-mapped franchise income/expense
     reconciliation rows (keyed by the CANONICAL_FRANCHISE_INCOME_FIELDS
     field names) into model_cls (FranchiseDailyIncome or
@@ -1799,10 +1810,18 @@ def import_franchise_income_rows(file_rows, model_cls, date_field, week_normaliz
     aggregated to one row per week, or later days will collide with the
     first on the unique (week_start, vehicle_id) constraint and be quarantined
     as duplicates rather than silently overwriting it.
-    Returns (imported_count, error_messages, error_rows, created_records);
-    does not commit — the caller decides when to commit/rollback."""
+
+    If auto_register_vehicles is True, a row naming a plate that isn't on
+    file registers a new active FranchiseVehicle instead of erroring —
+    mirrors import_franchise_collection_rows' auto_register_vehicles
+    behavior. The new vehicle's franchisee_name comes from the row's
+    'franchisee' column if mapped, else falls back to the plate itself.
+
+    Returns (imported_count, error_messages, error_rows, created_vehicle_plates,
+    created_records); does not commit — the caller decides when to commit/rollback."""
     vehicle_by_plate = {_normalize_registration(v.number_plate): v for v in FranchiseVehicle.query.all()}
     table_name = model_cls.__tablename__
+    created_vehicles = []
     created_records = []
 
     imported = 0
@@ -1819,12 +1838,32 @@ def import_franchise_income_rows(file_rows, model_cls, date_field, week_normaliz
                 entry_date = entry_date - timedelta(days=entry_date.weekday())
 
             plate_raw = str(row.get('vehicle') or '').strip()
+            if len(plate_raw) > 20:
+                raise ValueError(f'"{plate_raw[:40]}…" is too long to be a number plate — check the Vehicle '
+                                 'column is mapped to the right column in your file, not a notes/description one.')
             vehicle = None
             if plate_raw:
-                vehicle = vehicle_by_plate.get(_normalize_registration(plate_raw))
+                plate = _normalize_registration(plate_raw)
+                vehicle = vehicle_by_plate.get(plate)
                 if not vehicle:
-                    raise ValueError(f'unknown vehicle "{plate_raw}" — add it under Franchise Vehicles first, '
-                                     'or leave the Vehicle column blank for a whole-franchise entry.')
+                    if auto_register_vehicles:
+                        vehicle = FranchiseVehicle.query.execution_options(include_deleted=True).filter_by(
+                            number_plate=plate).first()
+                        if vehicle:
+                            vehicle.deleted_at = None
+                            vehicle.status = 'active'
+                        else:
+                            franchisee_name = str(row.get('franchisee') or '').strip() or plate_raw.strip().title()
+                            vehicle = FranchiseVehicle(number_plate=plate, franchisee_name=franchisee_name, status='active')
+                            db.session.add(vehicle)
+                        db.session.flush()
+                        vehicle_by_plate[plate] = vehicle
+                        created_vehicles.append(plate)
+                        created_records.append(('franchise_vehicles', vehicle.id))
+                    else:
+                        raise ValueError(f'unknown vehicle "{plate_raw}" — add it under Franchise Vehicles first, '
+                                         'tick "Auto-register new vehicles", or leave the Vehicle column blank '
+                                         'for a whole-franchise entry.')
 
             existing = model_cls.query.execution_options(include_deleted=True).filter_by(
                 **{date_field: entry_date}, vehicle_id=vehicle.id if vehicle else None).first()
@@ -1854,7 +1893,7 @@ def import_franchise_income_rows(file_rows, model_cls, date_field, week_normaliz
             errors.append(f'Row {i}: {e}')
             error_rows.append({**row, 'System_Error': str(e)})
 
-    return imported, errors, error_rows, created_records
+    return imported, errors, error_rows, created_vehicles, created_records
 
 
 # ─────────────────────────────────────────────────────────────
@@ -4249,8 +4288,11 @@ def compute_payroll_earnings(df, dt):
     # to nest, a placeholder row still prints under them labeled "Conductor",
     # with commission projected off the driver's own revenue at the standard
     # conductor rate — there's no CommissionPayment target without a real
-    # person, so it's informational (no Pay action), not an amount owed.
+    # person to pay it to yet, but the conductor's cut is still owed on that
+    # revenue, so it's folded into the totals below (just not payable via
+    # the per-row "Pay" action, which needs a real driver_id).
     grouped, nested_ids = [], set()
+    placeholder_total = 0.0
     for e in earnings:
         if e['driver'].role == 'conductor':
             continue
@@ -4267,9 +4309,18 @@ def compute_payroll_earnings(df, dt):
                 'commission': placeholder_commission, 'garnish': e['garnish'], 'paid': 0,
                 'outstanding': placeholder_commission,
             })
+            placeholder_total += placeholder_commission
         grouped.append(e)
     grouped.extend(e for e in earnings if e['driver'].role == 'conductor' and e['driver'].id not in nested_ids)
     earnings = grouped
+
+    # total_commissions/total_outstanding above only summed named people
+    # (drivers, plus any conductor who has their own Driver record) — a
+    # driver with no named conductor still owes a conductor's cut on that
+    # revenue (the placeholder row above), so it must count toward the
+    # period totals too, not just commission tied to a named person.
+    total_commissions += placeholder_total
+    total_outstanding += placeholder_total
 
     return earnings, total_commissions, total_garnish, total_paid, total_outstanding
 
@@ -5842,8 +5893,10 @@ def franchise_income_import_confirm():
     mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
                for field_key, _label, _syn in CANONICAL_FRANCHISE_INCOME_FIELDS}
     file_rows = apply_column_mapping(headers, raw_rows, mapping, row_key_map=FRANCHISE_INCOME_ROW_KEY_MAP)
-    imported, errors, error_rows, created_records = import_franchise_income_rows(
-        file_rows, model_cls, date_field, week_normalize=(kind == 'weekly'))
+    auto_register = request.form.get('auto_register') == '1'
+    imported, errors, error_rows, created_vehicles, created_records = import_franchise_income_rows(
+        file_rows, model_cls, date_field, week_normalize=(kind == 'weekly'),
+        auto_register_vehicles=auto_register)
 
     if imported or error_rows:
         # Commit even when imported == 0: a batch made only of failed rows
@@ -5852,12 +5905,19 @@ def franchise_income_import_confirm():
         if imported:
             log_audit('CREATE', model_cls.__tablename__, None,
                       f'Imported {imported} {kind} income row(s) from {filename}')
+        created_vehicle_ids = [rid for table, rid in created_records if table == 'franchise_vehicles']
+        for plate, vid in zip(created_vehicles, created_vehicle_ids):
+            log_audit('CREATE', 'franchise_vehicles', vid,
+                      f'Auto-registered franchise vehicle "{plate}" from {kind} income import ({filename}) — '
+                      f'not on file, added because an income row named it.')
         db.session.commit()
     else:
         db.session.rollback()
 
     if imported:
         flash(f'Imported {imported} {kind} income row(s).', 'success')
+    if created_vehicles:
+        flash(f'Auto-registered new franchise vehicle(s): {", ".join(created_vehicles)}.', 'success')
     if errors:
         shown = errors[:10]
         more = f' (+{len(errors) - 10} more)' if len(errors) > 10 else ''
