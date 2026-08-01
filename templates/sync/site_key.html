@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block title %}Site Registered{% endblock %}
+{% block page_title %}Admin — Site Registered{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>"{{ site.site_id }}" is registered</h1>
+    <div class="subtitle">Copy the block below into that PC's <code>.env</code> file now</div>
+  </div>
+</div>
+
+<div class="card mb-16" style="border-color:#b45309;">
+  <div class="card-body">
+    <div class="badge badge-amber mb-16">Shown once — cannot be recovered</div>
+    <p>Only a hash of this key is stored. If you navigate away without copying it, the only way to get a working key again is to revoke this site on the <a href="{{ url_for('sync_sites') }}">Sync Sites</a> page and register a new one.</p>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Paste into <code>.env</code> on the spoke PC</h3></div>
+  <div class="card-body">
+    <pre style="background:var(--page-bg);border:1px solid var(--border);border-radius:var(--radius);padding:14px;font-size:13px;overflow-x:auto;white-space:pre-wrap;word-break:break-all;">SITE_ID={{ site.site_id }}
+SYNC_ENABLED=true
+SYNC_HUB_URL={{ sync_hub_url }}
+SYNC_API_KEY={{ api_key }}
+SYNC_INTERVAL_SECONDS=60</pre>
+    <div class="btn-group" style="margin-top:16px;">
+      <a href="{{ url_for('sync_sites') }}" class="btn btn-primary">Done — I've copied it</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

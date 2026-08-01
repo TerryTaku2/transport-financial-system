@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% block title %}Sync Sites{% endblock %}
+{% block page_title %}Admin — Sync Sites{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Spoke Sites</h1>
+    <div class="subtitle">Every local-server PC authorized to sync with this hub — see <a href="{{ url_for('sync_health') }}">Sync Health</a> for live status</div>
+  </div>
+  <a href="{{ url_for('sync_site_add') }}" class="btn btn-primary">+ Register New Site</a>
+</div>
+
+<div class="card">
+  {% if sites %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Site ID</th><th>Display Name</th><th>Status</th><th>Registered</th><th>Last push</th><th>Last pull</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for site in sites %}
+        <tr>
+          <td>{{ site.site_id }}</td>
+          <td>{{ site.display_name or '—' }}</td>
+          <td>
+            {% if site.is_active %}<span class="badge badge-green">Active</span>
+            {% else %}<span class="badge badge-gray">Revoked</span>{% endif %}
+          </td>
+          <td>{{ site.created_at.strftime('%d %b %Y') if site.created_at else '—' }}</td>
+          <td>{{ site.last_push_at.strftime('%d %b %Y %H:%M') if site.last_push_at else '—' }}</td>
+          <td>{{ site.last_pull_at.strftime('%d %b %Y %H:%M') if site.last_pull_at else '—' }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('sync_site_toggle', site_id=site.id) }}"
+                  onsubmit="return confirm('{{ 'Revoke' if site.is_active else 'Reactivate' }} {{ site.site_id }}?');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-outline btn-sm">{{ 'Revoke' if site.is_active else 'Reactivate' }}</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body"><div class="empty-state"><p>No spoke sites registered yet.</p></div></div>
+  {% endif %}
+</div>
+{% endblock %}

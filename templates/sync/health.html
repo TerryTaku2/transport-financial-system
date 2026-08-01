@@ -60,7 +60,7 @@
     </table>
   </div>
   {% else %}
-  <div class="card-body"><div class="empty-state"><p>No spoke sites registered yet — see <code>provision_sync_site.py</code>.</p></div></div>
+  <div class="card-body"><div class="empty-state"><p>No spoke sites registered yet — <a href="{{ url_for('sync_site_add') }}">register one</a>.</p></div></div>
   {% endif %}
 </div>
 {% endif %}

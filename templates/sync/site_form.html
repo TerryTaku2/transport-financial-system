@@ -1,0 +1,36 @@
+{% extends 'base.html' %}
+{% block title %}Register Sync Site{% endblock %}
+{% block page_title %}Admin — Register Sync Site{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Register New Spoke Site</h1>
+    <div class="subtitle">One entry per local-server PC — its own key means it can be revoked on its own later without affecting any other site</div>
+  </div>
+  <a href="{{ url_for('sync_sites') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Site ID<span class="req">*</span></label>
+          <input type="text" name="site_id" required pattern="[a-z0-9][a-z0-9-]{1,48}[a-z0-9]" placeholder="site-nairobi-01">
+          <div class="form-hint">Lowercase letters, numbers, and hyphens only. Cannot be changed later.</div>
+        </div>
+        <div class="form-group">
+          <label>Display Name</label>
+          <input type="text" name="display_name" placeholder="Nairobi Depot">
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="plus"></i> Register Site &amp; Generate Key</button>
+        <a href="{{ url_for('sync_sites') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

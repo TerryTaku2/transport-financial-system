@@ -5724,6 +5724,66 @@ def sync_health():
                            sync_hub_url=app.config['SYNC_HUB_URL'])
 
 
+@app.route('/sync/sites')
+@login_required
+@admin_required
+def sync_sites():
+    """Onboarding a new spoke used to require shell access to whatever
+    machine holds the hub's database (see provision_sync_site.py) just to
+    run one INSERT. That's exactly the "tribal knowledge" the original
+    sync plan wanted to avoid — this page (and sync_site_add below) does
+    the same thing over the admin UI instead, so a new site PC can be
+    registered by anyone with admin access, no shell required."""
+    sites = SyncSite.query.order_by(SyncSite.created_at.desc()).all()
+    return render_template('sync/sites.html', sites=sites)
+
+
+@app.route('/sync/sites/add', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def sync_site_add():
+    if request.method == 'POST':
+        site_id = request.form.get('site_id', '').strip().lower()
+        display_name = request.form.get('display_name', '').strip()
+        if not site_id:
+            raise ValueError('Site ID is required.')
+        if not re.match(r'^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$', site_id):
+            raise ValueError('Site ID must be lowercase letters, numbers, and hyphens only (e.g. site-nairobi-01).')
+        check_unique(SyncSite, 'site_id', site_id)
+        api_key = secrets.token_urlsafe(32)
+        site = SyncSite(
+            site_id=site_id,
+            api_key_hash=generate_password_hash(api_key),
+            display_name=display_name or site_id,
+            is_active=True,
+        )
+        db.session.add(site)
+        db.session.flush()
+        log_audit('CREATE', 'sync_sites', site.id, f'Registered spoke site {site.site_id}')
+        db.session.commit()
+        # The plaintext key only ever exists in this one response — only
+        # its hash is stored (see SyncSite.api_key_hash) — so it's shown
+        # once here and never retrievable again, same guarantee
+        # provision_sync_site.py gives on the command line.
+        return render_template('sync/site_key.html', site=site, api_key=api_key,
+                               sync_hub_url=request.url_root.rstrip('/'))
+    return render_template('sync/site_form.html')
+
+
+@app.route('/sync/sites/<int:site_id>/toggle', methods=['POST'])
+@login_required
+@admin_required
+def sync_site_toggle(site_id):
+    site = SyncSite.query.filter_by(id=site_id).first_or_404()
+    site.is_active = not site.is_active
+    log_audit('UPDATE', 'sync_sites', site.id,
+              f'Set sync site {site.site_id} active={site.is_active}')
+    db.session.commit()
+    flash(f'Site "{site.site_id}" {"activated" if site.is_active else "deactivated"}.', 'info')
+    return redirect(url_for('sync_sites'))
+
+
 @app.context_processor
 def inject_unresolved_sync_conflicts_count():
     """Powers the "Sync Conflicts" sidebar badge in base.html on every
