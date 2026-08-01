@@ -193,6 +193,9 @@
       if (currentValue && select.querySelector('option[value="' + currentValue + '"]')) {
         select.value = currentValue;
       }
+      // Lets the searchable-select combobox in app.js (if this select was
+      // enhanced) refresh its visible text to match the rebuilt options.
+      select.dispatchEvent(new CustomEvent('refdata-repopulated'));
     });
   }
 

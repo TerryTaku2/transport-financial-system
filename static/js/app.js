@@ -105,7 +105,148 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // ── Dashboard charts ──
   initDashboardCharts();
+
+  // ── Searchable driver/vehicle selects ──
+  enhanceSearchableSelects();
 });
+
+// Turns every plain <select data-refdata="drivers|vehicles|franchise_vehicles">
+// into a type-to-filter combobox, so a fleet with a long driver/vehicle list
+// doesn't force scrolling through a native dropdown. The original <select> is
+// kept in the DOM (invisible, overlaid) so form submission, `required`
+// validation, and offline.js's repopulateSelects() all keep working exactly
+// as before — this only changes how the value gets picked.
+function enhanceSearchableSelects() {
+  document.querySelectorAll('select[data-refdata="drivers"], select[data-refdata="vehicles"], select[data-refdata="franchise_vehicles"]').forEach(function (select) {
+    if (select.dataset.searchEnhanced) return;
+    select.dataset.searchEnhanced = '1';
+    buildSearchableSelect(select);
+  });
+}
+
+function buildSearchableSelect(select) {
+  var wrap = document.createElement('div');
+  wrap.className = 'searchable-select';
+  select.parentNode.insertBefore(wrap, select);
+
+  var input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'searchable-select-input';
+  input.autocomplete = 'off';
+  input.placeholder = 'Type to search…';
+  wrap.appendChild(input);
+
+  var clearBtn = document.createElement('button');
+  clearBtn.type = 'button';
+  clearBtn.className = 'searchable-select-clear';
+  clearBtn.innerHTML = '&times;';
+  clearBtn.setAttribute('aria-label', 'Clear selection');
+  wrap.appendChild(clearBtn);
+
+  wrap.appendChild(select);
+  select.classList.add('searchable-select-native');
+  select.setAttribute('tabindex', '-1');
+
+  var dropdown = document.createElement('div');
+  dropdown.className = 'searchable-select-dropdown';
+  wrap.appendChild(dropdown);
+
+  var activeIndex = -1;
+  var visibleOptions = [];
+
+  function realOptions() {
+    return Array.prototype.slice.call(select.options).filter(function (o) { return o.value !== ''; });
+  }
+
+  function labelFor(value) {
+    var opt = Array.prototype.slice.call(select.options).filter(function (o) { return o.value === value; })[0];
+    return opt ? opt.textContent : '';
+  }
+
+  function syncInputFromSelect() {
+    input.value = select.value ? labelFor(select.value) : '';
+    clearBtn.style.display = select.value ? '' : 'none';
+  }
+
+  function closeDropdown() {
+    dropdown.style.display = 'none';
+    activeIndex = -1;
+  }
+
+  function updateActive(rows) {
+    rows.forEach(function (r, i) { r.classList.toggle('active', i === activeIndex); });
+    if (activeIndex >= 0 && rows[activeIndex]) rows[activeIndex].scrollIntoView({ block: 'nearest' });
+  }
+
+  function renderDropdown(filter) {
+    var q = (filter || '').trim().toLowerCase();
+    dropdown.innerHTML = '';
+    visibleOptions = realOptions().filter(function (o) {
+      return !q || o.textContent.toLowerCase().indexOf(q) !== -1;
+    });
+    if (!visibleOptions.length) {
+      var empty = document.createElement('div');
+      empty.className = 'searchable-select-empty';
+      empty.textContent = 'No matches';
+      dropdown.appendChild(empty);
+    } else {
+      visibleOptions.forEach(function (o) {
+        var row = document.createElement('div');
+        row.className = 'searchable-select-option';
+        row.textContent = o.textContent;
+        row.addEventListener('mousedown', function (e) {
+          e.preventDefault();
+          selectValue(o.value);
+        });
+        dropdown.appendChild(row);
+      });
+    }
+    activeIndex = -1;
+    dropdown.style.display = '';
+  }
+
+  function selectValue(value) {
+    select.value = value;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    syncInputFromSelect();
+    closeDropdown();
+  }
+
+  input.addEventListener('focus', function () { renderDropdown(''); });
+  input.addEventListener('input', function () { renderDropdown(input.value); });
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { closeDropdown(); syncInputFromSelect(); return; }
+    if (dropdown.style.display === 'none') return;
+    var rows = dropdown.querySelectorAll('.searchable-select-option');
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      activeIndex = Math.min(activeIndex + 1, rows.length - 1);
+      updateActive(rows);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      activeIndex = Math.max(activeIndex - 1, 0);
+      updateActive(rows);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (activeIndex >= 0 && visibleOptions[activeIndex]) selectValue(visibleOptions[activeIndex].value);
+    }
+  });
+
+  clearBtn.addEventListener('click', function () {
+    selectValue('');
+    input.focus();
+  });
+
+  document.addEventListener('click', function (e) {
+    if (!wrap.contains(e.target)) { closeDropdown(); syncInputFromSelect(); }
+  });
+
+  // offline.js rewrites select.options wholesale when refdata is refreshed
+  // (see repopulateSelects in offline.js); pick up the new label + value.
+  select.addEventListener('refdata-repopulated', syncInputFromSelect);
+
+  syncInputFromSelect();
+}
 
 function initDashboardCharts() {
   var ctx7 = document.getElementById('chart7Days');

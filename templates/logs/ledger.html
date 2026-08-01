@@ -21,13 +21,30 @@
 
 <!-- Vehicle tabs, one per registration — mirrors the per-vehicle sheet layout -->
 <div class="card mb-24" style="padding:10px 14px;">
-  <div style="display:flex;gap:6px;flex-wrap:wrap;">
+  {% if vehicles|length > 8 %}
+  <input type="text" id="vehicle-tab-filter" placeholder="Search vehicles…" style="max-width:240px;margin-bottom:10px;">
+  {% endif %}
+  <div id="vehicle-tabs" style="display:flex;gap:6px;flex-wrap:wrap;">
     {% for v in vehicles %}
     <a href="{{ url_for('driver_ledger', vehicle_id=v.id, period=period) }}"
+       data-vehicle-label="{{ v.registration|lower }}"
        class="btn btn-xs {% if vehicle and vehicle.id==v.id %}btn-primary{% else %}btn-outline{% endif %}">{{ v.registration }}</a>
     {% endfor %}
   </div>
 </div>
+<script>
+(function () {
+  var filter = document.getElementById('vehicle-tab-filter');
+  if (!filter) return;
+  var tabs = document.querySelectorAll('#vehicle-tabs [data-vehicle-label]');
+  filter.addEventListener('input', function () {
+    var q = filter.value.trim().toLowerCase();
+    tabs.forEach(function (tab) {
+      tab.style.display = !q || tab.getAttribute('data-vehicle-label').indexOf(q) !== -1 ? '' : 'none';
+    });
+  });
+})();
+</script>
 
 {% if vehicle %}
 <div class="card mb-24" style="padding:10px 14px;">
