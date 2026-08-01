@@ -5,6 +5,7 @@ T-Tech Solutions | June 2026
 """
 
 import os
+import sys
 import csv
 import difflib
 import io
@@ -19,6 +20,13 @@ from functools import wraps
 
 import openpyxl
 import requests
+from openpyxl.styles import Font
+from openpyxl.utils import get_column_letter
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 from dotenv import load_dotenv
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, jsonify, make_response, session, send_from_directory)
@@ -33,7 +41,21 @@ from sqlalchemy import event, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import with_loader_criteria
 
-load_dotenv()
+# A PyInstaller-frozen spoke .exe needs its .env and default SQLite file
+# next to the .exe itself (sys.executable — stable across runs), not
+# resolved the normal way: the module's own __file__/Flask's instance_path
+# both point inside the frozen bundle's extraction dir, which for --onefile
+# is a fresh temp folder every single run. Defaulting the DB there would
+# silently lose all local data on every restart. Untouched for the normal
+# case (dev machine, Render) — same load_dotenv()/default URI as before.
+FROZEN = getattr(sys, 'frozen', False)
+if FROZEN:
+    _exe_dir = os.path.dirname(sys.executable)
+    load_dotenv(os.path.join(_exe_dir, '.env'))
+    _default_db_uri = 'sqlite:///' + os.path.join(_exe_dir, 'transport_erp.db').replace('\\', '/')
+else:
+    load_dotenv()
+    _default_db_uri = 'sqlite:///transport_erp.db'
 
 # ─────────────────────────────────────────────────────────────
 # App Setup
@@ -54,7 +76,7 @@ if not secret_key:
 app = Flask(__name__)
 app.config.update(
     SECRET_KEY=secret_key,
-    SQLALCHEMY_DATABASE_URI=os.environ.get('DATABASE_URL', 'sqlite:///transport_erp.db'),
+    SQLALCHEMY_DATABASE_URI=os.environ.get('DATABASE_URL', _default_db_uri),
     SQLALCHEMY_TRACK_MODIFICATIONS=False,
     COMMISSION_DRIVER_RATE=0.15,
     COMMISSION_CONDUCTOR_RATE=0.08,
@@ -3771,13 +3793,10 @@ def report_income():
         date_from=date_from_str, date_to=date_to_str, vehicle_id=vehicle_id)
 
 
-@app.route('/reports/payroll')
-@login_required
-@permission_required('reports')
-def report_payroll():
-    df, dt = query_date_range()
-    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
-
+def compute_payroll_earnings(df, dt):
+    """Crew commission breakdown for [df, dt] — shared by the payroll report
+    page and its Excel/PDF exports so the three surfaces can't drift apart
+    on the commission math."""
     dr_rate = app.config['COMMISSION_DRIVER_RATE']
     co_rate = app.config['COMMISSION_CONDUCTOR_RATE']
 
@@ -3860,11 +3879,140 @@ def report_payroll():
     grouped.extend(e for e in earnings if e['driver'].role == 'conductor' and e['driver'].id not in nested_ids)
     earnings = grouped
 
+    return earnings, total_commissions, total_garnish, total_paid, total_outstanding
+
+
+@app.route('/reports/payroll')
+@login_required
+@permission_required('reports')
+def report_payroll():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    earnings, total_commissions, total_garnish, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
+
     return render_template('reports/payroll.html',
         earnings=earnings, total_commissions=total_commissions,
         total_garnish=total_garnish,
         total_paid=total_paid, total_outstanding=total_outstanding,
         date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/reports/payroll/export.xlsx')
+@login_required
+@permission_required('reports')
+def export_payroll_excel():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    earnings, total_commissions, total_garnish, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Payroll'
+    bold = Font(bold=True)
+    money_fmt = '#,##0.00'
+
+    ws.append(['Crew Payroll / Commissions'])
+    ws['A1'].font = Font(bold=True, size=14)
+    ws.append([f'Period: {date_from_str} to {date_to_str}'])
+    ws.append([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
+    ws.append([])
+
+    headers = ['Crew Member', 'Role', 'Days Worked', 'Revenue Generated', 'Garnish',
+               'Rate %', 'Accrued', 'Paid', 'Outstanding']
+    ws.append(headers)
+    for cell in ws[ws.max_row]:
+        cell.font = bold
+
+    def write_row(name, role, e):
+        ws.append([name, role, e['days_worked'], e['total_revenue'], e['garnish'],
+                   round(e['rate_pct'], 1), e['commission'], e['paid'], e['outstanding']])
+        r = ws.max_row
+        for col in ('D', 'E', 'G', 'H', 'I'):
+            ws[f'{col}{r}'].number_format = money_fmt
+
+    for e in earnings:
+        write_row(e['driver'].name, e['driver'].role.title(), e)
+        for ce in e['conductors']:
+            name = ce['driver'].name if ce['driver'] else 'Conductor (placeholder)'
+            write_row(f'  {name}', 'Conductor', ce)
+
+    ws.append([])
+    ws.append(['TOTAL', '', '', '', total_garnish, '', total_commissions, total_paid, total_outstanding])
+    r = ws.max_row
+    for cell in ws[r]:
+        cell.font = bold
+    for col in ('E', 'G', 'H', 'I'):
+        ws[f'{col}{r}'].number_format = money_fmt
+
+    for i, width in enumerate([28, 12, 12, 17, 12, 8, 14, 14, 14], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    resp.headers['Content-Disposition'] = f'attachment; filename=payroll_{date_from_str}_to_{date_to_str}.xlsx'
+    return resp
+
+
+@app.route('/reports/payroll/export.pdf')
+@login_required
+@permission_required('reports')
+def export_payroll_pdf():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    earnings, total_commissions, total_garnish, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
+
+    styles = getSampleStyleSheet()
+    elements = [
+        Paragraph('Crew Payroll / Commissions', styles['Title']),
+        Paragraph(f'Period: {date_from_str} to {date_to_str}', styles['Normal']),
+        Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}', styles['Normal']),
+        Spacer(1, 10),
+    ]
+
+    headers = ['Crew Member', 'Role', 'Days', 'Revenue', 'Garnish', 'Rate', 'Accrued', 'Paid', 'Outstanding']
+    data = [headers]
+
+    def data_row(name, role, e):
+        data.append([name, role, str(e['days_worked']), f"${e['total_revenue']:,.2f}",
+                     f"${e['garnish']:,.2f}", f"{e['rate_pct']:.1f}%", f"${e['commission']:,.2f}",
+                     f"${e['paid']:,.2f}", f"${e['outstanding']:,.2f}"])
+
+    for e in earnings:
+        data_row(e['driver'].name, e['driver'].role.title(), e)
+        for ce in e['conductors']:
+            name = ce['driver'].name if ce['driver'] else 'Conductor (placeholder)'
+            data_row(f'  {name}', 'Conductor', ce)
+
+    data.append(['TOTAL', '', '', '', f'${total_garnish:,.2f}', '', f'${total_commissions:,.2f}',
+                 f'${total_paid:,.2f}', f'${total_outstanding:,.2f}'])
+
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+        ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f1f5f9')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8fafc')]),
+    ]))
+    elements.append(table)
+
+    out = io.BytesIO()
+    doc = SimpleDocTemplate(out, pagesize=landscape(A4),
+                             leftMargin=14 * mm, rightMargin=14 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
+    doc.build(elements)
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'application/pdf'
+    resp.headers['Content-Disposition'] = f'attachment; filename=payroll_{date_from_str}_to_{date_to_str}.pdf'
+    return resp
 
 
 @app.route('/reports/shortfalls')
