@@ -11,3 +11,8 @@ instance/
 !.env.example
 *.log
 certs/
+
+# PyInstaller build output for the spoke .exe (see spoke_build.spec) --
+# regenerated on demand, not something to version.
+build/
+dist/
