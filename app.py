@@ -12,9 +12,11 @@ import io
 import json
 import re
 import secrets
+import socket
 import threading
 import time
 import uuid
+import webbrowser
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 
@@ -51,18 +53,60 @@ from sqlalchemy.orm import with_loader_criteria
 FROZEN = getattr(sys, 'frozen', False)
 if FROZEN:
     _exe_dir = os.path.dirname(sys.executable)
-    load_dotenv(os.path.join(_exe_dir, '.env'))
+    _env_path = os.path.join(_exe_dir, '.env')
+    load_dotenv(_env_path)
     _default_db_uri = 'sqlite:///' + os.path.join(_exe_dir, 'transport_erp.db').replace('\\', '/')
 else:
+    _env_path = os.path.join(os.getcwd(), '.env')
     load_dotenv()
     _default_db_uri = 'sqlite:///transport_erp.db'
+
+
+def persist_env_updates(updates):
+    """Rewrite/append KEY=value lines in the local .env file (creating it
+    if absent) and mirror them into os.environ for the current process.
+    Used by first-run setup (SECRET_KEY, /setup's hub enrollment) so a
+    shipped spoke .exe never requires hand-editing .env — settings chosen
+    once in the browser survive a restart the same as if a person had
+    typed them in themselves."""
+    lines = []
+    if os.path.exists(_env_path):
+        with open(_env_path, encoding='utf-8') as f:
+            lines = f.readlines()
+    seen = set()
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith('#') or '=' not in stripped:
+            continue
+        key = stripped.split('=', 1)[0]
+        if key in updates:
+            lines[i] = f'{key}={updates[key]}\n'
+            seen.add(key)
+    for key, value in updates.items():
+        if key not in seen:
+            lines.append(f'{key}={value}\n')
+    with open(_env_path, 'w', encoding='utf-8') as f:
+        f.writelines(lines)
+    for key, value in updates.items():
+        os.environ[key] = value
+
 
 # ─────────────────────────────────────────────────────────────
 # App Setup
 # ─────────────────────────────────────────────────────────────
-IS_PRODUCTION = os.environ.get('FLASK_ENV', 'production').lower() == 'production'
+# A shipped spoke .exe must always run production-hardened regardless of
+# whether FLASK_ENV got set — there's no dev machine on the other end of
+# it to deliberately opt into debug mode.
+IS_PRODUCTION = True if FROZEN else os.environ.get('FLASK_ENV', 'production').lower() == 'production'
 
 secret_key = os.environ.get('SECRET_KEY')
+if not secret_key and FROZEN:
+    # First launch of a shipped .exe with no SECRET_KEY yet — generate one
+    # and persist it next to the .exe so sessions survive a restart.
+    # (Never regenerate silently once one exists: that would invalidate
+    # every open session on every restart.)
+    secret_key = secrets.token_hex(32)
+    persist_env_updates({'SECRET_KEY': secret_key})
 if not secret_key:
     if IS_PRODUCTION:
         raise RuntimeError(
@@ -2401,6 +2445,91 @@ def service_worker():
     whole app, not just /static/ — required for it to intercept navigation
     requests across every page."""
     return send_from_directory('static', 'sw.js', mimetype='application/javascript')
+
+
+@app.before_request
+def require_first_run_setup():
+    """A freshly launched spoke .exe (nothing pre-filled in .env, no
+    admin account yet) goes straight to /setup instead of a bare login
+    screen with no way in. Scoped to FROZEN only — Render's hub always
+    comes up with ADMIN_PASSWORD pre-set, so this is purely a spoke
+    first-run concern and never touches hub behavior."""
+    if not FROZEN or request.endpoint in (None, 'setup', 'static', 'service_worker'):
+        return
+    if User.query.count() == 0:
+        return redirect(url_for('setup'))
+
+
+@app.route('/setup', methods=['GET', 'POST'])
+def setup():
+    """First-run wizard for a brand-new spoke .exe: pick a local admin
+    password, optionally enroll with a hub right here instead of an
+    admin visiting Sync Sites and copy-pasting an API key into .env (see
+    api_sync_enroll). Locked out the moment any user exists — this is
+    a first-boot-only endpoint, not a standing account-creation route."""
+    if User.query.count() > 0:
+        return redirect(url_for('login'))
+    if request.method == 'POST':
+        password = request.form.get('password') or ''
+        confirm = request.form.get('confirm_password') or ''
+        display_name = request.form.get('display_name', '').strip() or socket.gethostname()
+        hub_url = request.form.get('hub_url', '').strip().rstrip('/')
+        hub_username = request.form.get('hub_username', '').strip()
+        hub_password = request.form.get('hub_password') or ''
+
+        if len(password) < 8:
+            flash('Password must be at least 8 characters.', 'danger')
+            return render_template('auth/setup.html', hostname=display_name)
+        if password != confirm:
+            flash('Passwords do not match.', 'danger')
+            return render_template('auth/setup.html', hostname=display_name)
+        if hub_url and not (hub_username and hub_password):
+            flash('Enter both the hub admin username and password to connect to a hub.', 'danger')
+            return render_template('auth/setup.html', hostname=display_name)
+
+        if hub_url:
+            try:
+                resp = requests.post(f'{hub_url}/api/sync/enroll', json={
+                    'display_name': display_name,
+                    'username': hub_username, 'password': hub_password,
+                }, timeout=15)
+            except requests.RequestException as e:
+                flash(f"Could not reach that hub URL: {e}", 'danger')
+                return render_template('auth/setup.html', hostname=display_name)
+            if resp.status_code != 200:
+                message = 'Enrollment failed.'
+                try:
+                    message = resp.json().get('error', message)
+                except ValueError:
+                    pass
+                flash(message, 'danger')
+                return render_template('auth/setup.html', hostname=display_name)
+            payload = resp.json()
+            app.config['SITE_ID'] = payload['site_id']
+            app.config['SYNC_ENABLED'] = True
+            app.config['SYNC_HUB_URL'] = hub_url
+            app.config['SYNC_API_KEY'] = payload['api_key']
+            persist_env_updates({
+                'SITE_ID': payload['site_id'],
+                'SYNC_ENABLED': 'true',
+                'SYNC_HUB_URL': hub_url,
+                'SYNC_API_KEY': payload['api_key'],
+                'SYNC_INTERVAL_SECONDS': str(app.config['SYNC_INTERVAL_SECONDS']),
+            })
+
+        admin = User(username='admin', email='admin@transport.local', role='admin')
+        admin.set_password(password)
+        db.session.add(admin)
+        db.session.commit()
+
+        if app.config['SYNC_ENABLED']:
+            start_sync_thread()
+
+        login_user(admin)
+        session.permanent = True
+        flash('Setup complete — welcome to TransFleet ERP.', 'success')
+        return redirect(url_for('dashboard'))
+    return render_template('auth/setup.html', hostname=socket.gethostname())
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -6914,6 +7043,27 @@ def sync_sites():
     return render_template('sync/sites.html', sites=sites)
 
 
+def register_sync_site(site_id, display_name):
+    """Shared by the admin-UI form (sync_site_add) and the self-service
+    /api/sync/enroll endpoint — same validation and creation either way,
+    just a different caller decides what site_id/display_name to pass in."""
+    if not site_id:
+        raise ValueError('Site ID is required.')
+    if not re.match(r'^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$', site_id):
+        raise ValueError('Site ID must be lowercase letters, numbers, and hyphens only (e.g. site-nairobi-01).')
+    check_unique(SyncSite, 'site_id', site_id)
+    api_key = secrets.token_urlsafe(32)
+    site = SyncSite(
+        site_id=site_id,
+        api_key_hash=generate_password_hash(api_key),
+        display_name=display_name or site_id,
+        is_active=True,
+    )
+    db.session.add(site)
+    db.session.flush()
+    return site, api_key
+
+
 @app.route('/sync/sites/add', methods=['GET', 'POST'])
 @login_required
 @admin_required
@@ -6922,20 +7072,7 @@ def sync_site_add():
     if request.method == 'POST':
         site_id = request.form.get('site_id', '').strip().lower()
         display_name = request.form.get('display_name', '').strip()
-        if not site_id:
-            raise ValueError('Site ID is required.')
-        if not re.match(r'^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$', site_id):
-            raise ValueError('Site ID must be lowercase letters, numbers, and hyphens only (e.g. site-nairobi-01).')
-        check_unique(SyncSite, 'site_id', site_id)
-        api_key = secrets.token_urlsafe(32)
-        site = SyncSite(
-            site_id=site_id,
-            api_key_hash=generate_password_hash(api_key),
-            display_name=display_name or site_id,
-            is_active=True,
-        )
-        db.session.add(site)
-        db.session.flush()
+        site, api_key = register_sync_site(site_id, display_name)
         log_audit('CREATE', 'sync_sites', site.id, f'Registered spoke site {site.site_id}')
         db.session.commit()
         # The plaintext key only ever exists in this one response — only
@@ -7573,6 +7710,52 @@ def sync_auth_required(f):
     return decorated
 
 
+@app.route('/api/sync/enroll', methods=['POST'])
+@csrf.exempt
+@limiter.limit('5 per minute')
+def api_sync_enroll():
+    """Self-service spoke registration — lets a brand-new spoke's
+    first-run /setup wizard register itself against this hub directly,
+    using an existing hub ADMIN's own login as proof it's allowed to
+    join. Same effect as an admin visiting Sync Sites and clicking
+    Register New Site (register_sync_site), just invoked machine-to-
+    machine instead of through a browser, so nobody has to manually copy
+    an API key into a spoke's .env.
+
+    Trust boundary: this only requires credentials for an ACTIVE ADMIN
+    account. That's a deliberate choice, not an oversight — it's the same
+    authority that already gates the manual Sync Sites page
+    (@admin_required), just reachable without a session. Rate-limited to
+    slow down credential-guessing against it."""
+    data = request.get_json(force=True, silent=True) or {}
+    username = (data.get('username') or '').strip().lower()
+    password = data.get('password') or ''
+    display_name = (data.get('display_name') or '').strip()
+    site_id = (data.get('site_id') or '').strip().lower()
+
+    user = User.query.filter_by(username=username).first()
+    if not user or not user.is_active or user.role != 'admin' or not user.check_password(password):
+        return jsonify({'error': 'Invalid admin credentials.'}), 401
+
+    if not site_id:
+        base = re.sub(r'[^a-z0-9]+', '-', display_name.lower()).strip('-')[:40] or 'site'
+        site_id = base
+        suffix = 1
+        while SyncSite.query.filter_by(site_id=site_id).first():
+            suffix += 1
+            site_id = f'{base[:38]}-{suffix}'
+
+    try:
+        site, api_key = register_sync_site(site_id, display_name)
+    except ValueError as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 400
+
+    log_audit('CREATE', 'sync_sites', site.id, f'Self-enrolled spoke site {site.site_id} (via {username})')
+    db.session.commit()
+    return jsonify({'site_id': site.site_id, 'display_name': site.display_name, 'api_key': api_key})
+
+
 @app.route('/api/sync/push', methods=['POST'])
 @csrf.exempt
 @sync_auth_required
@@ -8177,14 +8360,24 @@ def create_default_expense_categories():
 
 
 def create_default_admin():
-    if not User.query.filter_by(username='admin').first():
-        admin_password = os.environ.get('ADMIN_PASSWORD') or secrets.token_urlsafe(12)
-        admin = User(username='admin', email='admin@transport.local', role='admin')
-        admin.set_password(admin_password)
-        db.session.add(admin)
-        db.session.commit()
-        print(f'Default admin created — username: admin  password: {admin_password}')
-        print('Log in and change this password immediately.')
+    if User.query.filter_by(username='admin').first():
+        return
+    admin_password = os.environ.get('ADMIN_PASSWORD')
+    if not admin_password:
+        if FROZEN:
+            # No admin yet and nothing pre-configured in .env — the
+            # first-run /setup wizard creates the admin instead, with a
+            # password the person running this actually chose in their
+            # browser rather than one only ever visible in a console
+            # window they may have already closed.
+            return
+        admin_password = secrets.token_urlsafe(12)
+    admin = User(username='admin', email='admin@transport.local', role='admin')
+    admin.set_password(admin_password)
+    db.session.add(admin)
+    db.session.commit()
+    print(f'Default admin created — username: admin  password: {admin_password}')
+    print('Log in and change this password immediately.')
 
 
 with app.app_context():
@@ -8208,4 +8401,11 @@ if app.config['SYNC_ENABLED']:
 if __name__ == '__main__':
     debug_mode = not IS_PRODUCTION
     host = os.environ.get('HOST', '127.0.0.1' if IS_PRODUCTION else '0.0.0.0')
-    app.run(debug=debug_mode, host=host, port=int(os.environ.get('PORT', 5000)))
+    port = int(os.environ.get('PORT', 5000))
+    if FROZEN:
+        # A double-clicked .exe has no terminal to print a URL into —
+        # open the browser ourselves. Timer (not a direct call) so it
+        # fires shortly after app.run() below has actually bound the
+        # port, instead of racing it.
+        threading.Timer(1.5, lambda: webbrowser.open(f'http://127.0.0.1:{port}')).start()
+    app.run(debug=debug_mode, host=host, port=port)

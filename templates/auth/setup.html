@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Setup | TransFleet ERP</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+<div class="login-page">
+  <div class="login-card" style="max-width:480px;">
+    <div class="login-logo">
+      <div class="logo-icon">🚌</div>
+      <h1>TransFleet ERP</h1>
+      <p>First-time setup for this PC</p>
+    </div>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ category }}" style="margin-bottom:14px;">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+      <div class="form-group" style="margin-bottom:14px;">
+        <label for="display_name">This PC's name</label>
+        <input type="text" id="display_name" name="display_name" placeholder="{{ hostname }}" value="{{ hostname }}">
+        <div class="form-hint">How it shows up in Sync Health on the hub.</div>
+      </div>
+
+      <div class="form-group" style="margin-bottom:14px;">
+        <label for="password">Admin password for this PC</label>
+        <input type="password" id="password" name="password" required placeholder="At least 8 characters" autofocus>
+      </div>
+      <div class="form-group" style="margin-bottom:18px;">
+        <label for="confirm_password">Confirm password</label>
+        <input type="password" id="confirm_password" name="confirm_password" required placeholder="Re-enter password">
+      </div>
+
+      <div class="form-group" style="margin-bottom:8px;">
+        <label style="display:flex;align-items:center;gap:6px;font-weight:normal;">
+          <input type="checkbox" id="connect_hub" style="width:auto;" onchange="document.getElementById('hub-fields').style.display=this.checked?'block':'none';">
+          Connect this PC to a central hub now
+        </label>
+      </div>
+
+      <div id="hub-fields" style="display:none;padding:14px;background:var(--bg-subtle,#f8fafc);border-radius:var(--radius);margin-bottom:18px;">
+        <div class="form-group" style="margin-bottom:12px;">
+          <label for="hub_url">Hub URL</label>
+          <input type="text" id="hub_url" name="hub_url" placeholder="https://transport-financial-system.onrender.com">
+        </div>
+        <div class="form-hint" style="margin-bottom:12px;">
+          Sign in with an existing <strong>admin</strong> account on that hub — this PC registers
+          itself automatically, nothing to copy or paste.
+        </div>
+        <div class="form-group" style="margin-bottom:12px;">
+          <label for="hub_username">Hub admin username</label>
+          <input type="text" id="hub_username" name="hub_username" placeholder="admin">
+        </div>
+        <div class="form-group" style="margin-bottom:0;">
+          <label for="hub_password">Hub admin password</label>
+          <input type="password" id="hub_password" name="hub_password" placeholder="Hub admin's password">
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary">Finish setup</button>
+    </form>
+
+    <div class="login-footer">
+      <p>T-Tech Solutions &copy; 2026 &mdash; All rights reserved</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>
