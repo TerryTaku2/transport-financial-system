@@ -108,7 +108,7 @@
         </div>
         <div class="form-group">
           <label>Driver</label>
-          <select name="driver_id" data-refdata="drivers">
+          <select name="driver_id">
             <option value="">— None (mileage/diesel only) —</option>
             {% for d in drivers %}
             <option value="{{ d.id }}">{{ d.name }}</option>
