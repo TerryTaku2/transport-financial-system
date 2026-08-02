@@ -7498,10 +7498,18 @@ def apply_incoming_record(table, item, incoming_site_id, direction):
         obj = model(sync_uuid=sync_uuid_value)
         _apply_fields(obj)
         try:
-            db.session.add(obj)
-            db.session.flush()
+            # SAVEPOINT-scoped, not db.session.rollback() — a whole-session
+            # rollback here would silently discard every other record
+            # already flushed earlier in the SAME pull/push batch (they
+            # share one outer transaction, committed once at the end by
+            # the caller). That was a real bug: one duplicate-constraint
+            # row anywhere in a batch wiped out all its siblings with no
+            # error surfaced anywhere. begin_nested() unwinds only this
+            # one insert on failure, leaving the rest of the batch intact.
+            with db.session.begin_nested():
+                db.session.add(obj)
+                db.session.flush()
         except IntegrityError:
-            db.session.rollback()
             return {'sync_uuid': sync_uuid_value, 'status': 'rejected', 'reason': 'duplicate_constraint'}
         return {'sync_uuid': sync_uuid_value, 'status': 'applied'}
 

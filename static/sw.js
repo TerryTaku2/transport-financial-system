@@ -13,13 +13,15 @@
  * cached page while offline — acceptable here since each field user installs
  * their own copy of the app on their own device.
  */
-var CACHE_NAME = 'transfleet-shell-v2';
+var CACHE_NAME = 'transfleet-shell-v3';
 var RUNTIME_CACHE = 'transfleet-pages-runtime';
 var SHELL_FILES = [
   '/login',
   '/static/css/style.css',
   '/static/js/app.js',
   '/static/js/offline.js',
+  '/static/js/vendor/chart.umd.min.js',
+  '/static/js/vendor/feather.min.js',
   '/static/manifest.json',
   '/static/offline.html',
   '/static/img/icons/icon-192.png',
