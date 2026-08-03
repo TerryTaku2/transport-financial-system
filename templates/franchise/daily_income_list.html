@@ -6,76 +6,350 @@
 <div class="page-header">
   <div>
     <h1>Daily Franchise Income</h1>
-    <div class="subtitle">Daily-fee franchise collections — one reconciliation entry per date</div>
+    <div class="subtitle">Income is recorded per vehicle; expenditure (traffic fines, facilitation fees, workshop, wages) is shared across the whole franchise and recorded once per day</div>
   </div>
-  <a href="{{ url_for('franchise_daily_income_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Daily Income</a>
+</div>
+
+<div class="kpi-grid mb-24">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Fleet Income (all vehicles)</div>
+    <div class="kpi-value">{{ fleet_income|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Shared Expenditure</div>
+    <div class="kpi-value">{{ total_expenditure|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Net Income</div>
+    <div class="kpi-value">{{ net_income|currency }}</div>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar mb-24">
+  <input type="hidden" name="vehicle_id" value="{{ vehicle.id if vehicle else '' }}">
+  <div class="form-group">
+    <label>Period</label>
+    <div class="btn-group">
+      <a href="{{ url_for('franchise_daily_income_list', vehicle_id=vehicle.id if vehicle else '', period='today') }}" class="btn btn-xs {% if period=='today' %}btn-primary{% else %}btn-outline{% endif %}">Today</a>
+      <a href="{{ url_for('franchise_daily_income_list', vehicle_id=vehicle.id if vehicle else '', period='week') }}" class="btn btn-xs {% if period=='week' %}btn-primary{% else %}btn-outline{% endif %}">This Week</a>
+      <a href="{{ url_for('franchise_daily_income_list', vehicle_id=vehicle.id if vehicle else '', period='month') }}" class="btn btn-xs {% if period=='month' %}btn-primary{% else %}btn-outline{% endif %}">This Month</a>
+      <a href="{{ url_for('franchise_daily_income_list', vehicle_id=vehicle.id if vehicle else '', period='all') }}" class="btn btn-xs {% if period=='all' %}btn-primary{% else %}btn-outline{% endif %}">All Time</a>
+    </div>
+  </div>
+</form>
+
+<h2 class="mb-8">Income — by vehicle</h2>
+
+{% if vehicles %}
+<!-- Vehicle picker — type a plate to filter, or use the dropdown button to browse. Income is always attributed to a specific vehicle, never a whole-franchise total. -->
+<div class="card mb-24" style="padding:14px;overflow:visible;">
+  <div class="form-group" style="max-width:320px;margin:0;">
+    <label>Vehicle</label>
+    <select id="daily-income-vehicle-picker" data-refdata="franchise_vehicles">
+      {% for v in vehicles %}
+      <option value="{{ v.id }}" {% if vehicle and vehicle.id==v.id %}selected{% endif %}>{{ v.number_plate }} — {{ v.franchisee_name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+<script>
+(function () {
+  var picker = document.getElementById('daily-income-vehicle-picker');
+  if (!picker) return;
+  picker.addEventListener('change', function () {
+    if (!picker.value) return;
+    var url = new URL(window.location.href);
+    url.searchParams.set('vehicle_id', picker.value);
+    window.location.href = url.toString();
+  });
+})();
+</script>
+
+<div class="card mb-24" style="padding:10px 14px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+    <div class="form-hint" style="margin:0;">Import or export {{ vehicle.number_plate if vehicle else 'this vehicle' }}'s daily income as CSV/Excel</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <a href="{{ url_for('franchise_daily_income_export', vehicle_id=vehicle.id if vehicle else '', period=period) }}" class="btn btn-xs btn-outline">
+        <i data-feather="download"></i> Export CSV
+      </a>
+      <form method="POST" action="{{ url_for('franchise_income_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin:0;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="kind" value="daily">
+        <input type="hidden" name="vehicle_id" value="{{ vehicle.id if vehicle else '' }}">
+        <input type="hidden" name="period" value="{{ period }}">
+        <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required style="font-size:12px;">
+        <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload"></i> Import</button>
+      </form>
+    </div>
+  </div>
 </div>
 
 <div class="card mb-24" style="padding:10px 14px;">
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
-    <div class="form-hint" style="margin:0;">Import daily income and expenses as CSV/Excel</div>
-    <form method="POST" action="{{ url_for('franchise_income_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0;">
+    <div class="form-hint" style="margin:0;">Import a franchise-wide workbook — one sheet per vehicle, matched by number plate in the sheet name. Vehicles must already be registered under Franchise Vehicles; unmatched sheets are skipped.</div>
+    <form method="POST" action="{{ url_for('franchise_income_import_bulk') }}" enctype="multipart/form-data" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0;">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="kind" value="daily">
-      <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required style="font-size:12px;">
-      <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload"></i> Import</button>
+      <input type="hidden" name="period" value="{{ period }}">
+      <input type="file" name="file" accept=".xlsx,.xlsm" required style="font-size:12px;">
+      <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload-cloud"></i> Import Fleet Workbook</button>
     </form>
   </div>
 </div>
 
-<div class="card">
-  {% if entries.items %}
+<div class="card mb-24">
+  <div class="card-header"><h3>Record Income — {{ vehicle.number_plate }} ({{ vehicle.franchisee_name }})</h3></div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('franchise_daily_income_add') }}" id="franchise-daily-income-form" data-offline-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="vehicle_id" value="{{ vehicle.id }}">
+      <input type="hidden" name="period" value="{{ period }}">
+
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="entry_date" required value="{{ today }}">
+        </div>
+        <div class="form-group">
+          <label>Income (USD)</label>
+          <input type="number" class="calc-input" name="income" step="0.01" min="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Cash Deposited (USD)</label>
+          <input type="number" class="calc-input" name="deposited" step="0.01" min="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <input type="text" name="description" placeholder="Optional note">
+        </div>
+      </div>
+
+      <div class="kpi-grid mb-16">
+        <div class="kpi-card kpi-amber">
+          <div class="kpi-label">Variance: Cash Deposited vs. Income (computed)</div>
+          <div class="kpi-value" id="calc-income-variance">$0.00</div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary"><i data-feather="plus"></i> Add Income Entry</button>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById('franchise-daily-income-form');
+  var varEl = document.getElementById('calc-income-variance');
+
+  function num(name) {
+    var v = parseFloat(form.querySelector('[name="' + name + '"]').value);
+    return isNaN(v) ? 0 : v;
+  }
+
+  function fmt(v) {
+    return '$' + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  }
+
+  function recalc() {
+    varEl.textContent = fmt(num('deposited') - num('income'));
+  }
+
+  Array.prototype.forEach.call(form.querySelectorAll('.calc-input'), function (input) {
+    input.addEventListener('input', recalc);
+  });
+  recalc();
+})();
+</script>
+
+<div class="kpi-grid mb-16">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">{{ vehicle.number_plate }} — Total Income</div>
+    <div class="kpi-value">{{ vehicle_income_total|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">{{ vehicle.number_plate }} — Total Cash Deposited</div>
+    <div class="kpi-value">{{ vehicle_deposited_total|currency }}</div>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>{{ vehicle.number_plate }} — {{ {'today': 'Today', 'week': 'This Week', 'month': 'This Month', 'all': 'All Time'}[period] }} Income</h3></div>
+  {% if income_entries %}
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
           <th>Date</th>
-          <th>Vehicle</th>
           <th class="text-right">Income</th>
-          <th class="text-right">Expenditure</th>
-          <th class="text-right">Net Income</th>
           <th class="text-right">Cash Deposited</th>
           <th class="text-right">Variance</th>
           <th>Description</th>
+          {% if current_user.role == 'admin' %}
           <th></th>
+          {% endif %}
         </tr>
       </thead>
       <tbody>
-        {% for e in entries.items %}
+        {% for e in income_entries %}
         <tr>
           <td>{{ e.entry_date }}</td>
-          <td>{{ e.vehicle.number_plate ~ ' — ' ~ e.vehicle.franchisee_name if e.vehicle else '— Whole Franchise —' }}</td>
           <td class="text-right">{{ e.income|currency }}</td>
-          <td class="text-right">{{ e.total_expenditure|currency }}</td>
-          <td class="text-right">{{ e.cash_in_hand|currency }}</td>
           <td class="text-right">{{ e.deposited|currency }}</td>
-          <td class="text-right"><span class="{% if e.variance < 0 %}text-danger{% elif e.variance > 0 %}text-warning{% endif %}">{{ e.variance|currency }}</span></td>
+          <td class="text-right"><span class="{% if e.deposited - e.income < 0 %}text-danger{% elif e.deposited - e.income > 0 %}text-warning{% endif %}">{{ (e.deposited - e.income)|currency }}</span></td>
           <td>{{ e.description or '—' }}</td>
+          {% if current_user.role == 'admin' %}
           <td>
-            {% if current_user.role == 'admin' %}
             <form method="POST" action="{{ url_for('franchise_daily_income_delete', eid=e.id) }}" data-confirm="Delete this daily income entry?">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-xs">Del</button>
             </form>
-            {% endif %}
           </td>
+          {% endif %}
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
-  {% if entries.pages > 1 %}
-  <div class="pagination">
-    {% if entries.has_prev %}<a href="{{ url_for('franchise_daily_income_list', page=entries.prev_num) }}">&laquo; Prev</a>{% endif %}
-    <span>Page {{ entries.page }} of {{ entries.pages }}</span>
-    {% if entries.has_next %}<a href="{{ url_for('franchise_daily_income_list', page=entries.next_num) }}">Next &raquo;</a>{% endif %}
-  </div>
-  {% endif %}
   {% else %}
+  <div class="empty-state"><p>No daily income entries for {{ vehicle.number_plate }} in this period.</p></div>
+  {% endif %}
+</div>
+
+{% else %}
+<div class="card mb-24">
   <div class="empty-state">
-    <div class="empty-icon">🧾</div>
-    <p>No daily franchise income recorded yet. <a href="{{ url_for('franchise_daily_income_add') }}">Add the first one</a>.</p>
+    <p>No franchise vehicles registered yet. <a href="{{ url_for('franchise_vehicles') }}">Register a vehicle</a> before recording daily income.</p>
   </div>
+</div>
+{% endif %}
+
+<h2 class="mb-8">Expenditure — shared across all vehicles</h2>
+<div class="card mb-24">
+  <div class="card-header">
+    <h3>Record Franchise Expenditure</h3>
+    <div class="form-hint" style="margin:0;">One entry per date — traffic fines, facilitation fees, workshop and wages are franchise-wide costs, not attributed to a single vehicle</div>
+  </div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('franchise_daily_income_add') }}" id="franchise-daily-expenditure-form" data-offline-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="vehicle_id" value="">
+      <input type="hidden" name="period" value="{{ period }}">
+
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="entry_date" required value="{{ today }}">
+        </div>
+        <div class="form-group">
+          <label>Traffic Fines (USD)</label>
+          <input type="number" class="calc-input" name="exp_traffic_fines" step="0.01" min="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Facilitation Fees (USD)</label>
+          <input type="number" class="calc-input" name="exp_facilitation_fees" step="0.01" min="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Workshop (USD)</label>
+          <input type="number" class="calc-input" name="exp_workshop" step="0.01" min="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Wages (USD)</label>
+          <input type="number" class="calc-input" name="exp_wages" step="0.01" min="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Other Expenditure (USD)</label>
+          <input type="number" class="calc-input" name="other_expenditure" step="0.01" min="0" placeholder="0.00">
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <input type="text" name="description" placeholder="Optional note">
+        </div>
+      </div>
+
+      <div class="kpi-grid mb-16">
+        <div class="kpi-card kpi-amber">
+          <div class="kpi-label">Total Expenditure (computed)</div>
+          <div class="kpi-value" id="calc-expenditure-total">$0.00</div>
+        </div>
+      </div>
+
+      <button type="submit" class="btn btn-primary"><i data-feather="plus"></i> Add Expenditure Entry</button>
+    </form>
+  </div>
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById('franchise-daily-expenditure-form');
+  var totalEl = document.getElementById('calc-expenditure-total');
+
+  function num(name) {
+    var v = parseFloat(form.querySelector('[name="' + name + '"]').value);
+    return isNaN(v) ? 0 : v;
+  }
+
+  function fmt(v) {
+    return '$' + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
+  }
+
+  function recalc() {
+    totalEl.textContent = fmt(num('exp_traffic_fines') + num('exp_facilitation_fees')
+      + num('exp_workshop') + num('exp_wages') + num('other_expenditure'));
+  }
+
+  Array.prototype.forEach.call(form.querySelectorAll('.calc-input'), function (input) {
+    input.addEventListener('input', recalc);
+  });
+  recalc();
+})();
+</script>
+
+<div class="card">
+  <div class="card-header"><h3>{{ {'today': 'Today', 'week': 'This Week', 'month': 'This Month', 'all': 'All Time'}[period] }} Shared Expenditure</h3></div>
+  {% if expenditure_entries %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th class="text-right">Traffic Fines</th>
+          <th class="text-right">Facilitation Fees</th>
+          <th class="text-right">Workshop</th>
+          <th class="text-right">Wages</th>
+          <th class="text-right">Other</th>
+          <th class="text-right">Total Expenditure</th>
+          <th>Description</th>
+          {% if current_user.role == 'admin' %}
+          <th></th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in expenditure_entries %}
+        <tr>
+          <td>{{ e.entry_date }}</td>
+          <td class="text-right">{{ e.exp_traffic_fines|currency }}</td>
+          <td class="text-right">{{ e.exp_facilitation_fees|currency }}</td>
+          <td class="text-right">{{ e.exp_workshop|currency }}</td>
+          <td class="text-right">{{ e.exp_wages|currency }}</td>
+          <td class="text-right">{{ e.other_expenditure|currency }}</td>
+          <td class="text-right">{{ e.total_expenditure|currency }}</td>
+          <td>{{ e.description or '—' }}</td>
+          {% if current_user.role == 'admin' %}
+          <td>
+            <form method="POST" action="{{ url_for('franchise_daily_income_delete', eid=e.id) }}" data-confirm="Delete this expenditure entry?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No shared expenditure entries in this period.</p></div>
   {% endif %}
 </div>
 {% endblock %}

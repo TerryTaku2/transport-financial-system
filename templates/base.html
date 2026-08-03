@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>{% block title %}TransFleet ERP{% endblock %} | T-Tech Solutions</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ asset_v('css/style.css') }}">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/icons/apple-touch-icon.png') }}">
   <meta name="theme-color" content="#2563eb">
@@ -158,12 +158,6 @@
       <a href="{{ url_for('franchise_vehicles') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_vehicle') %}active{% endif %}">
         <i data-feather="truck"></i> Vehicles
       </a>
-      <a href="{{ url_for('franchise_collections') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_collection') %}active{% endif %}">
-        <i data-feather="dollar-sign"></i> Collections
-      </a>
-      <a href="{{ url_for('report_franchise_analysis') }}" class="nav-item {% if request.endpoint == 'report_franchise_analysis' %}active{% endif %}">
-        <i data-feather="trending-up"></i> Franchise Analysis
-      </a>
       <a href="{{ url_for('report_franchise_reconciliation') }}" class="nav-item {% if request.endpoint == 'report_franchise_reconciliation' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Reconciliation Schedule
       </a>
@@ -272,8 +266,8 @@
 </div><!-- /app-layout -->
 
 <script src="{{ url_for('static', filename='js/vendor/chart.umd.min.js') }}"></script>
-<script src="{{ url_for('static', filename='js/app.js') }}"></script>
-<script src="{{ url_for('static', filename='js/offline.js') }}"></script>
+<script src="{{ url_for('static', filename='js/app.js') }}?v={{ asset_v('js/app.js') }}"></script>
+<script src="{{ url_for('static', filename='js/offline.js') }}?v={{ asset_v('js/offline.js') }}"></script>
 <script>
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/sw.js');

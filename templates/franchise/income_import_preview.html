@@ -6,9 +6,9 @@
 <div class="page-header">
   <div>
     <h1>Confirm Column Mapping</h1>
-    <div class="subtitle">{{ filename }} — {{ row_count }} row(s) detected, {{ kind|capitalize }} Income</div>
+    <div class="subtitle">{{ filename }} — {{ row_count }} row(s) detected for {{ vehicle.number_plate if vehicle else 'Whole Franchise' }}, {{ kind|capitalize }} Income</div>
   </div>
-  <a href="{{ url_for('franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Cancel</a>
+  <a href="{{ url_for('franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list', vehicle_id=vehicle_id, period=period) }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Cancel</a>
 </div>
 
 <div class="card mb-24">
@@ -17,10 +17,13 @@
     <form method="POST" action="{{ url_for('franchise_income_import_preview') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="kind" value="{{ kind }}">
+      <input type="hidden" name="vehicle_id" value="{{ vehicle_id or '' }}">
+      <input type="hidden" name="period" value="{{ period }}">
       <input type="hidden" name="filename" value="{{ filename }}">
       <input type="hidden" name="raw_data" value="{{ raw_data }}">
       <p class="form-hint" style="margin-bottom:14px;">Tell us which column in your file holds each field, then confirm. Columns that don't apply can be left as "Not in file".
-      {% if kind == 'weekly' %}Any date is accepted — it's normalized to that week's Monday, and rows sharing a week must already be combined into one row per week.{% endif %}</p>
+      {% if kind == 'weekly' %}Any date is accepted — it's normalized to that week's Monday, and rows sharing a week must already be combined into one row per week.{% endif %}
+      {% if not vehicle %}A row with a Vehicle / Number Plate must already be registered under Franchise Vehicles — unregistered plates are rejected. Leave it blank for a whole-franchise entry.{% endif %}</p>
       <div class="form-grid mb-16">
         {% for field_key, label, _synonyms in fields %}
         <div class="form-group">
@@ -34,10 +37,6 @@
         </div>
         {% endfor %}
       </div>
-      <label style="display:flex;gap:6px;align-items:center;font-size:13px;font-weight:normal;margin-bottom:16px;">
-        <input type="checkbox" name="auto_register" value="1" checked style="width:auto;">
-        Auto-register vehicles/plates not already in Franchise Vehicles
-      </label>
       <div class="btn-group">
         <button type="submit" class="btn btn-outline"><i data-feather="refresh-cw"></i> Re-preview</button>
         <button type="submit" formaction="{{ url_for('franchise_income_import_confirm') }}" class="btn btn-primary"><i data-feather="upload"></i> Confirm Import</button>
@@ -52,14 +51,18 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Date</th><th>Vehicle</th><th>Franchisee</th><th>Income</th><th>Traffic Fines</th><th>Facilitation Fees</th><th>Workshop</th><th>Wages</th><th>Other</th><th>Deposited</th><th>Description</th></tr>
+        <tr>
+          <th>Date</th>
+          {% if not vehicle %}<th>Vehicle</th>{% endif %}
+          <th>Income</th><th>Traffic Fines</th><th>Facilitation Fees</th><th>Workshop</th><th>Wages</th><th>Other</th><th>Deposited</th><th>Description</th></tr>
       </thead>
       <tbody>
         {% for row in preview_rows %}
         <tr>
           <td>{{ row.get('date') if row.get('date') not in (None, '') else '—' }}</td>
+          {% if not vehicle %}
           <td>{{ row.get('vehicle') if row.get('vehicle') not in (None, '') else '—' }}</td>
-          <td>{{ row.get('franchisee') if row.get('franchisee') not in (None, '') else '—' }}</td>
+          {% endif %}
           <td>{{ row.get('income') if row.get('income') not in (None, '') else '—' }}</td>
           <td>{{ row.get('exp_traffic_fines') if row.get('exp_traffic_fines') not in (None, '') else '—' }}</td>
           <td>{{ row.get('exp_facilitation_fees') if row.get('exp_facilitation_fees') not in (None, '') else '—' }}</td>

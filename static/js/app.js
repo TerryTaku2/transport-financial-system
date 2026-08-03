@@ -143,6 +143,13 @@ function buildSearchableSelect(select) {
   clearBtn.setAttribute('aria-label', 'Clear selection');
   wrap.appendChild(clearBtn);
 
+  var toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = 'searchable-select-toggle';
+  toggleBtn.innerHTML = '&#9662;';
+  toggleBtn.setAttribute('aria-label', 'Show all options');
+  wrap.appendChild(toggleBtn);
+
   wrap.appendChild(select);
   select.classList.add('searchable-select-native');
   select.setAttribute('tabindex', '-1');
@@ -202,7 +209,7 @@ function buildSearchableSelect(select) {
       });
     }
     activeIndex = -1;
-    dropdown.style.display = '';
+    dropdown.style.display = 'block';
   }
 
   function selectValue(value) {
@@ -235,6 +242,17 @@ function buildSearchableSelect(select) {
   clearBtn.addEventListener('click', function () {
     selectValue('');
     input.focus();
+  });
+
+  toggleBtn.addEventListener('mousedown', function (e) {
+    e.preventDefault();
+    if (dropdown.style.display === 'none' || !dropdown.style.display) {
+      input.focus();
+      renderDropdown(input.value === labelFor(select.value) ? '' : input.value);
+    } else {
+      closeDropdown();
+      syncInputFromSelect();
+    }
   });
 
   document.addEventListener('click', function (e) {

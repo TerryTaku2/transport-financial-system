@@ -147,6 +147,18 @@ limiter = Limiter(get_remote_address, app=app, storage_uri='memory://',
                   default_limits=[])
 
 
+@app.template_global()
+def asset_v(rel_path):
+    """Cache-busting query string for a static asset, e.g. `{{ url_for('static',
+    filename='js/app.js') }}?v={{ asset_v('js/app.js') }}` — keyed off the file's
+    own mtime so a JS/CSS fix takes effect on next load instead of sitting behind
+    a stale browser cache (Flask's static handler sends a 12h max-age by default)."""
+    try:
+        return int(os.path.getmtime(os.path.join(app.static_folder, rel_path)))
+    except OSError:
+        return 0
+
+
 # ─────────────────────────────────────────────────────────────
 # Models
 # ─────────────────────────────────────────────────────────────
@@ -785,12 +797,6 @@ class Budget(db.Model):
     server_touched_at = db.Column(db.DateTime, nullable=True)
 
 
-# ─────────────────────────────────────────────────────────────
-# Franchise Income: a revenue stream separate from vehicle operations.
-# Daily-fee and weekly-fee franchisees are two independent obligations, so
-# they get two independent entities — never a shared row — each with its
-# own income, expenditure breakdown, and cash reconciliation.
-# ─────────────────────────────────────────────────────────────
 class FranchiseDailyIncome(db.Model):
     """One reconciliation record per calendar date per franchise vehicle for
     daily franchise fee collections — a date can have several entries, one
@@ -922,16 +928,15 @@ class FranchiseVehicle(db.Model):
                                   order_by='FranchiseCollection.entry_date.desc()')
 
     @property
-    def total_collected(self):
-        return sum(c.amount for c in self.collections)
-
-    @property
-    def total_expense(self):
-        return sum(c.expense for c in self.collections)
-
-    @property
-    def net_collected(self):
-        return self.total_collected - self.total_expense
+    def total_income(self):
+        """Sum of this vehicle's own Daily + Weekly Income entries — income
+        is always recorded per vehicle, unlike expenditure, which is shared
+        across the whole franchise (see FranchiseDailyIncome/
+        FranchiseWeeklyIncome), so there's no per-vehicle expense/net figure
+        to show alongside it."""
+        daily = sum(e.income for e in FranchiseDailyIncome.query.filter_by(vehicle_id=self.id).all())
+        weekly = sum(e.income for e in FranchiseWeeklyIncome.query.filter_by(vehicle_id=self.id).all())
+        return daily + weekly
 
 
 class FranchiseCollection(db.Model):
@@ -1549,279 +1554,6 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
 
 
 # ─────────────────────────────────────────────────────────────
-# Franchise Workbook Import — reads a whole multi-sheet Excel workbook (like
-# the franchise's own monthly file) and finds every vehicle x date
-# collection grid in it, by recognizing each table's own headers rather
-# than requiring one flat header row per sheet.
-# ─────────────────────────────────────────────────────────────
-MAX_WORKBOOK_IMPORT_CELLS = 500000
-
-# Row labels from the franchise's own "Weekly Analysis" recap block — seen
-# while hunting for vehicle-collection grids, these confirm we've wandered
-# into that summary table rather than a real per-vehicle grid, so it's
-# skipped rather than mis-imported as vehicles named "Net Profit".
-_FRANCHISE_ANALYSIS_LABELS = {
-    'daily franchise', 'weekly franchise', 'total income', 'less expenses',
-    'bridge', 'morning tickets', 'monday payments', 'tuesday payments',
-    'net profit', 'total net profit', 'day', 'date', 'total',
-}
-
-
-def _vehicle_matrix_blocks(ws):
-    """Find every vehicle x date collection grid in a worksheet: a row of
-    ≥3 consecutive dates starting at column B, above rows whose column A
-    holds a vehicle plate/name and whose other columns hold amounts paid on
-    the matching date. Frequency ('daily' vs 'weekly') is read from the
-    nearest section label above the grid (e.g. "FRANCHISE DAILY
-    COLLECTIONS"), falling back to the sheet title, then 'daily'."""
-    blocks = []
-    for row in ws.iter_rows():
-        date_cols = []
-        for c in range(2, ws.max_column + 1):
-            v = ws.cell(row=row[0].row, column=c).value
-            if isinstance(v, (datetime, date)):
-                date_cols.append(c)
-            elif date_cols:
-                break
-        if len(date_cols) < 3:
-            continue
-        # Confirm this is really a vehicle grid, not the "Weekly Analysis"
-        # recap block (which also has a row of ~7 dates above summary labels).
-        next_a = ws.cell(row=row[0].row + 1, column=1).value
-        if next_a is None or str(next_a).strip().lower() in _FRANCHISE_ANALYSIS_LABELS:
-            continue
-
-        label = ''
-        for lookback in range(1, 15):
-            v = ws.cell(row=row[0].row - lookback, column=1).value
-            if isinstance(v, str) and v.strip():
-                label = v.strip().upper()
-                break
-        if 'DAILY' in label:
-            frequency = 'daily'
-        elif 'WEEKLY' in label:
-            frequency = 'weekly'
-        else:
-            title = ws.cell(row=1, column=1).value
-            frequency = 'weekly' if isinstance(title, str) and 'WEEKLY' in title.upper() else 'daily'
-
-        blocks.append(dict(date_row=row[0].row, date_cols=date_cols,
-                           data_start=row[0].row + 1, frequency=frequency))
-    return blocks
-
-
-_PLATE_RE = re.compile(r'^([A-Z]{2,3}\s?\d{3,5})\s*(.*)$')
-
-
-def _split_plate_name(raw):
-    raw = (raw or '').strip()
-    m = _PLATE_RE.match(raw.upper())
-    if not m:
-        return raw.upper(), (raw.upper().title() or '(unnamed)')
-    plate = re.sub(r'\s+', ' ', m.group(1).strip())
-    name = m.group(2).strip().title() if m.group(2).strip() else '(unnamed)'
-    return plate, name
-
-
-def _extract_vehicle_matrix_block(ws, block):
-    """Turn one vehicle grid into rows of {plate, name, date, amount, frequency}."""
-    date_cols = {c: (ws.cell(row=block['date_row'], column=c).value.date()
-                      if isinstance(ws.cell(row=block['date_row'], column=c).value, datetime)
-                      else ws.cell(row=block['date_row'], column=c).value)
-                 for c in block['date_cols']}
-    rows = []
-    r = block['data_start']
-    blank_streak = 0
-    while blank_streak < 3:
-        plate_raw = ws.cell(row=r, column=1).value
-        if plate_raw in (None, ''):
-            blank_streak += 1
-            r += 1
-            continue
-        if str(plate_raw).strip().lower() in _FRANCHISE_ANALYSIS_LABELS:
-            break  # ran into the next section (e.g. a "TOTAL INCOME" row)
-        blank_streak = 0
-        plate, name = _split_plate_name(str(plate_raw))
-        for c, d in date_cols.items():
-            amt = ws.cell(row=r, column=c).value
-            if isinstance(amt, (int, float)) and amt:
-                rows.append(dict(plate=plate, name=name, date=d.isoformat(),
-                                  amount=float(amt), frequency=block['frequency']))
-        r += 1
-    return rows
-
-
-def import_franchise_workbook(file, created_by=None):
-    """Read every sheet of an uploaded workbook, auto-detect every
-    vehicle-collection table in it by header text (not sheet name or
-    position), and sort each into FranchiseVehicle / FranchiseCollection.
-    Returns a summary dict; does not commit — the caller decides when to
-    commit/rollback."""
-    try:
-        wb = openpyxl.load_workbook(file, data_only=True)
-    except Exception:
-        raise ValueError('Could not read that file. Make sure it is a valid Excel workbook.')
-
-    matrix_rows = []
-    cell_budget = MAX_WORKBOOK_IMPORT_CELLS
-    for ws in wb.worksheets:
-        for block in _vehicle_matrix_blocks(ws):
-            matrix_rows.extend(_extract_vehicle_matrix_block(ws, block))
-        cell_budget -= ws.max_row * ws.max_column
-        if cell_budget < 0:
-            raise ValueError('That workbook is too large to import in one pass — split it into smaller files.')
-
-    # A table can legitimately repeat across sheets (the source file's own
-    # "Weekly Analysis" tab re-states some collection rows already on the
-    # monthly sheet) — first occurrence wins rather than erroring.
-    seen_matrix = set()
-    deduped_matrix = []
-    for row in matrix_rows:
-        key = (row['plate'], row['date'], row['frequency'])
-        if key in seen_matrix:
-            continue
-        seen_matrix.add(key)
-        deduped_matrix.append(row)
-
-    vehicle_by_plate = {v.number_plate: v for v in FranchiseVehicle.query.all()}
-    vehicles_created, collections_created, collections_skipped = 0, 0, 0
-    created_records = []
-    for row in deduped_matrix:
-        vehicle = vehicle_by_plate.get(row['plate'])
-        if not vehicle:
-            vehicle = FranchiseVehicle(number_plate=row['plate'], franchisee_name=row['name'], status='active')
-            db.session.add(vehicle)
-            db.session.flush()
-            vehicle_by_plate[row['plate']] = vehicle
-            created_records.append(('franchise_vehicles', vehicle.id))
-            vehicles_created += 1
-        entry_date = parse_import_date(row['date'])
-        if FranchiseCollection.query.filter_by(
-                vehicle_id=vehicle.id, entry_date=entry_date, frequency=row['frequency']).first():
-            collections_skipped += 1
-            continue
-        collection = FranchiseCollection(
-            vehicle_id=vehicle.id, entry_date=entry_date, frequency=row['frequency'],
-            amount=row['amount'], created_by=created_by,
-        )
-        db.session.add(collection)
-        db.session.flush()
-        created_records.append(('franchise_collections', collection.id))
-        collections_created += 1
-
-    return dict(
-        vehicles_created=vehicles_created, collections_created=collections_created,
-        collections_skipped=collections_skipped, created_records=created_records,
-        total_rows=len(matrix_rows),
-    )
-
-
-# ─────────────────────────────────────────────────────────────
-# Franchise Collections Import — flat-row CSV/Excel import with a confirmed
-# column mapping, mirroring the Daily Transactions (driver ledger) importer
-# above. Unlike import_franchise_workbook (which auto-detects a vehicle x
-# date matrix with no header row), this expects one row per collection,
-# same shape as a franchise's own spreadsheet export.
-# ─────────────────────────────────────────────────────────────
-CANONICAL_FRANCHISE_FIELDS = [
-    ('date', 'Date', ['date', 'entry date', 'collection date', 'day']),
-    ('vehicle', 'Vehicle / Number Plate', ['vehicle', 'number plate', 'plate', 'registration',
-                                           'reg', 'vehicle reg', 'number']),
-    ('franchisee', 'Franchisee Name', ['franchisee', 'franchisee name', 'owner', 'name']),
-    ('amount', 'Amount', ['amount', 'collection', 'collections', 'income', 'revenue',
-                          'takings', 'paid', 'amount paid']),
-    ('expense', 'Expense', ['expense', 'expenses', 'deductions', 'cost']),
-    ('notes', 'Notes', ['notes', 'note', 'remarks', 'comment', 'comments']),
-]
-
-FRANCHISE_ROW_KEY_MAP = {
-    'date': 'date', 'vehicle': 'vehicle', 'franchisee': 'franchisee',
-    'amount': 'amount', 'expense': 'expense', 'notes': 'notes',
-}
-
-
-def import_franchise_collection_rows(file_rows, frequency, auto_register_vehicles=False):
-    """Validate and persist already-mapped franchise collection rows (keyed by
-    'date', 'vehicle', 'franchisee', 'amount', 'expense', 'notes') as
-    FranchiseCollection entries of the given frequency ('daily'/'weekly').
-    Returns (imported_count, error_messages, error_rows, created_vehicle_plates,
-    created_records); does not commit — the caller decides when to commit/rollback.
-
-    If auto_register_vehicles is True, a row naming a plate that isn't on file
-    registers a new active FranchiseVehicle instead of erroring — mirrors
-    import_ledger_rows' auto_register_drivers behavior."""
-    vehicle_by_plate = {_normalize_registration(v.number_plate): v for v in FranchiseVehicle.query.all()}
-    created_vehicles = []
-    created_records = []
-
-    imported = 0
-    errors = []
-    error_rows = []
-    for i, raw_row in enumerate(file_rows, start=2):  # row 1 is the header
-        row = {(k or '').strip().lower(): v for k, v in raw_row.items()}
-        try:
-            date_raw = row.get('date')
-            if date_raw in (None, ''):
-                continue
-            entry_date = parse_import_date(date_raw)
-
-            plate_raw = str(row.get('vehicle') or '').strip()
-            amount = parse_import_number(row.get('amount'), 'Amount')
-            expense = parse_import_number(row.get('expense'), 'Expense')
-            if not plate_raw and amount is None and expense is None:
-                continue
-            if not plate_raw:
-                raise ValueError('vehicle / number plate is required.')
-            if len(plate_raw) > 20:
-                raise ValueError(f'"{plate_raw[:40]}…" is too long to be a number plate — check the Vehicle '
-                                 'column is mapped to the right column in your file, not a notes/description one.')
-
-            plate = _normalize_registration(plate_raw)
-            vehicle = vehicle_by_plate.get(plate)
-            if not vehicle:
-                if auto_register_vehicles:
-                    vehicle = FranchiseVehicle.query.execution_options(include_deleted=True).filter_by(
-                        number_plate=plate).first()
-                    if vehicle:
-                        vehicle.deleted_at = None
-                        vehicle.status = 'active'
-                    else:
-                        franchisee_name = str(row.get('franchisee') or '').strip() or plate_raw.strip().title()
-                        vehicle = FranchiseVehicle(number_plate=plate, franchisee_name=franchisee_name, status='active')
-                        db.session.add(vehicle)
-                    db.session.flush()
-                    vehicle_by_plate[plate] = vehicle
-                    created_vehicles.append(plate)
-                    created_records.append(('franchise_vehicles', vehicle.id))
-                else:
-                    raise ValueError(f'unknown vehicle "{plate_raw}" — add it under Franchise Vehicles first, '
-                                     'or tick "Auto-register new vehicles".')
-
-            if amount is None:
-                raise ValueError('Amount is required.')
-
-            if FranchiseCollection.query.filter_by(
-                    vehicle_id=vehicle.id, entry_date=entry_date, frequency=frequency).first():
-                raise ValueError(f'a {frequency} collection for {vehicle.number_plate} on {entry_date} '
-                                 'already exists — skipped.')
-
-            collection = FranchiseCollection(
-                vehicle_id=vehicle.id, entry_date=entry_date, frequency=frequency,
-                amount=amount, expense=expense or 0,
-                notes=str(row.get('notes') or '').strip(), created_by=current_user.id,
-            )
-            db.session.add(collection)
-            db.session.flush()
-            created_records.append(('franchise_collections', collection.id))
-            imported += 1
-        except ValueError as e:
-            errors.append(f'Row {i}: {e}')
-            error_rows.append({**row, 'System_Error': str(e)})
-
-    return imported, errors, error_rows, created_vehicles, created_records
-
-
-# ─────────────────────────────────────────────────────────────
 # Franchise Income Import — flat-row CSV/Excel import for the Daily/Weekly
 # Income reconciliation pages (FranchiseDailyIncome/FranchiseWeeklyIncome),
 # same two-step confirmed-mapping flow as the collections importer above.
@@ -1832,7 +1564,6 @@ def import_franchise_collection_rows(file_rows, frequency, auto_register_vehicle
 CANONICAL_FRANCHISE_INCOME_FIELDS = [
     ('date', 'Date', ['date', 'entry date', 'week start', 'week of', 'day']),
     ('vehicle', 'Vehicle / Number Plate', ['vehicle', 'number plate', 'plate']),
-    ('franchisee', 'Franchisee', ['franchisee', 'franchisee name', 'owner', 'franchise owner']),
     ('income', 'Income', ['income', 'total income', 'revenue', 'collections', 'amount', 'amount paid']),
     ('exp_traffic_fines', 'Traffic Fines', ['traffic fines', 'fines']),
     ('exp_facilitation_fees', 'Facilitation Fees', ['facilitation fees', 'facilitation']),
@@ -1845,32 +1576,53 @@ CANONICAL_FRANCHISE_INCOME_FIELDS = [
 
 FRANCHISE_INCOME_ROW_KEY_MAP = {key: key for key, _label, _syn in CANONICAL_FRANCHISE_INCOME_FIELDS}
 
+# Used by the per-vehicle-tab import (Daily/Weekly Income pages) when a
+# specific vehicle tab is selected — that vehicle is implied by the tab,
+# mirroring the fleet ledger's single-vehicle import, so there's no
+# Vehicle/Franchisee column to map. The Whole Franchise tab still gets the
+# full field list (with Vehicle/Franchisee) below, since a flat file with
+# many vehicles' rows in it has nowhere else to name each row's vehicle.
+CANONICAL_FRANCHISE_INCOME_FIELDS_SCOPED = [
+    f for f in CANONICAL_FRANCHISE_INCOME_FIELDS if f[0] not in ('vehicle', 'franchisee')]
 
-def import_franchise_income_rows(file_rows, model_cls, date_field, week_normalize=False,
-                                  auto_register_vehicles=False):
+
+def import_franchise_income_rows(file_rows, model_cls, date_field, week_normalize=False, forced_vehicle=None):
     """Validate and persist already-mapped franchise income/expense
     reconciliation rows (keyed by the CANONICAL_FRANCHISE_INCOME_FIELDS
     field names) into model_cls (FranchiseDailyIncome or
     FranchiseWeeklyIncome), one entry per date_field ('entry_date' or
-    'week_start'). A blank Vehicle column leaves the entry whole-franchise
-    (vehicle_id=None), matching the manual Add form's default. If
-    week_normalize is True, each row's date is normalized to that week's
-    Monday before being used as the key — mirrors franchise_weekly_income_add,
-    since FranchiseWeeklyIncome holds one row per calendar week, not per day;
-    a source file with several days in the same week must already be
-    aggregated to one row per week, or later days will collide with the
-    first on the unique (week_start, vehicle_id) constraint and be quarantined
-    as duplicates rather than silently overwriting it.
+    'week_start'). If week_normalize is True, each row's date is normalized
+    to that week's Monday before being used as the key — mirrors
+    franchise_weekly_income_add, since FranchiseWeeklyIncome holds one row
+    per calendar week, not per day; a source file with several days in the
+    same week must already be aggregated to one row per week, or later days
+    will collide with the first on the unique (week_start, vehicle_id)
+    constraint and be quarantined as duplicates rather than silently
+    overwriting it.
 
-    If auto_register_vehicles is True, a row naming a plate that isn't on
-    file registers a new active FranchiseVehicle instead of erroring —
-    mirrors import_franchise_collection_rows' auto_register_vehicles
-    behavior. The new vehicle's franchisee_name comes from the row's
-    'franchisee' column if mapped, else falls back to the plate itself.
+    forced_vehicle, when passed (a FranchiseVehicle instance), scopes every
+    row to that vehicle regardless of any Vehicle column — used by the
+    per-vehicle-tab import and the fleet-workbook bulk import (sheet name IS
+    the vehicle), mirroring import_ledger_rows' single-vehicle scoping. Left
+    at its default of None ("no specific vehicle forced" — used for the
+    Whole Franchise tab's import, where a flat file can carry many vehicles'
+    rows), a row's own Vehicle column (if mapped) picks that row's vehicle,
+    leaving the entry whole-franchise (vehicle_id=None) when blank —
+    matching the manual entry form's default.
+
+    Vehicles are never auto-registered here — a plate that doesn't match an
+    existing FranchiseVehicle is rejected (row skipped with an error) rather
+    than silently created. Franchise vehicles must be registered one at a
+    time under Franchise Vehicles first; this keeps that registry
+    deliberate, unlike the fleet ledger's bulk auto-registration.
 
     Returns (imported_count, error_messages, error_rows, created_vehicle_plates,
-    created_records); does not commit — the caller decides when to commit/rollback."""
-    vehicle_by_plate = {_normalize_registration(v.number_plate): v for v in FranchiseVehicle.query.all()}
+    created_records); does not commit — the caller decides when to commit/rollback.
+    created_vehicle_plates is always empty — kept in the return shape for
+    compatibility with the other importers' (row_key_map-based) return signature."""
+    scoped = forced_vehicle is not None
+    vehicle_by_plate = {} if scoped else {
+        _normalize_registration(v.number_plate): v for v in FranchiseVehicle.query.all()}
     table_name = model_cls.__tablename__
     created_vehicles = []
     created_records = []
@@ -1888,38 +1640,25 @@ def import_franchise_income_rows(file_rows, model_cls, date_field, week_normaliz
             if week_normalize:
                 entry_date = entry_date - timedelta(days=entry_date.weekday())
 
-            plate_raw = str(row.get('vehicle') or '').strip()
-            if len(plate_raw) > 20:
-                raise ValueError(f'"{plate_raw[:40]}…" is too long to be a number plate — check the Vehicle '
-                                 'column is mapped to the right column in your file, not a notes/description one.')
-            vehicle = None
-            if plate_raw:
-                plate = _normalize_registration(plate_raw)
-                vehicle = vehicle_by_plate.get(plate)
-                if not vehicle:
-                    if auto_register_vehicles:
-                        vehicle = FranchiseVehicle.query.execution_options(include_deleted=True).filter_by(
-                            number_plate=plate).first()
-                        if vehicle:
-                            vehicle.deleted_at = None
-                            vehicle.status = 'active'
-                        else:
-                            franchisee_name = str(row.get('franchisee') or '').strip() or plate_raw.strip().title()
-                            vehicle = FranchiseVehicle(number_plate=plate, franchisee_name=franchisee_name, status='active')
-                            db.session.add(vehicle)
-                        db.session.flush()
-                        vehicle_by_plate[plate] = vehicle
-                        created_vehicles.append(plate)
-                        created_records.append(('franchise_vehicles', vehicle.id))
-                    else:
-                        raise ValueError(f'unknown vehicle "{plate_raw}" — add it under Franchise Vehicles first, '
-                                         'tick "Auto-register new vehicles", or leave the Vehicle column blank '
-                                         'for a whole-franchise entry.')
+            if scoped:
+                vehicle = forced_vehicle
+            else:
+                plate_raw = str(row.get('vehicle') or '').strip()
+                if len(plate_raw) > 20:
+                    raise ValueError(f'"{plate_raw[:40]}…" is too long to be a number plate — check the Vehicle '
+                                     'column is mapped to the right column in your file, not a notes/description one.')
+                vehicle = None
+                if plate_raw:
+                    plate = _normalize_registration(plate_raw)
+                    vehicle = vehicle_by_plate.get(plate)
+                    if not vehicle:
+                        raise ValueError(f'unregistered vehicle "{plate_raw}" — register it under Franchise Vehicles '
+                                         'first, or leave the Vehicle column blank for a whole-franchise entry.')
 
             existing = model_cls.query.execution_options(include_deleted=True).filter_by(
                 **{date_field: entry_date}, vehicle_id=vehicle.id if vehicle else None).first()
             if existing and existing.deleted_at is None:
-                label = vehicle.number_plate if vehicle else 'the whole franchise'
+                label = vehicle.number_plate if vehicle else 'the franchise\'s shared expenditure'
                 raise ValueError(f'an entry for {label} on {entry_date} already exists — skipped.')
 
             entry = existing or model_cls(vehicle_id=vehicle.id if vehicle else None)
@@ -2072,8 +1811,8 @@ def import_stock_purchase_rows(file_rows, auto_create_parts=False):
 
     If auto_create_parts is True, a row naming a part that isn't on file
     (matched by part_number first, then by name) creates a new active
-    SparePart instead of erroring — mirrors import_franchise_collection_rows'
-    auto_register_vehicles behavior."""
+    SparePart instead of erroring — mirrors import_ledger_rows'
+    auto_register_drivers behavior."""
     parts = SparePart.query.all()
     part_by_number = {p.part_number.strip().upper(): p for p in parts if p.part_number and p.part_number.strip()}
     part_by_name = {p.name.strip().lower(): p for p in parts}
@@ -5933,36 +5672,75 @@ FRANCHISE_INCOME_EXPENSE_FIELDS = (
 )
 
 
+def _franchise_income_period_rows(model_cls, date_field, vehicle, df, dt):
+    q = model_cls.query.filter(model_cls.vehicle_id == (vehicle.id if vehicle else None))
+    if df:
+        col = getattr(model_cls, date_field)
+        q = q.filter(col >= df, col <= dt)
+    return q.order_by(getattr(model_cls, date_field).desc()).all()
+
+
+def _franchise_fleet_income_total(model_cls, date_field, df, dt):
+    """Sum of income across every vehicle (not the shared, vehicle_id-less
+    expenditure rows) for the period — the fleet-wide income half of the
+    franchise P&L, since income is recorded per vehicle while expenditure is
+    recorded once, shared across the whole franchise (see
+    _franchise_income_period_rows(..., vehicle=None, ...) for that side)."""
+    q = model_cls.query.filter(model_cls.vehicle_id.isnot(None))
+    if df:
+        col = getattr(model_cls, date_field)
+        q = q.filter(col >= df, col <= dt)
+    return sum(e.income for e in q.all())
+
+
 @app.route('/franchise/daily-income')
 @login_required
 @permission_required('franchise')
 def franchise_daily_income_list():
-    page = request.args.get('page', 1, type=int)
-    entries = FranchiseDailyIncome.query.outerjoin(FranchiseVehicle).order_by(
-        FranchiseDailyIncome.entry_date.desc(), FranchiseVehicle.number_plate).paginate(page=page, per_page=20)
-    return render_template('franchise/daily_income_list.html', entries=entries)
+    today = date.today()
+    period, df, dt = resolve_ledger_period(request.args.get('period', 'month'), today)
+
+    all_vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.number_plate).all()
+    vehicle_id = request.args.get('vehicle_id', type=int)
+    vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
+    if not vehicle and not vehicle_id and all_vehicles:
+        # Income is always recorded against a specific vehicle now (expenditure
+        # is the shared, vehicle-less side) — default to the first vehicle tab
+        # rather than landing on an empty "no vehicle selected" income panel.
+        vehicle = all_vehicles[0]
+
+    income_entries = _franchise_income_period_rows(FranchiseDailyIncome, 'entry_date', vehicle, df, dt) if vehicle else []
+    expenditure_entries = _franchise_income_period_rows(FranchiseDailyIncome, 'entry_date', None, df, dt)
+    fleet_income = _franchise_fleet_income_total(FranchiseDailyIncome, 'entry_date', df, dt)
+    total_expenditure = sum(e.total_expenditure for e in expenditure_entries)
+    return render_template('franchise/daily_income_list.html', vehicles=all_vehicles, vehicle=vehicle,
+        income_entries=income_entries, expenditure_entries=expenditure_entries,
+        period=period, today=today.strftime('%Y-%m-%d'),
+        vehicle_income_total=sum(e.income for e in income_entries),
+        vehicle_deposited_total=sum(e.deposited for e in income_entries),
+        fleet_income=fleet_income, total_expenditure=total_expenditure,
+        net_income=fleet_income - total_expenditure)
 
 
-@app.route('/franchise/daily-income/add', methods=['GET', 'POST'])
+@app.route('/franchise/daily-income/add', methods=['POST'])
 @login_required
 @permission_required('franchise')
-@handle_form_errors
 def franchise_daily_income_add():
-    if request.method == 'POST':
-        client_id = request.form.get('_client_id')
-        if already_synced(client_id):
-            flash('Already recorded.', 'info')
-            return redirect(url_for('franchise_daily_income_list'))
-        entry_date = parse_date(request.form['entry_date'])
-        vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+    # POST-only, no GET counterpart at this URL (see driver_ledger_add) —
+    # errors are handled locally here and always redirect to the GET list page.
+    period = request.form.get('period', 'month')
+    vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+    client_id = request.form.get('_client_id')
+    if already_synced(client_id):
+        flash('Already recorded.', 'info')
+        return redirect(url_for('franchise_daily_income_list', vehicle_id=vehicle_id, period=period))
+    try:
         vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
         if vehicle_id and not vehicle:
             raise ValueError('Select a valid franchise vehicle.')
-        label = vehicle.number_plate if vehicle else 'the whole franchise'
-        if FranchiseDailyIncome.query.filter_by(entry_date=entry_date, vehicle_id=vehicle.id if vehicle else None).first():
-            raise ValueError(f'A daily income entry for {label} on {entry_date} already exists — delete it first to re-enter.')
-        amounts = {f: form_float(request.form, f, label=lbl, required=False, default=0)
-                   for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS}
+        label = vehicle.number_plate if vehicle else 'the franchise\'s shared expenditure'
+        entry_date = parse_date(request.form['entry_date'])
+
         # The (entry_date, vehicle_id) uniqueness is enforced at the DB
         # level, and a soft-deleted row still occupies that slot — restore
         # it in place instead of inserting a fresh row, or the INSERT
@@ -5970,6 +5748,8 @@ def franchise_daily_income_add():
         # someone re-enters a date they'd previously deleted.
         entry = (FranchiseDailyIncome.query.execution_options(include_deleted=True)
                 .filter_by(entry_date=entry_date, vehicle_id=vehicle.id if vehicle else None).first())
+        if entry and entry.deleted_at is None:
+            raise ValueError(f'A daily income entry for {label} on {entry_date} already exists — delete it first to re-enter.')
         if entry:
             entry.deleted_at = None
         else:
@@ -5980,8 +5760,8 @@ def franchise_daily_income_add():
         entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
         entry.description = request.form.get('description', '').strip()
         entry.created_by = current_user.id
-        for f, value in amounts.items():
-            setattr(entry, f, value)
+        for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
+            setattr(entry, f, form_float(request.form, f, label=lbl, required=False, default=0))
         db.session.flush()
         log_audit('CREATE', 'franchise_daily_income', entry.id,
                   f'Daily franchise income for {label} on {entry_date}: income {entry.income}, '
@@ -5990,9 +5770,43 @@ def franchise_daily_income_add():
         touch_sync_fields(entry)
         db.session.commit()
         flash('Daily franchise income recorded.', 'success')
+    except KeyError as e:
+        db.session.rollback()
+        flash(f'Missing required field: {e}', 'danger')
+    except ValueError as e:
+        db.session.rollback()
+        flash(str(e), 'danger')
+
+    return redirect(url_for('franchise_daily_income_list', vehicle_id=vehicle_id, period=period))
+
+
+@app.route('/franchise/daily-income/export')
+@login_required
+@permission_required('franchise')
+def franchise_daily_income_export():
+    vehicle_id = request.args.get('vehicle_id', type=int)
+    vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
+    if vehicle_id and not vehicle:
+        flash('Select a valid franchise vehicle to export.', 'danger')
         return redirect(url_for('franchise_daily_income_list'))
-    vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.franchisee_name).all()
-    return render_template('franchise/daily_income_form.html', vehicles=vehicles, today=date.today().strftime('%Y-%m-%d'))
+
+    period, df, dt = resolve_ledger_period(request.args.get('period', 'month'), date.today())
+    entries = list(reversed(_franchise_income_period_rows(FranchiseDailyIncome, 'entry_date', vehicle, df, dt)))
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(['Date', 'Income', 'Traffic Fines', 'Facilitation Fees', 'Workshop', 'Wages',
+                'Other Expenditure', 'Total Expenditure', 'Cash Deposited', 'Variance', 'Description'])
+    for e in entries:
+        w.writerow([e.entry_date, f'{e.income:.2f}', f'{e.exp_traffic_fines:.2f}', f'{e.exp_facilitation_fees:.2f}',
+                    f'{e.exp_workshop:.2f}', f'{e.exp_wages:.2f}', f'{e.other_expenditure:.2f}',
+                    f'{e.total_expenditure:.2f}', f'{e.deposited:.2f}', f'{e.variance:.2f}', e.description or ''])
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'text/csv'
+    label = vehicle.number_plate.replace(' ', '_') if vehicle else 'shared_expenditure'
+    resp.headers['Content-Disposition'] = f'attachment; filename={label}_daily_income_{period}_{date.today()}.csv'
+    return resp
 
 
 @app.route('/franchise/daily-income/<int:eid>/delete', methods=['POST'])
@@ -6005,45 +5819,60 @@ def franchise_daily_income_delete(eid):
     touch_sync_fields(entry)
     db.session.commit()
     flash('Daily franchise income entry deleted.', 'warning')
-    return redirect(url_for('franchise_daily_income_list'))
+    return redirect(url_for('franchise_daily_income_list', vehicle_id=entry.vehicle_id))
 
 
 @app.route('/franchise/weekly-income')
 @login_required
 @permission_required('franchise')
 def franchise_weekly_income_list():
-    page = request.args.get('page', 1, type=int)
-    entries = FranchiseWeeklyIncome.query.outerjoin(FranchiseVehicle).order_by(
-        FranchiseWeeklyIncome.week_start.desc(), FranchiseVehicle.number_plate).paginate(page=page, per_page=20)
-    return render_template('franchise/weekly_income_list.html', entries=entries)
+    today = date.today()
+    period, df, dt = resolve_ledger_period(request.args.get('period', 'month'), today)
+
+    all_vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.number_plate).all()
+    vehicle_id = request.args.get('vehicle_id', type=int)
+    vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
+    if not vehicle and not vehicle_id and all_vehicles:
+        vehicle = all_vehicles[0]
+
+    income_entries = _franchise_income_period_rows(FranchiseWeeklyIncome, 'week_start', vehicle, df, dt) if vehicle else []
+    expenditure_entries = _franchise_income_period_rows(FranchiseWeeklyIncome, 'week_start', None, df, dt)
+    fleet_income = _franchise_fleet_income_total(FranchiseWeeklyIncome, 'week_start', df, dt)
+    total_expenditure = sum(e.total_expenditure for e in expenditure_entries)
+    return render_template('franchise/weekly_income_list.html', vehicles=all_vehicles, vehicle=vehicle,
+        income_entries=income_entries, expenditure_entries=expenditure_entries,
+        period=period, today=today.strftime('%Y-%m-%d'),
+        vehicle_income_total=sum(e.income for e in income_entries),
+        vehicle_deposited_total=sum(e.deposited for e in income_entries),
+        fleet_income=fleet_income, total_expenditure=total_expenditure,
+        net_income=fleet_income - total_expenditure)
 
 
-@app.route('/franchise/weekly-income/add', methods=['GET', 'POST'])
+@app.route('/franchise/weekly-income/add', methods=['POST'])
 @login_required
 @permission_required('franchise')
-@handle_form_errors
 def franchise_weekly_income_add():
-    if request.method == 'POST':
-        client_id = request.form.get('_client_id')
-        if already_synced(client_id):
-            flash('Already recorded.', 'info')
-            return redirect(url_for('franchise_weekly_income_list'))
-        raw_date = parse_date(request.form['week_start'])
-        week_start = raw_date - timedelta(days=raw_date.weekday())  # normalize to that week's Monday
-        vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+    period = request.form.get('period', 'month')
+    vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+    client_id = request.form.get('_client_id')
+    if already_synced(client_id):
+        flash('Already recorded.', 'info')
+        return redirect(url_for('franchise_weekly_income_list', vehicle_id=vehicle_id, period=period))
+    try:
         vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
         if vehicle_id and not vehicle:
             raise ValueError('Select a valid franchise vehicle.')
-        label = vehicle.number_plate if vehicle else 'the whole franchise'
-        if FranchiseWeeklyIncome.query.filter_by(week_start=week_start, vehicle_id=vehicle.id if vehicle else None).first():
-            raise ValueError(f'A weekly income entry for {label} for the week of {week_start} already exists — delete it first to re-enter.')
-        amounts = {f: form_float(request.form, f, label=lbl, required=False, default=0)
-                   for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS}
+        label = vehicle.number_plate if vehicle else 'the franchise\'s shared expenditure'
+        raw_date = parse_date(request.form['week_start'])
+        week_start = raw_date - timedelta(days=raw_date.weekday())  # normalize to that week's Monday
+
         # See franchise_daily_income_add — restore a soft-deleted row at
         # the same (week_start, vehicle_id) instead of inserting a fresh
         # one, since that DB-level uniqueness still applies to it.
         entry = (FranchiseWeeklyIncome.query.execution_options(include_deleted=True)
                 .filter_by(week_start=week_start, vehicle_id=vehicle.id if vehicle else None).first())
+        if entry and entry.deleted_at is None:
+            raise ValueError(f'A weekly income entry for {label} for the week of {week_start} already exists — delete it first to re-enter.')
         if entry:
             entry.deleted_at = None
         else:
@@ -6054,8 +5883,8 @@ def franchise_weekly_income_add():
         entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
         entry.description = request.form.get('description', '').strip()
         entry.created_by = current_user.id
-        for f, value in amounts.items():
-            setattr(entry, f, value)
+        for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
+            setattr(entry, f, form_float(request.form, f, label=lbl, required=False, default=0))
         db.session.flush()
         log_audit('CREATE', 'franchise_weekly_income', entry.id,
                   f'Weekly franchise income for {label} for week of {week_start}: income {entry.income}, '
@@ -6064,9 +5893,43 @@ def franchise_weekly_income_add():
         touch_sync_fields(entry)
         db.session.commit()
         flash('Weekly franchise income recorded.', 'success')
+    except KeyError as e:
+        db.session.rollback()
+        flash(f'Missing required field: {e}', 'danger')
+    except ValueError as e:
+        db.session.rollback()
+        flash(str(e), 'danger')
+
+    return redirect(url_for('franchise_weekly_income_list', vehicle_id=vehicle_id, period=period))
+
+
+@app.route('/franchise/weekly-income/export')
+@login_required
+@permission_required('franchise')
+def franchise_weekly_income_export():
+    vehicle_id = request.args.get('vehicle_id', type=int)
+    vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
+    if vehicle_id and not vehicle:
+        flash('Select a valid franchise vehicle to export.', 'danger')
         return redirect(url_for('franchise_weekly_income_list'))
-    vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.franchisee_name).all()
-    return render_template('franchise/weekly_income_form.html', vehicles=vehicles, today=date.today().strftime('%Y-%m-%d'))
+
+    period, df, dt = resolve_ledger_period(request.args.get('period', 'month'), date.today())
+    entries = list(reversed(_franchise_income_period_rows(FranchiseWeeklyIncome, 'week_start', vehicle, df, dt)))
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(['Week Of', 'Income', 'Traffic Fines', 'Facilitation Fees', 'Workshop', 'Wages',
+                'Other Expenditure', 'Total Expenditure', 'Cash Deposited', 'Variance', 'Description'])
+    for e in entries:
+        w.writerow([e.week_start, f'{e.income:.2f}', f'{e.exp_traffic_fines:.2f}', f'{e.exp_facilitation_fees:.2f}',
+                    f'{e.exp_workshop:.2f}', f'{e.exp_wages:.2f}', f'{e.other_expenditure:.2f}',
+                    f'{e.total_expenditure:.2f}', f'{e.deposited:.2f}', f'{e.variance:.2f}', e.description or ''])
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'text/csv'
+    label = vehicle.number_plate.replace(' ', '_') if vehicle else 'shared_expenditure'
+    resp.headers['Content-Disposition'] = f'attachment; filename={label}_weekly_income_{period}_{date.today()}.csv'
+    return resp
 
 
 @app.route('/franchise/weekly-income/<int:eid>/delete', methods=['POST'])
@@ -6079,21 +5942,38 @@ def franchise_weekly_income_delete(eid):
     touch_sync_fields(entry)
     db.session.commit()
     flash('Weekly franchise income entry deleted.', 'warning')
-    return redirect(url_for('franchise_weekly_income_list'))
+    return redirect(url_for('franchise_weekly_income_list', vehicle_id=entry.vehicle_id))
+
+
+def _franchise_income_kind(kind):
+    kind = kind if kind in ('daily', 'weekly') else 'daily'
+    list_endpoint = 'franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list'
+    model_cls = FranchiseDailyIncome if kind == 'daily' else FranchiseWeeklyIncome
+    date_field = 'entry_date' if kind == 'daily' else 'week_start'
+    return kind, list_endpoint, model_cls, date_field
 
 
 @app.route('/franchise/income/import/preview', methods=['POST'])
 @login_required
 @permission_required('franchise')
 def franchise_income_import_preview():
-    """Same two-step flow as the Collections import: parse the file,
-    auto-map its columns onto the canonical income/expense fields, and show
-    a confirmation/adjustment step before writing anything. 'kind' picks
-    which page this import targets — Daily or Weekly Income — since they're
-    separate models with a different date grain."""
-    kind = request.form.get('kind', 'daily')
-    if kind not in ('daily', 'weekly'):
-        kind = 'daily'
+    """Two-step confirmed-mapping import for the Daily/Weekly Income pages,
+    same flow as the Daily Transactions ledger import. On a specific vehicle
+    tab, that vehicle is implied (no Vehicle column to map), mirroring the
+    ledger's single-vehicle import. On the Whole Franchise tab there's no
+    single vehicle to imply, so the full field list (including Vehicle /
+    Franchisee) is offered instead — a flat file with many vehicles' rows in
+    it can be imported in one pass, each row picking its own vehicle (or
+    staying whole-franchise when left blank). 'kind' picks which page this
+    import targets."""
+    kind, list_endpoint, _model_cls, _date_field = _franchise_income_kind(request.form.get('kind', 'daily'))
+    period = request.form.get('period', 'month')
+    vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+    vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
+    if vehicle_id and not vehicle:
+        flash('Select a valid franchise vehicle before importing.', 'danger')
+        return redirect(url_for(list_endpoint, period=period))
+    fields = CANONICAL_FRANCHISE_INCOME_FIELDS_SCOPED if vehicle else CANONICAL_FRANCHISE_INCOME_FIELDS
 
     file = request.files.get('file')
     if file and file.filename:
@@ -6102,9 +5982,11 @@ def franchise_income_import_preview():
             headers, raw_rows = read_uploaded_table(file)
         except ValueError as e:
             flash(str(e), 'danger')
-            return redirect(url_for('franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list'))
-        mapping = auto_map_columns(headers, fields=CANONICAL_FRANCHISE_INCOME_FIELDS)
+            return redirect(url_for(list_endpoint, vehicle_id=vehicle_id, period=period))
+        mapping = auto_map_columns(headers, fields=fields)
     else:
+        # Re-preview after the user adjusted the mapping — the file itself
+        # isn't resubmitted, the previously parsed rows travel via raw_data.
         try:
             filename = request.form.get('filename', 'uploaded file')
             payload = json.loads(request.form.get('raw_data') or '{}')
@@ -6112,20 +5994,20 @@ def franchise_income_import_preview():
             if not headers or not raw_rows:
                 raise ValueError('Choose a CSV or Excel file to import.')
             mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
-                       for field_key, _label, _syn in CANONICAL_FRANCHISE_INCOME_FIELDS}
+                       for field_key, _label, _syn in fields}
         except (ValueError, json.JSONDecodeError, TypeError):
             flash('Choose a CSV or Excel file to import — the previous preview session expired.', 'danger')
-            return redirect(url_for('franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list'))
+            return redirect(url_for(list_endpoint, vehicle_id=vehicle_id, period=period))
 
     if not raw_rows:
         flash('That file has no data rows to import — it only has a header row. '
               'Add rows with a Date and Income/expense figures, then re-import.', 'warning')
-        return redirect(url_for('franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list'))
+        return redirect(url_for(list_endpoint, vehicle_id=vehicle_id, period=period))
 
     preview_rows = apply_column_mapping(headers, raw_rows[:10], mapping, row_key_map=FRANCHISE_INCOME_ROW_KEY_MAP)
     return render_template('franchise/income_import_preview.html',
-                           kind=kind, filename=filename,
-                           headers=headers, mapping=mapping, fields=CANONICAL_FRANCHISE_INCOME_FIELDS,
+                           kind=kind, vehicle=vehicle, vehicle_id=vehicle_id, period=period, filename=filename,
+                           headers=headers, mapping=mapping, fields=fields,
                            preview_rows=preview_rows, row_count=len(raw_rows),
                            raw_data=json.dumps({'headers': headers, 'rows': raw_rows}))
 
@@ -6134,12 +6016,14 @@ def franchise_income_import_preview():
 @login_required
 @permission_required('franchise')
 def franchise_income_import_confirm():
-    kind = request.form.get('kind', 'daily')
-    if kind not in ('daily', 'weekly'):
-        kind = 'daily'
-    list_endpoint = 'franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list'
-    model_cls = FranchiseDailyIncome if kind == 'daily' else FranchiseWeeklyIncome
-    date_field = 'entry_date' if kind == 'daily' else 'week_start'
+    kind, list_endpoint, model_cls, date_field = _franchise_income_kind(request.form.get('kind', 'daily'))
+    period = request.form.get('period', 'month')
+    vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+    vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
+    if vehicle_id and not vehicle:
+        flash('Select a valid franchise vehicle before importing.', 'danger')
+        return redirect(url_for(list_endpoint, period=period))
+    fields = CANONICAL_FRANCHISE_INCOME_FIELDS_SCOPED if vehicle else CANONICAL_FRANCHISE_INCOME_FIELDS
 
     filename = request.form.get('filename', 'uploaded file')
     try:
@@ -6149,36 +6033,28 @@ def franchise_income_import_confirm():
             raise ValueError('empty')
     except (ValueError, json.JSONDecodeError, TypeError):
         flash('That preview session expired — please choose the file again.', 'danger')
-        return redirect(url_for(list_endpoint))
+        return redirect(url_for(list_endpoint, vehicle_id=vehicle_id, period=period))
 
     mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
-               for field_key, _label, _syn in CANONICAL_FRANCHISE_INCOME_FIELDS}
+               for field_key, _label, _syn in fields}
     file_rows = apply_column_mapping(headers, raw_rows, mapping, row_key_map=FRANCHISE_INCOME_ROW_KEY_MAP)
-    auto_register = request.form.get('auto_register') == '1'
-    imported, errors, error_rows, created_vehicles, created_records = import_franchise_income_rows(
-        file_rows, model_cls, date_field, week_normalize=(kind == 'weekly'),
-        auto_register_vehicles=auto_register)
+    imported, errors, error_rows, _created_vehicles, created_records = import_franchise_income_rows(
+        file_rows, model_cls, date_field, week_normalize=(kind == 'weekly'), forced_vehicle=vehicle)
 
+    label = vehicle.number_plate if vehicle else 'the whole franchise'
     if imported or error_rows:
         # Commit even when imported == 0: a batch made only of failed rows
         # still needs to persist so its quarantine CSV can be downloaded.
         save_import_batch(model_cls.__tablename__, filename, len(raw_rows), imported, error_rows, created_records)
         if imported:
             log_audit('CREATE', model_cls.__tablename__, None,
-                      f'Imported {imported} {kind} income row(s) from {filename}')
-        created_vehicle_ids = [rid for table, rid in created_records if table == 'franchise_vehicles']
-        for plate, vid in zip(created_vehicles, created_vehicle_ids):
-            log_audit('CREATE', 'franchise_vehicles', vid,
-                      f'Auto-registered franchise vehicle "{plate}" from {kind} income import ({filename}) — '
-                      f'not on file, added because an income row named it.')
+                      f'Imported {imported} {kind} income row(s) for {label} from {filename}')
         db.session.commit()
     else:
         db.session.rollback()
 
     if imported:
-        flash(f'Imported {imported} {kind} income row(s).', 'success')
-    if created_vehicles:
-        flash(f'Auto-registered new franchise vehicle(s): {", ".join(created_vehicles)}.', 'success')
+        flash(f'Imported {imported} {kind} income row(s) for {label}.', 'success')
     if errors:
         shown = errors[:10]
         more = f' (+{len(errors) - 10} more)' if len(errors) > 10 else ''
@@ -6186,50 +6062,91 @@ def franchise_income_import_confirm():
     if not imported and not errors:
         flash('No rows found to import.', 'warning')
 
-    return redirect(url_for(list_endpoint))
+    return redirect(url_for(list_endpoint, vehicle_id=vehicle_id, period=period))
 
 
-@app.route('/franchise/import/workbook', methods=['POST'])
+@app.route('/franchise/income/import/bulk', methods=['POST'])
 @login_required
 @permission_required('franchise')
-def franchise_import_workbook():
-    """Upload a whole multi-sheet workbook (like the franchise's own monthly
-    file) in one go — every vehicle-collection grid in it is found by its
-    own headers and sorted into FranchiseVehicle/FranchiseCollection, no
-    column mapping needed and no sheet-naming convention required."""
+def franchise_income_import_bulk():
+    """Import a franchise-wide workbook with one sheet per franchise
+    vehicle (sheet name matched against each vehicle's number plate) in a
+    single pass — the Franchise Income counterpart of driver_ledger_import_bulk.
+    'kind' picks Daily vs Weekly Income."""
+    kind, list_endpoint, model_cls, date_field = _franchise_income_kind(request.form.get('kind', 'daily'))
+    period = request.form.get('period', 'month')
+
     file = request.files.get('file')
     if not file or not file.filename:
         flash('Choose an Excel workbook to import.', 'danger')
-        return redirect(url_for('franchise_vehicles'))
-    try:
-        summary = import_franchise_workbook(file, created_by=current_user.id)
-    except ValueError as e:
-        db.session.rollback()
-        flash(str(e), 'danger')
-        return redirect(url_for('franchise_vehicles'))
+        return redirect(url_for(list_endpoint, period=period))
 
-    total_imported = summary['vehicles_created'] + summary['collections_created']
+    try:
+        sheets = read_uploaded_workbook_sheets(file)
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for(list_endpoint, period=period))
+
+    if not sheets:
+        flash('That workbook has no sheets with data rows to import.', 'warning')
+        return redirect(url_for(list_endpoint, period=period))
+
+    vehicles_by_plate = {_normalize_registration(v.number_plate): v for v in FranchiseVehicle.query.all()}
+
+    results = []
+    for sheet_name, (headers, rows) in sheets.items():
+        savepoint = db.session.begin_nested()
+        try:
+            mapping = auto_map_columns(headers, fields=CANONICAL_FRANCHISE_INCOME_FIELDS_SCOPED)
+            vehicle = vehicles_by_plate.get(_normalize_registration(sheet_name))
+
+            # A real per-vehicle income sheet always has both a Date and an
+            # Income column — that combination is what tells this apart from
+            # an unrelated sheet.
+            looks_like_income_sheet = bool(mapping.get('date')) and bool(mapping.get('income'))
+
+            if not vehicle:
+                # Vehicles are never auto-registered from an import — register
+                # this plate under Franchise Vehicles first, then re-import.
+                reason = ('No registered franchise vehicle matches this sheet name — register it under '
+                          'Franchise Vehicles first.' if looks_like_income_sheet else
+                          "Doesn't look like a per-vehicle income sheet.")
+                results.append({'sheet': sheet_name, 'vehicle': None, 'mapping': {},
+                                 'imported': 0, 'errors': [], 'skip_reason': reason})
+                savepoint.commit()
+                continue
+
+            if not mapping.get('date'):
+                results.append({'sheet': sheet_name, 'vehicle': vehicle, 'mapping': mapping,
+                                 'imported': 0, 'errors': [], 'skip_reason': 'No Date column detected.'})
+                savepoint.commit()
+                continue
+
+            mapped_rows = apply_column_mapping(headers, rows, mapping, row_key_map=FRANCHISE_INCOME_ROW_KEY_MAP)
+            imported, errors, _error_rows, _created_vehicles, _created_records = import_franchise_income_rows(
+                mapped_rows, model_cls, date_field, week_normalize=(kind == 'weekly'), forced_vehicle=vehicle)
+            if imported:
+                log_audit('CREATE', model_cls.__tablename__, None,
+                          f'Imported {imported} {kind} income row(s) for {vehicle.number_plate} '
+                          f'from {file.filename} (sheet "{sheet_name}")')
+            results.append({'sheet': sheet_name, 'vehicle': vehicle, 'mapping': mapping,
+                             'imported': imported, 'errors': errors, 'skip_reason': None})
+            savepoint.commit()
+        except Exception as e:
+            savepoint.rollback()
+            results.append({'sheet': sheet_name, 'vehicle': None, 'mapping': {},
+                             'imported': 0, 'errors': [], 'skip_reason': f'Unexpected error: {e}'})
+
+    total_imported = sum(r['imported'] for r in results)
     if total_imported:
-        save_import_batch('franchise_workbook', file.filename, summary['total_rows'], total_imported,
-                          [], summary['created_records'])
-        log_audit('CREATE', 'franchise_workbook', None,
-                  f"Imported workbook {file.filename}: {summary['vehicles_created']} new vehicle(s), "
-                  f"{summary['collections_created']} collection(s)")
         db.session.commit()
     else:
         db.session.rollback()
 
-    if total_imported:
-        flash(f"Imported from {file.filename}: {summary['vehicles_created']} new vehicle(s), "
-              f"{summary['collections_created']} collection(s) "
-              f"({summary['collections_skipped']} already on file, skipped).", 'success')
-    elif summary['total_rows']:
-        flash(f"Nothing new to import from {file.filename} — every collection found "
-              f"({summary['collections_skipped']}) is already on file.", 'warning')
-    else:
-        flash('No vehicle-collection tables were recognized in that workbook.', 'warning')
-
-    return redirect(url_for('franchise_vehicles'))
+    return render_template('franchise/income_bulk_import_result.html',
+                           filename=file.filename, results=results, kind=kind, list_endpoint=list_endpoint,
+                           total_imported=total_imported, period=period,
+                           fields=CANONICAL_FRANCHISE_INCOME_FIELDS_SCOPED)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -6310,8 +6227,11 @@ def franchise_vehicle_edit(vid):
 @admin_required
 def franchise_vehicle_delete(vid):
     vehicle = FranchiseVehicle.query.filter_by(id=vid).first_or_404()
-    if FranchiseCollection.query.filter_by(vehicle_id=vid).first():
-        flash('Cannot delete this vehicle — it has collection history. Mark it Inactive instead.', 'danger')
+    has_history = (FranchiseCollection.query.filter_by(vehicle_id=vid).first()
+                   or FranchiseDailyIncome.query.filter_by(vehicle_id=vid).first()
+                   or FranchiseWeeklyIncome.query.filter_by(vehicle_id=vid).first())
+    if has_history:
+        flash('Cannot delete this vehicle — it has income/collection history. Mark it Inactive instead.', 'danger')
         return redirect(url_for('franchise_vehicles'))
     log_audit('DELETE', 'franchise_vehicles', vid, f'Deleted franchise vehicle {vehicle.number_plate}')
     vehicle.deleted_at = datetime.now(timezone.utc)
@@ -6403,257 +6323,6 @@ def franchise_vehicles_import_confirm():
     return redirect(url_for('franchise_vehicles'))
 
 
-# ─────────────────────────────────────────────────────────────
-# Franchise Collections — what each franchise vehicle paid, and when.
-# ─────────────────────────────────────────────────────────────
-@app.route('/franchise/collections')
-@login_required
-@permission_required('franchise')
-def franchise_collections():
-    page = request.args.get('page', 1, type=int)
-    vehicle_id = request.args.get('vehicle_id', type=int)
-    frequency = request.args.get('frequency', '')
-    q = FranchiseCollection.query
-    if vehicle_id:
-        q = q.filter_by(vehicle_id=vehicle_id)
-    if frequency in ('daily', 'weekly'):
-        q = q.filter_by(frequency=frequency)
-    entries = q.order_by(FranchiseCollection.entry_date.desc()).paginate(page=page, per_page=30)
-    vehicles = FranchiseVehicle.query.order_by(FranchiseVehicle.franchisee_name).all()
-    return render_template('franchise/collections.html', entries=entries, vehicles=vehicles,
-                           vehicle_id=vehicle_id, frequency=frequency)
-
-
-@app.route('/franchise/collections/add', methods=['GET', 'POST'])
-@login_required
-@permission_required('franchise')
-@handle_form_errors
-def franchise_collection_add():
-    if request.method == 'POST':
-        client_id = request.form.get('_client_id')
-        if already_synced(client_id):
-            flash('Already recorded.', 'info')
-            return redirect(url_for('franchise_collections'))
-        vehicle_id = form_int(request.form, 'vehicle_id')
-        vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first()
-        if not vehicle:
-            raise ValueError('Select a valid franchise vehicle.')
-        frequency = request.form.get('frequency', '')
-        if frequency not in ('daily', 'weekly'):
-            raise ValueError('Frequency must be Daily or Weekly.')
-        collection = FranchiseCollection(
-            vehicle_id=vehicle.id,
-            entry_date=parse_date(request.form['entry_date']),
-            frequency=frequency,
-            amount=form_float(request.form, 'amount', min_value=0),
-            expense=form_float(request.form, 'expense', required=False, default=0, min_value=0),
-            notes=request.form.get('notes', '').strip(),
-            created_by=current_user.id,
-        )
-        db.session.add(collection)
-        db.session.flush()
-        log_audit('CREATE', 'franchise_collections', collection.id,
-                  f'{vehicle.number_plate} paid {collection.amount} ({frequency}), expense {collection.expense}, '
-                  f'on {collection.entry_date}')
-        record_offline_sync(client_id, 'franchise_collection_add')
-        touch_sync_fields(collection)
-        db.session.commit()
-        flash('Collection recorded.', 'success')
-        return redirect(url_for('franchise_collections'))
-    vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.franchisee_name).all()
-    return render_template('franchise/collection_form.html', vehicles=vehicles,
-                           today=date.today().strftime('%Y-%m-%d'))
-
-
-@app.route('/franchise/collections/<int:cid>/delete', methods=['POST'])
-@login_required
-@admin_required
-def franchise_collection_delete(cid):
-    collection = FranchiseCollection.query.filter_by(id=cid).first_or_404()
-    log_audit('DELETE', 'franchise_collections', cid,
-              f'Deleted collection of {collection.amount} for {collection.vehicle.number_plate} on {collection.entry_date}')
-    collection.deleted_at = datetime.now(timezone.utc)
-    touch_sync_fields(collection)
-    db.session.commit()
-    flash('Collection entry deleted.', 'warning')
-    return redirect(url_for('franchise_collections'))
-
-
-@app.route('/franchise/collections/import/preview', methods=['POST'])
-@login_required
-@permission_required('franchise')
-def franchise_collections_import_preview():
-    """Same two-step flow as the Daily Transactions ledger import: parse the
-    file, auto-map its columns onto the canonical franchise-collection
-    fields, and show the user a confirmation/adjustment step before writing
-    anything. Also re-entered (without a fresh file) when the user adjusts
-    the mapping and clicks Re-preview — the parsed rows travel via raw_data."""
-    frequency = request.form.get('frequency', 'daily')
-    if frequency not in ('daily', 'weekly'):
-        frequency = 'daily'
-
-    file = request.files.get('file')
-    if file and file.filename:
-        filename = file.filename
-        try:
-            headers, raw_rows = read_uploaded_table(file)
-        except ValueError as e:
-            flash(str(e), 'danger')
-            return redirect(url_for('franchise_collections'))
-        mapping = auto_map_columns(headers, fields=CANONICAL_FRANCHISE_FIELDS)
-    else:
-        try:
-            filename = request.form.get('filename', 'uploaded file')
-            payload = json.loads(request.form.get('raw_data') or '{}')
-            headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
-            if not headers or not raw_rows:
-                raise ValueError('Choose a CSV or Excel file to import.')
-            mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
-                       for field_key, _label, _syn in CANONICAL_FRANCHISE_FIELDS}
-        except (ValueError, json.JSONDecodeError, TypeError):
-            flash('Choose a CSV or Excel file to import — the previous preview session expired.', 'danger')
-            return redirect(url_for('franchise_collections'))
-
-    if not raw_rows:
-        flash('That file has no data rows to import — it only has a header row. '
-              'Add rows with a Date, Vehicle and Amount, then re-import.', 'warning')
-        return redirect(url_for('franchise_collections'))
-
-    preview_rows = apply_column_mapping(headers, raw_rows[:10], mapping, row_key_map=FRANCHISE_ROW_KEY_MAP)
-    return render_template('franchise/collections_import_preview.html',
-                           frequency=frequency, filename=filename,
-                           headers=headers, mapping=mapping, fields=CANONICAL_FRANCHISE_FIELDS,
-                           preview_rows=preview_rows, row_count=len(raw_rows),
-                           raw_data=json.dumps({'headers': headers, 'rows': raw_rows}))
-
-
-@app.route('/franchise/collections/import/confirm', methods=['POST'])
-@login_required
-@permission_required('franchise')
-def franchise_collections_import_confirm():
-    frequency = request.form.get('frequency', 'daily')
-    if frequency not in ('daily', 'weekly'):
-        frequency = 'daily'
-    filename = request.form.get('filename', 'uploaded file')
-    try:
-        payload = json.loads(request.form.get('raw_data') or '{}')
-        headers, raw_rows = payload.get('headers') or [], payload.get('rows') or []
-        if not raw_rows:
-            raise ValueError('empty')
-    except (ValueError, json.JSONDecodeError, TypeError):
-        flash('That preview session expired — please choose the file again.', 'danger')
-        return redirect(url_for('franchise_collections'))
-
-    mapping = {field_key: (request.form.get(f'map_{field_key}') or None)
-               for field_key, _label, _syn in CANONICAL_FRANCHISE_FIELDS}
-    file_rows = apply_column_mapping(headers, raw_rows, mapping, row_key_map=FRANCHISE_ROW_KEY_MAP)
-    auto_register = request.form.get('auto_register') == '1'
-    imported, errors, error_rows, created_vehicles, created_records = import_franchise_collection_rows(
-        file_rows, frequency, auto_register_vehicles=auto_register)
-
-    if imported or error_rows:
-        # Commit even when imported == 0: a batch made only of failed rows
-        # still needs to persist so its quarantine CSV can be downloaded.
-        save_import_batch('franchise_collections', filename, len(raw_rows), imported, error_rows, created_records)
-        if imported:
-            log_audit('CREATE', 'franchise_collections', None,
-                      f'Imported {imported} {frequency} collection row(s) from {filename}')
-        created_vehicle_ids = [rid for table, rid in created_records if table == 'franchise_vehicles']
-        for plate, vid in zip(created_vehicles, created_vehicle_ids):
-            log_audit('CREATE', 'franchise_vehicles', vid,
-                      f'Auto-registered franchise vehicle "{plate}" from collections import ({filename}) — '
-                      f'not on file, added because a collection row named it.')
-        db.session.commit()
-    else:
-        db.session.rollback()
-
-    if imported:
-        flash(f'Imported {imported} {frequency} collection row(s).', 'success')
-    if created_vehicles:
-        flash(f'Auto-registered new franchise vehicle(s): {", ".join(created_vehicles)}.', 'success')
-    if errors:
-        shown = errors[:10]
-        more = f' (+{len(errors) - 10} more)' if len(errors) > 10 else ''
-        flash('Skipped rows — ' + '; '.join(shown) + more, 'warning')
-    if not imported and not errors:
-        flash('No rows found to import.', 'warning')
-
-    return redirect(url_for('franchise_collections', frequency=frequency))
-
-
-def _collections_by_day(frequency, df, dt):
-    """Group FranchiseCollection entries of one frequency into per-date rows
-    (vehicle count + total collected) — shared by the Daily and Weekly
-    Franchise report pages, which are identical in shape and differ only in
-    which frequency they show."""
-    entries = FranchiseCollection.query.filter(
-        FranchiseCollection.entry_date.between(df, dt), FranchiseCollection.frequency == frequency
-    ).order_by(FranchiseCollection.entry_date.desc(), FranchiseCollection.id.desc()).all()
-
-    days = {}
-    for c in entries:
-        days.setdefault(c.entry_date, []).append(c)
-    day_rows = [
-        dict(entry_date=d, collections=day_entries, vehicle_count=len(day_entries),
-             total=sum(c.amount for c in day_entries), total_expense=sum(c.expense for c in day_entries),
-             net=sum(c.net for c in day_entries))
-        for d, day_entries in sorted(days.items(), reverse=True)
-    ]
-    return day_rows, sum(c.amount for c in entries), sum(c.expense for c in entries)
-
-
-@app.route('/reports/franchise/daily-collections')
-@login_required
-@permission_required('franchise')
-def report_franchise_daily_collections():
-    """Daily Franchise — per-date rollup of vehicles paying the daily fee."""
-    df, dt = query_date_range()
-    day_rows, total, total_expense = _collections_by_day('daily', df, dt)
-    return render_template('franchise/daily_collections.html', title='Daily Franchise Collections',
-                           frequency='daily', days=day_rows, total=total, total_expense=total_expense,
-                           net=total - total_expense,
-                           date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
-
-
-@app.route('/reports/franchise/weekly-collections')
-@login_required
-@permission_required('franchise')
-def report_franchise_weekly_collections():
-    """Weekly Franchise — per-date rollup of vehicles paying the weekly fee."""
-    df, dt = query_date_range()
-    day_rows, total, total_expense = _collections_by_day('weekly', df, dt)
-    return render_template('franchise/daily_collections.html', title='Weekly Franchise Collections',
-                           frequency='weekly', days=day_rows, total=total, total_expense=total_expense,
-                           net=total - total_expense,
-                           date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
-
-
-@app.route('/reports/franchise/analysis')
-@login_required
-@permission_required('franchise')
-def report_franchise_analysis():
-    """Franchise Analysis — for each date, Daily Franchise collected vs.
-    Weekly Franchise collected vs. their combined total, so the two payment
-    populations can be compared day by day."""
-    df, dt = query_date_range()
-    entries = FranchiseCollection.query.filter(FranchiseCollection.entry_date.between(df, dt)).all()
-
-    days = {}
-    for c in entries:
-        bucket = days.setdefault(c.entry_date, {'daily': 0.0, 'weekly': 0.0})
-        bucket[c.frequency] += c.amount
-    day_rows = [
-        dict(entry_date=d, weekday=d.strftime('%A'), daily=b['daily'], weekly=b['weekly'],
-             total=b['daily'] + b['weekly'])
-        for d, b in sorted(days.items())
-    ]
-    totals = dict(daily=sum(r['daily'] for r in day_rows), weekly=sum(r['weekly'] for r in day_rows),
-                  total=sum(r['total'] for r in day_rows))
-    return render_template('franchise/analysis.html', title='Franchise Analysis',
-                           days=day_rows, totals=totals,
-                           date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
-
-
 def _income_entry_totals(entries):
     """Sum a list of FranchiseDailyIncome or FranchiseWeeklyIncome entries
     (identical shape) into the same fields as a single entry, so a period
@@ -6698,7 +6367,13 @@ def report_franchise_reconciliation():
     one table with columns from both. Each row is a combined total across
     every vehicle for that date/week, matching the franchise's own paper
     schedule — per-vehicle detail lives on the Daily/Weekly Income list
-    pages instead."""
+    pages instead.
+
+    Also carries a Day by Day comparison (daily income vs. weekly income vs.
+    their combined total, by calendar date) — this used to be its own
+    "Franchise Analysis" page, but it's the same two entities grouped a
+    different way, so it's folded in here as a quick-scan summary ahead of
+    the two full ledgers below it."""
     df, dt = query_date_range()
     daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
@@ -6711,10 +6386,25 @@ def report_franchise_reconciliation():
     combined_totals = {k: daily_totals[k] + weekly_totals[k] for k in daily_totals}
     combined_totals['net_profit'] = combined_totals['income'] - combined_totals['total_expenditure']
 
+    days = {}
+    for e in daily_entries:
+        days.setdefault(e.entry_date, {'daily': 0.0, 'weekly': 0.0})['daily'] += e.income
+    for e in weekly_entries:
+        days.setdefault(e.week_start, {'daily': 0.0, 'weekly': 0.0})['weekly'] += e.income
+    day_by_day_rows = [
+        dict(entry_date=d, weekday=d.strftime('%A'), daily=b['daily'], weekly=b['weekly'],
+             total=b['daily'] + b['weekly'])
+        for d, b in sorted(days.items())
+    ]
+    day_by_day_totals = dict(daily=sum(r['daily'] for r in day_by_day_rows),
+                             weekly=sum(r['weekly'] for r in day_by_day_rows),
+                             total=sum(r['total'] for r in day_by_day_rows))
+
     return render_template('franchise/reconciliation.html', title='Franchise Collection Reconciliation Schedule',
                            daily_rows=daily_rows, daily_totals=daily_totals,
                            weekly_rows=weekly_rows, weekly_totals=weekly_totals,
                            combined_totals=combined_totals,
+                           day_by_day_rows=day_by_day_rows, day_by_day_totals=day_by_day_totals,
                            date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
 
 

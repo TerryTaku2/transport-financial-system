@@ -46,6 +46,46 @@
 </div>
 
 <div class="card mb-24">
+  <div class="card-header"><h3>Day by Day</h3></div>
+  {% if day_by_day_rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Day</th>
+          <th>Date</th>
+          <th class="text-right">Daily Income</th>
+          <th class="text-right">Weekly Income</th>
+          <th class="text-right">Total Income / Day</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in day_by_day_rows %}
+        <tr>
+          <td>{{ d.weekday }}</td>
+          <td>{{ d.entry_date }}</td>
+          <td class="text-right">{{ d.daily|currency }}</td>
+          <td class="text-right">{{ d.weekly|currency }}</td>
+          <td class="text-right">{{ d.total|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="summary-row">
+          <td colspan="2">TOTAL</td>
+          <td class="text-right">{{ day_by_day_totals.daily|currency }}</td>
+          <td class="text-right">{{ day_by_day_totals.weekly|currency }}</td>
+          <td class="text-right">{{ day_by_day_totals.total|currency }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No franchise income recorded for the selected period.</p></div>
+  {% endif %}
+</div>
+
+<div class="card mb-24">
   <div class="card-header"><h3>Daily Reconciliation Schedule</h3></div>
   {% if daily_rows %}
   <div class="table-wrap">

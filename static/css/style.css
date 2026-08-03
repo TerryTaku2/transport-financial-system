@@ -370,12 +370,12 @@ textarea { resize: vertical; min-height: 90px; }
   pointer-events: none;
   z-index: -1;
 }
-.searchable-select-input { padding-right: 28px; }
+.searchable-select-input { padding-right: 52px; }
 .searchable-select-clear {
   display: none;
   position: absolute;
-  top: 0; right: 0; bottom: 0;
-  width: 28px;
+  top: 0; right: 24px; bottom: 0;
+  width: 24px;
   border: none;
   background: transparent;
   color: var(--text-muted);
@@ -384,6 +384,19 @@ textarea { resize: vertical; min-height: 90px; }
   cursor: pointer;
 }
 .searchable-select-clear:hover { color: var(--text); }
+.searchable-select-toggle {
+  position: absolute;
+  top: 0; right: 0; bottom: 0;
+  width: 24px;
+  border: none;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+}
+.searchable-select-toggle:hover { color: var(--text); background: #f8fafc; }
 .searchable-select-dropdown {
   display: none;
   position: absolute;
