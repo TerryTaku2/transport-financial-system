@@ -84,7 +84,10 @@
               {% elif doc.status == 'warning' %}<span class="badge badge-amber">{{ doc.days_to_expiry }}d left</span>
               {% else %}<span class="badge badge-green">Valid</span>{% endif %}
             </td>
-            <td>
+            <td class="btn-group">
+              {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('document_edit', did=doc.id) }}" class="btn btn-outline btn-xs">Edit</a>
+              {% endif %}
               <form method="POST" action="{{ url_for('document_delete', did=doc.id) }}" data-confirm="Delete this document record?">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-danger btn-xs">Del</button>

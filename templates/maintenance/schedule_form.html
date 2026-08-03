@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Add Maintenance Schedule{% endblock %}
-{% block page_title %}Add Maintenance Schedule{% endblock %}
+{% block title %}{{ 'Edit' if sched else 'Add' }} Maintenance Schedule{% endblock %}
+{% block page_title %}{{ 'Edit' if sched else 'Add' }} Maintenance Schedule{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Add Maintenance Schedule</h1>
+    <h1>{{ 'Edit' if sched else 'Add' }} Maintenance Schedule</h1>
     <div class="subtitle">Set a recurring preventive service — by time, by distance, or both</div>
   </div>
   <a href="{{ url_for('maintenance_schedules') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
@@ -20,29 +20,29 @@
           <label>Vehicle<span class="req">*</span></label>
           <select name="vehicle_id" required>
             {% for v in vehicles %}
-            <option value="{{ v.id }}">{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
+            <option value="{{ v.id }}" {% if sched and sched.vehicle_id==v.id %}selected{% endif %}>{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
             {% endfor %}
           </select>
         </div>
         <div class="form-group">
           <label>Service Description<span class="req">*</span></label>
-          <input type="text" name="description" required placeholder="e.g. Oil change">
+          <input type="text" name="description" required placeholder="e.g. Oil change" value="{{ sched.description or '' if sched }}">
         </div>
         <div class="form-group">
           <label>Interval (days)</label>
-          <input type="number" name="interval_days" min="1" placeholder="e.g. 90">
+          <input type="number" name="interval_days" min="1" placeholder="e.g. 90" value="{{ sched.interval_days or '' if sched }}">
         </div>
         <div class="form-group">
           <label>Interval (km)</label>
-          <input type="number" name="interval_km" min="1" placeholder="e.g. 5000">
+          <input type="number" name="interval_km" min="1" placeholder="e.g. 5000" value="{{ sched.interval_km or '' if sched }}">
         </div>
         <div class="form-group">
           <label>Last Done Date</label>
-          <input type="date" name="last_done_date" value="{{ today }}">
+          <input type="date" name="last_done_date" value="{{ sched.last_done_date if sched else today }}">
         </div>
         <div class="form-group">
           <label>Last Done Odometer (km)</label>
-          <input type="number" name="last_done_odometer" min="0" placeholder="e.g. 45000">
+          <input type="number" name="last_done_odometer" min="0" placeholder="e.g. 45000" value="{{ sched.last_done_odometer or '' if sched }}">
         </div>
       </div>
       <div class="form-hint mb-16">At least one interval (days or km) is needed to calculate the next due date.</div>

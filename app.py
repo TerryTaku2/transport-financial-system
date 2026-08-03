@@ -28,7 +28,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+from reportlab.platypus import Paragraph, PageBreak, SimpleDocTemplate, Spacer, Table, TableStyle
 from dotenv import load_dotenv
 from flask import (Flask, render_template, request, redirect, url_for,
                    flash, jsonify, make_response, session, send_from_directory)
@@ -2516,6 +2516,27 @@ def document_add(vehicle_id):
     return render_template('vehicles/document_form.html', vehicle=vehicle)
 
 
+@app.route('/documents/<int:did>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def document_edit(did):
+    doc = VehicleDocument.query.filter_by(id=did).first_or_404()
+    if request.method == 'POST':
+        doc.doc_type = request.form['doc_type']
+        doc.reference_number = request.form.get('reference_number', '').strip()
+        doc.issue_date = parse_date(request.form.get('issue_date'))
+        doc.expiry_date = parse_date(request.form['expiry_date'])
+        doc.notes = request.form.get('notes', '').strip()
+        log_audit('UPDATE', 'vehicle_documents', doc.id,
+                  f'Updated {doc.doc_type} for {doc.vehicle.registration}')
+        touch_sync_fields(doc)
+        db.session.commit()
+        flash('Document updated.', 'success')
+        return redirect(url_for('vehicle_detail', vid=doc.vehicle_id))
+    return render_template('vehicles/document_form.html', vehicle=doc.vehicle, doc=doc)
+
+
 @app.route('/documents/<int:did>/delete', methods=['POST'])
 @login_required
 @permission_required('vehicles')
@@ -3374,6 +3395,32 @@ def fuel_log_add():
                            today=date.today().strftime('%Y-%m-%d'))
 
 
+@app.route('/logs/fuel/<int:lid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def fuel_log_edit(lid):
+    log = FuelLog.query.filter_by(id=lid).first_or_404()
+    if request.method == 'POST':
+        log.vehicle_id = form_int(request.form, 'vehicle_id')
+        log.log_date = parse_date(request.form['log_date'])
+        log.liters = form_float(request.form, 'liters', min_value=0)
+        log.odometer = form_float(request.form, 'odometer', required=False, min_value=0)
+        log.supplier = request.form.get('supplier', '').strip()
+        log.notes = request.form.get('notes', '').strip()
+        log_audit('UPDATE', 'fuel_logs', log.id, f'Updated fuel log for {log.vehicle.registration}')
+        touch_sync_fields(log)
+        db.session.commit()
+        flash('Fuel log updated.', 'success')
+        return redirect(url_for('fuel_logs'))
+    # Not filtered to active-only, unlike the Add form — an edit must still
+    # be able to show/keep the log's own vehicle even if it's since been
+    # marked inactive.
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    return render_template('logs/fuel/form.html', vehicles=all_vehicles, log=log,
+                           today=log.log_date.strftime('%Y-%m-%d'))
+
+
 @app.route('/logs/fuel/<int:lid>/delete', methods=['POST'])
 @login_required
 @admin_required
@@ -3441,6 +3488,33 @@ def maintenance_log_add():
     all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
     return render_template('logs/maintenance/form.html', vehicles=all_vehicles,
                            today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/logs/maintenance/<int:lid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def maintenance_log_edit(lid):
+    log = MaintenanceLog.query.filter_by(id=lid).first_or_404()
+    if request.method == 'POST':
+        parts = form_float(request.form, 'parts_cost', required=False, default=0, min_value=0)
+        labor = form_float(request.form, 'labor_cost', required=False, default=0, min_value=0)
+        log.vehicle_id = form_int(request.form, 'vehicle_id')
+        log.log_date = parse_date(request.form['log_date'])
+        log.description = request.form['description'].strip()
+        log.parts_cost = parts
+        log.labor_cost = labor
+        log.total_cost = parts + labor
+        log.mechanic = request.form.get('mechanic', '').strip()
+        log.notes = request.form.get('notes', '').strip()
+        log_audit('UPDATE', 'maintenance_logs', log.id, f'Updated maintenance log for {log.vehicle.registration}')
+        touch_sync_fields(log)
+        db.session.commit()
+        flash('Maintenance log updated.', 'success')
+        return redirect(url_for('maintenance_logs'))
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    return render_template('logs/maintenance/form.html', vehicles=all_vehicles, log=log,
+                           today=log.log_date.strftime('%Y-%m-%d'))
 
 
 @app.route('/logs/maintenance/<int:lid>/delete', methods=['POST'])
@@ -3526,6 +3600,37 @@ def maintenance_schedule_add():
         return redirect(url_for('maintenance_schedules'))
     all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
     return render_template('maintenance/schedule_form.html', vehicles=all_vehicles,
+                           today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/maintenance/schedules/<int:sid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def maintenance_schedule_edit(sid):
+    sched = MaintenanceSchedule.query.filter_by(id=sid).first_or_404()
+    if request.method == 'POST':
+        interval_days = form_int(request.form, 'interval_days', required=False, min_value=1)
+        interval_km = form_float(request.form, 'interval_km', required=False, min_value=1)
+        last_done_date = parse_date(request.form.get('last_done_date')) or date.today()
+        last_done_odometer = form_float(request.form, 'last_done_odometer', required=False, min_value=0)
+
+        sched.vehicle_id = form_int(request.form, 'vehicle_id')
+        sched.description = request.form['description'].strip()
+        sched.interval_days = interval_days
+        sched.interval_km = interval_km
+        sched.last_done_date = last_done_date
+        sched.last_done_odometer = last_done_odometer
+        sched.next_due_date = (last_done_date + timedelta(days=interval_days)) if interval_days else None
+        sched.next_due_odometer = (last_done_odometer + interval_km) \
+            if (interval_km and last_done_odometer is not None) else None
+        log_audit('UPDATE', 'maintenance_schedules', sched.id, f'Updated maintenance schedule: {sched.description}')
+        touch_sync_fields(sched)
+        db.session.commit()
+        flash('Maintenance schedule updated.', 'success')
+        return redirect(url_for('maintenance_schedules'))
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    return render_template('maintenance/schedule_form.html', vehicles=all_vehicles, sched=sched,
                            today=date.today().strftime('%Y-%m-%d'))
 
 
@@ -3716,6 +3821,51 @@ def store_purchase_add():
                            today=date.today().strftime('%Y-%m-%d'))
 
 
+@app.route('/store/purchases/<int:pid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def store_purchase_edit(pid):
+    purchase = StorePurchase.query.filter_by(id=pid).first_or_404()
+    if request.method == 'POST':
+        part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
+        quantity = form_int(request.form, 'quantity', min_value=1)
+        unit_cost = form_float(request.form, 'unit_cost', min_value=0)
+
+        # Reverse this purchase's old quantity off whichever part it was
+        # against, then apply the new quantity to the (possibly different)
+        # part — same "adjust quantity_on_hand only" approach as the delete
+        # route; average cost_price is not recomputed for the same reason
+        # (see store_purchase_delete).
+        old_part = purchase.part
+        if part.id == old_part.id:
+            part.quantity_on_hand = max(0, part.quantity_on_hand - purchase.quantity + quantity)
+            touch_sync_fields(part)
+        else:
+            old_part.quantity_on_hand = max(0, old_part.quantity_on_hand - purchase.quantity)
+            part.quantity_on_hand = part.quantity_on_hand + quantity
+            touch_sync_fields(old_part)
+            touch_sync_fields(part)
+
+        purchase.part_id = part.id
+        purchase.purchase_date = parse_date(request.form['purchase_date'])
+        purchase.quantity = quantity
+        purchase.unit_cost = unit_cost
+        purchase.total_cost = quantity * unit_cost
+        purchase.supplier = request.form.get('supplier', '').strip()
+        purchase.notes = request.form.get('notes', '').strip()
+        log_audit('UPDATE', 'store_purchases', purchase.id,
+                  f'Updated purchase to {quantity} x {part.name} @ {unit_cost}')
+        touch_sync_fields(purchase)
+        db.session.commit()
+        flash('Purchase updated and stock adjusted accordingly. Note: this does not '
+             'recompute historical average cost.', 'success')
+        return redirect(url_for('store_purchases'))
+    all_parts = SparePart.query.order_by(SparePart.name).all()
+    return render_template('store/purchase_form.html', parts=all_parts, purchase=purchase,
+                           today=purchase.purchase_date.strftime('%Y-%m-%d'))
+
+
 @app.route('/store/purchases/<int:pid>/delete', methods=['POST'])
 @login_required
 @admin_required
@@ -3893,6 +4043,57 @@ def store_sale_add():
     all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
     return render_template('store/sale_form.html', parts=all_parts, vehicles=all_vehicles,
                            today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/store/sales/<int:sid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def store_sale_edit(sid):
+    sale = StoreSale.query.filter_by(id=sid).first_or_404()
+    if request.method == 'POST':
+        part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
+        quantity = form_int(request.form, 'quantity', min_value=1)
+
+        # Put the old sale's quantity back onto its old part before checking
+        # stock for the new quantity/part — same reversal approach as
+        # store_purchase_edit.
+        old_part = sale.part
+        available = part.quantity_on_hand + (sale.quantity if part.id == old_part.id else 0)
+        if quantity > available:
+            raise ValueError(f'Only {available} {part.unit}(s) of {part.name} in stock.')
+        unit_price = form_float(request.form, 'unit_price', required=False,
+                                default=part.selling_price, min_value=0)
+        vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+
+        if part.id == old_part.id:
+            part.quantity_on_hand = part.quantity_on_hand + sale.quantity - quantity
+            touch_sync_fields(part)
+        else:
+            old_part.quantity_on_hand += sale.quantity
+            part.quantity_on_hand -= quantity
+            touch_sync_fields(old_part)
+            touch_sync_fields(part)
+
+        sale.part_id = part.id
+        sale.vehicle_id = vehicle_id
+        sale.sale_date = parse_date(request.form['sale_date'])
+        sale.quantity = quantity
+        sale.unit_cost = part.cost_price
+        sale.unit_price = unit_price
+        sale.total_amount = quantity * unit_price
+        sale.customer_name = request.form.get('customer_name', '').strip() if not vehicle_id else None
+        sale.notes = request.form.get('notes', '').strip()
+        log_audit('UPDATE', 'store_sales', sale.id, f'Updated sale to {quantity} x {part.name} @ {unit_price}')
+        touch_sync_fields(sale)
+        db.session.commit()
+        flash('Sale updated and stock adjusted accordingly.', 'success')
+        return redirect(url_for('store_sales'))
+
+    all_parts = SparePart.query.order_by(SparePart.name).all()
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    return render_template('store/sale_form.html', parts=all_parts, vehicles=all_vehicles, sale=sale,
+                           today=sale.sale_date.strftime('%Y-%m-%d'))
 
 
 @app.route('/store/sales/<int:sid>/delete', methods=['POST'])
@@ -4149,14 +4350,10 @@ def statement_expense_line_items(df, dt, vehicle_id=None):
     return items
 
 
-@app.route('/reports/income')
-@login_required
-@permission_required('reports')
-def report_income():
-    vehicle_id = request.args.get('vehicle_id', '')
-    df, dt = query_date_range()
-    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
-
+def compute_income_statement(df, dt, vehicle_id=None):
+    """Fleet-wide (vehicle_id=None) or per-vehicle income statement for
+    [df, dt] — shared by the Income Statement report page and the Full
+    Report Pack PDF so the two can't drift apart on the numbers."""
     if vehicle_id:
         # Per-vehicle statement: only costs directly attributable to this vehicle.
         gross_revenue, maintenance_cost, vehicle_expenses, spares_cost = vehicle_income_totals(df, dt, vehicle_id)
@@ -4210,18 +4407,34 @@ def report_income():
     statement_expenses = [(name, category_totals[name]) for name in statement_category_names]
     if other_expenses:
         statement_expenses.append(('Other', other_expenses))
+
+    return dict(
+        gross_revenue=gross_revenue,
+        maintenance_cost=maintenance_cost, vehicle_expenses=vehicle_expenses,
+        general_expenses=general_expenses, total_expenses=total_expenses,
+        statement_expenses=statement_expenses,
+        net_profit=net_profit, profit_margin=profit_margin,
+        vehicle_breakdown=vehicle_breakdown, expense_breakdown=expense_breakdown,
+    )
+
+
+@app.route('/reports/income')
+@login_required
+@permission_required('reports')
+def report_income():
+    vehicle_id = request.args.get('vehicle_id', '')
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    stmt = compute_income_statement(df, dt, vehicle_id)
     statement_expense_items = statement_expense_line_items(df, dt, vehicle_id or None)
 
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     return render_template('reports/income.html',
-        gross_revenue=gross_revenue,
-        maintenance_cost=maintenance_cost, vehicle_expenses=vehicle_expenses,
-        general_expenses=general_expenses, total_expenses=total_expenses,
-        statement_expenses=statement_expenses, statement_expense_items=statement_expense_items,
-        net_profit=net_profit, profit_margin=profit_margin,
-        vehicle_breakdown=vehicle_breakdown, expense_breakdown=expense_breakdown,
+        statement_expense_items=statement_expense_items,
         vehicles=all_vehicles,
-        date_from=date_from_str, date_to=date_to_str, vehicle_id=vehicle_id)
+        date_from=date_from_str, date_to=date_to_str, vehicle_id=vehicle_id,
+        **stmt)
 
 
 def compute_payroll_earnings(df, dt):
@@ -4618,6 +4831,579 @@ def export_consolidated_pdf():
     return resp
 
 
+# ─────────────────────────────────────────────────────────────
+# Full Report Pack — every standalone report bundled into one PDF, each
+# as its own self-contained, page-broken section (a "one document with
+# everything, each report standing alone" handover pack). All
+# period-based sections share one [df, dt] from query_date_range(); the
+# point-in-time ones (Financial Position, Distance Travelled) are taken
+# "as at" dt, and Compliance is always "as at today" since it's a
+# live status check, not a historical figure.
+# ─────────────────────────────────────────────────────────────
+def _pdf_styles():
+    return getSampleStyleSheet()
+
+
+def _pdf_table(data, bold_last_row=True, col_widths=None):
+    """One consistent look for every header+rows report table — mirrors
+    export_payroll_pdf/export_consolidated_pdf's inline style so every
+    section in the Full Report Pack (and those two standalone PDFs)
+    matches. First row is the header; if bold_last_row, the final row is
+    treated as a bold, shaded TOTAL row."""
+    table = Table(data, repeatRows=1, colWidths=col_widths)
+    style = [
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8.5),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    ]
+    if bold_last_row:
+        style.append(('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'))
+        style.append(('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f1f5f9')))
+        style.append(('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8fafc')]))
+    else:
+        style.append(('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8fafc')]))
+    table.setStyle(TableStyle(style))
+    return table
+
+
+def _pdf_statement_table(rows, bold_indices=()):
+    """Two-column label/value table for statement-style sections (Income
+    Statement, Cash Flow, Financial Position, Trading Account, Franchise
+    P&L) — no header row; rows in bold_indices (subtotal/total lines) are
+    bolded and shaded."""
+    table = Table(rows, colWidths=[320, 140])
+    style = [
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+        ('LINEBELOW', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+        ('TOPPADDING', (0, 0), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+    ]
+    for i in bold_indices:
+        style.append(('FONTNAME', (0, i), (-1, i), 'Helvetica-Bold'))
+        style.append(('BACKGROUND', (0, i), (-1, i), colors.HexColor('#f1f5f9')))
+    table.setStyle(TableStyle(style))
+    return table
+
+
+def _pdf_section(title, subtitle, flowables, note=None):
+    """One report's worth of flowables — heading, subtitle, optional note,
+    then whatever the caller built — ending in a PageBreak so each report
+    in the pack starts on its own page ("standing alone")."""
+    styles = _pdf_styles()
+    elements = [Paragraph(title, styles['Heading1'])]
+    if subtitle:
+        elements.append(Paragraph(subtitle, styles['Normal']))
+    elements.append(Spacer(1, 8))
+    if note:
+        elements.append(Paragraph(note, styles['Italic']))
+        elements.append(Spacer(1, 6))
+    elements.extend(flowables if isinstance(flowables, list) else [flowables])
+    elements.append(PageBreak())
+    return elements
+
+
+def _full_pack_cover(df, dt, included):
+    styles = _pdf_styles()
+    elements = [
+        Paragraph('Full Report Pack', styles['Title']),
+        Paragraph(f'Period: {df} to {dt}', styles['Normal']),
+        Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}', styles['Normal']),
+        Spacer(1, 16),
+        Paragraph('Reports included in this document:', styles['Heading3']),
+        Spacer(1, 4),
+    ]
+    for name in included:
+        elements.append(Paragraph(f'&bull; {name}', styles['Normal']))
+    elements.append(PageBreak())
+    return elements
+
+
+def _consolidated_overview_pdf(df, dt):
+    segments, totals = compute_consolidated_overview(df, dt)
+    headers = ['Segment', 'Entries', 'Revenue', 'Expenses', 'Net Profit']
+    data = [headers] + [[s['name'], str(s['count']), f"${s['revenue']:,.2f}",
+                         f"${s['expenses']:,.2f}", f"${s['net_profit']:,.2f}"] for s in segments]
+    data.append(['TOTAL', '', f"${totals['revenue']:,.2f}", f"${totals['expenses']:,.2f}",
+                f"${totals['net_profit']:,.2f}"])
+    return _pdf_section('Consolidated Overview', f'Period: {df} to {dt} — Fleet, Franchise and Spares Store combined',
+                        [_pdf_table(data)])
+
+
+def _income_statement_pdf(df, dt):
+    s = compute_income_statement(df, dt)
+    rows = [['Gross Revenue', f"${s['gross_revenue']:,.2f}"]]
+    for name, amt in s['statement_expenses']:
+        rows.append([f'  {name}', f"${amt:,.2f}"])
+    rows.append(['Total Operating Expenses', f"${s['total_expenses']:,.2f}"])
+    rows.append(['NET PROFIT', f"${s['net_profit']:,.2f}"])
+    rows.append(['Profit Margin', f"{s['profit_margin']:.1f}%"])
+    bold_idx = {len(rows) - 3, len(rows) - 2}
+    flowables = [_pdf_statement_table(rows, bold_indices=bold_idx)]
+
+    if s['vehicle_breakdown']:
+        styles = _pdf_styles()
+        flowables += [Spacer(1, 14), Paragraph('Per-Vehicle Breakdown', styles['Heading3']), Spacer(1, 6)]
+        headers = ['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Net Profit', 'Margin']
+        vdata = [headers] + [[
+            v['vehicle'].registration, f"${v['revenue']:,.2f}", f"${v['maintenance']:,.2f}",
+            f"${v['expenses']:,.2f}", f"${v['net_profit']:,.2f}", f"{v['margin']:.1f}%",
+        ] for v in s['vehicle_breakdown']]
+        flowables.append(_pdf_table(vdata, bold_last_row=False))
+    return _pdf_section('Income Statement', f'Period: {df} to {dt} — fleet-wide', flowables)
+
+
+def _cash_flow_pdf(df, dt):
+    cf = compute_cash_flow(df, dt)
+    rows = [
+        ['Cash from Operations', ''],
+        ['  Revenue collected', f"${cf['operating_in']:,.2f}"],
+        ['  Receivables collected', f"${cf['receivables_in']:,.2f}"],
+        ['  Maintenance paid', f"-${cf['maint_out']:,.2f}"],
+        ['  Expenses paid', f"-${cf['expenses_out']:,.2f}"],
+        ['  Commissions paid', f"-${cf['commission_out']:,.2f}"],
+        ['  Payables paid', f"-${cf['payables_out']:,.2f}"],
+        ['Net Cash from Operations', f"${cf['net_operating']:,.2f}"],
+        ['Cash from Investing', ''],
+        ['  Vehicles purchased', f"-${cf['investing_out']:,.2f}"],
+        ['Net Cash from Investing', f"${cf['net_investing']:,.2f}"],
+        ['Cash from Financing', ''],
+        ['  Loan proceeds', f"${cf['loan_proceeds_in']:,.2f}"],
+        ['  Loan repayments', f"-${cf['loan_repay_out']:,.2f}"],
+        ['  Capital contributed', f"${cf['capital_in']:,.2f}"],
+        ['  Owner drawings', f"-${cf['drawings_out']:,.2f}"],
+        ['Net Cash from Financing', f"${cf['net_financing']:,.2f}"],
+        ['Net Change in Cash', f"${cf['net_change']:,.2f}"],
+        ['Opening Cash', f"${cf['opening_cash']:,.2f}"],
+        ['Closing Cash', f"${cf['closing_cash']:,.2f}"],
+    ]
+    bold_labels = {'Net Cash from Operations', 'Net Cash from Investing', 'Net Cash from Financing',
+                   'Net Change in Cash', 'Closing Cash'}
+    bold_idx = {i for i, r in enumerate(rows) if r[0] in bold_labels}
+    return _pdf_section('Cash Flow Statement', f'Period: {df} to {dt}',
+                        [_pdf_statement_table(rows, bold_indices=bold_idx)])
+
+
+def _financial_position_pdf(dt):
+    fp = compute_financial_position(dt)
+    rows = [
+        ['Non-Current Assets', ''],
+        ['  Vehicles at cost', f"${fp['total_cost']:,.2f}"],
+        ['  Accumulated depreciation', f"-${fp['total_accum_dep']:,.2f}"],
+        ['  Net book value', f"${fp['total_nbv']:,.2f}"],
+        ['Current Assets', ''],
+        ['  Cash and equivalents', f"${fp['cash_and_equivalents']:,.2f}"],
+        ['  Receivables outstanding', f"${fp['receivables_outstanding']:,.2f}"],
+        ['TOTAL ASSETS', f"${fp['total_assets']:,.2f}"],
+        ['Liabilities', ''],
+        ['  Loans outstanding', f"${fp['loans_outstanding']:,.2f}"],
+        ['  Payables outstanding', f"${fp['payables_outstanding']:,.2f}"],
+        ['  Commission payable', f"${fp['commission_payable']:,.2f}"],
+        ['TOTAL LIABILITIES', f"${fp['total_liabilities']:,.2f}"],
+        ['Equity', ''],
+        ["  Owner's capital", f"${fp['owners_capital']:,.2f}"],
+        ['  Retained earnings', f"${fp['retained_earnings']:,.2f}"],
+        ['TOTAL EQUITY', f"${fp['total_equity']:,.2f}"],
+    ]
+    bold_labels = {'TOTAL ASSETS', 'TOTAL LIABILITIES', 'TOTAL EQUITY'}
+    bold_idx = {i for i, r in enumerate(rows) if r[0] in bold_labels}
+    return _pdf_section('Statement of Financial Position', f'As at {dt}',
+                        [_pdf_statement_table(rows, bold_indices=bold_idx)])
+
+
+def _budget_pdf(dt):
+    month_start = dt.replace(day=1)
+    month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    actuals = {
+        'Revenue': db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+            DailyLog.log_date.between(month_start, month_end)).scalar() or 0,
+        'Maintenance': db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
+            MaintenanceLog.log_date.between(month_start, month_end)).scalar() or 0,
+    }
+    for cat in ExpenseCategory.query.all():
+        actuals[f'Expense: {cat.display_name}'] = db.session.query(func.sum(Expense.amount)).filter(
+            Expense.category_id == cat.id, Expense.expense_date.between(month_start, month_end)).scalar() or 0
+    budgets = {b.category: b.amount for b in Budget.query.filter_by(month=month_start).all()}
+    all_categories = sorted(set(list(actuals.keys()) + list(budgets.keys())))
+    if not all_categories:
+        return _pdf_section('Budget vs Actual', f'Month: {month_start.strftime("%B %Y")}', [],
+                            note='No budgets or actuals recorded for this month.')
+    headers = ['Category', 'Budget', 'Actual', 'Variance']
+    data = [headers] + [[cat, f"${budgets.get(cat, 0):,.2f}", f"${actuals.get(cat, 0):,.2f}",
+                         f"${actuals.get(cat, 0) - budgets.get(cat, 0):,.2f}"] for cat in all_categories]
+    return _pdf_section('Budget vs Actual', f'Month: {month_start.strftime("%B %Y")}',
+                        [_pdf_table(data, bold_last_row=False)])
+
+
+def _shortfalls_pdf(df, dt):
+    rows = []
+    targeted_vehicles = Vehicle.query.filter(
+        Vehicle.daily_target.isnot(None), Vehicle.daily_target > 0).order_by(Vehicle.registration).all()
+    for v in targeted_vehicles:
+        logs = DailyLog.query.filter(DailyLog.vehicle_id == v.id, DailyLog.log_date.between(df, dt)).all()
+        by_date = {}
+        for log in logs:
+            by_date.setdefault(log.log_date, []).append(log)
+        for d, day_logs in by_date.items():
+            fare = sum(l.gross_revenue for l in day_logs)
+            if fare >= v.daily_target:
+                continue
+            garnish = sum(l.garnish for l in day_logs)
+            shortfall = v.daily_target - fare
+            rows.append({'vehicle': v, 'date': d, 'target': v.daily_target, 'fare': fare,
+                        'shortfall': shortfall, 'garnish': garnish, 'remaining': shortfall - garnish})
+    rows.sort(key=lambda r: r['date'], reverse=True)
+    if not rows:
+        return _pdf_section('Revenue Shortfalls', f'Period: {df} to {dt}', [], note='No shortfalls in this period.')
+    headers = ['Date', 'Vehicle', 'Target', 'Fare', 'Shortfall', 'Garnish', 'Remaining']
+    data = [headers] + [[
+        r['date'], r['vehicle'].registration, f"${r['target']:,.2f}", f"${r['fare']:,.2f}",
+        f"${r['shortfall']:,.2f}", f"${r['garnish']:,.2f}", f"${r['remaining']:,.2f}",
+    ] for r in rows]
+    data.append(['TOTAL', '', '', '', f"${sum(r['shortfall'] for r in rows):,.2f}",
+                f"${sum(r['garnish'] for r in rows):,.2f}", f"${sum(max(r['remaining'], 0) for r in rows):,.2f}"])
+    return _pdf_section('Revenue Shortfalls', f'Period: {df} to {dt}', [_pdf_table(data)])
+
+
+def _payroll_pdf(df, dt):
+    earnings, total_commissions, total_garnish, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
+    headers = ['Crew Member', 'Role', 'Days', 'Revenue', 'Garnish', 'Rate', 'Accrued', 'Paid', 'Outstanding']
+    data = [headers]
+
+    def add_row(name, role, e):
+        data.append([name, role, str(e['days_worked']), f"${e['total_revenue']:,.2f}", f"${e['garnish']:,.2f}",
+                    f"{e['rate_pct']:.1f}%", f"${e['commission']:,.2f}", f"${e['paid']:,.2f}", f"${e['outstanding']:,.2f}"])
+
+    for e in earnings:
+        add_row(e['driver'].name, e['driver'].role.title(), e)
+        for ce in e['conductors']:
+            name = ce['driver'].name if ce['driver'] else 'Conductor (placeholder)'
+            add_row(f'  {name}', 'Conductor', ce)
+    data.append(['TOTAL', '', '', '', f"${total_garnish:,.2f}", '', f"${total_commissions:,.2f}",
+                f"${total_paid:,.2f}", f"${total_outstanding:,.2f}"])
+    return _pdf_section('Crew Payroll / Commissions', f'Period: {df} to {dt}', [_pdf_table(data)])
+
+
+def _vehicle_performance_pdf(df, dt):
+    rows = []
+    for v in Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all():
+        agg = db.session.query(func.sum(DailyLog.gross_revenue), func.sum(DailyLog.trips_completed),
+                               func.count(DailyLog.id)).filter(
+            DailyLog.vehicle_id == v.id, DailyLog.log_date.between(df, dt)).first()
+        revenue, trips, days = (agg[0] or 0), (agg[1] or 0), (agg[2] or 0)
+        if days == 0:
+            continue
+        avg_per_day = revenue / days if days else 0
+        target = v.daily_target or 0
+        achievement = (avg_per_day / target * 100) if target else None
+        rows.append({'vehicle': v, 'days': days, 'trips': trips, 'revenue': revenue,
+                    'avg_per_day': avg_per_day, 'target': target, 'achievement': achievement})
+    rows.sort(key=lambda r: r['revenue'], reverse=True)
+    if not rows:
+        return _pdf_section('Vehicle Performance', f'Period: {df} to {dt}', [], note='No activity logged in this period.')
+    headers = ['Vehicle', 'Days Logged', 'Trips', 'Revenue', 'Avg/Day', 'Target', 'Achievement']
+    data = [headers] + [[
+        r['vehicle'].registration, str(r['days']), str(r['trips']), f"${r['revenue']:,.2f}",
+        f"${r['avg_per_day']:,.2f}", f"${r['target']:,.2f}" if r['target'] else '—',
+        f"{r['achievement']:.0f}%" if r['achievement'] is not None else '—',
+    ] for r in rows]
+    return _pdf_section('Vehicle Performance', f'Period: {df} to {dt}', [_pdf_table(data, bold_last_row=False)])
+
+
+def _fuel_efficiency_pdf(df, dt):
+    rows = []
+    for v in Vehicle.query.order_by(Vehicle.registration).all():
+        logs = FuelLog.query.filter(FuelLog.vehicle_id == v.id, FuelLog.log_date.between(df, dt),
+                                    FuelLog.odometer.isnot(None)).order_by(FuelLog.odometer).all()
+        if len(logs) < 2:
+            continue
+        total_distance = total_liters = 0
+        for prev, curr in zip(logs, logs[1:]):
+            distance = curr.odometer - prev.odometer
+            if distance <= 0 or not curr.liters:
+                continue
+            total_distance += distance
+            total_liters += curr.liters
+        if not total_distance:
+            continue
+        rows.append({'vehicle': v, 'distance': total_distance, 'liters': total_liters,
+                    'avg': (total_liters / total_distance) * 100})
+    rows.sort(key=lambda r: r['avg'])
+    if not rows:
+        return _pdf_section('Fuel Efficiency', f'Period: {df} to {dt}', [],
+                            note='Not enough fuel/odometer data in this period.')
+    headers = ['Vehicle', 'Distance (km)', 'Fuel (L)', 'Avg L/100km']
+    data = [headers] + [[r['vehicle'].registration, f"{r['distance']:,.0f}", f"{r['liters']:,.1f}",
+                         f"{r['avg']:.1f}"] for r in rows]
+    fleet_distance = sum(r['distance'] for r in rows)
+    fleet_liters = sum(r['liters'] for r in rows)
+    fleet_avg = (fleet_liters / fleet_distance * 100) if fleet_distance else 0
+    data.append(['FLEET AVERAGE', f"{fleet_distance:,.0f}", f"{fleet_liters:,.1f}", f"{fleet_avg:.1f}"])
+    return _pdf_section('Fuel Efficiency', f'Period: {df} to {dt}', [_pdf_table(data)])
+
+
+def _distance_travelled_pdf(dt):
+    rows = []
+    for v in Vehicle.query.order_by(Vehicle.registration).all():
+        odometer = db.session.query(func.max(FuelLog.odometer)).filter(
+            FuelLog.vehicle_id == v.id, FuelLog.log_date == dt, FuelLog.odometer.isnot(None)).scalar()
+        distance = None
+        if odometer is not None:
+            prev = FuelLog.query.filter(FuelLog.vehicle_id == v.id, FuelLog.log_date < dt,
+                                        FuelLog.odometer.isnot(None)).order_by(FuelLog.log_date.desc()).first()
+            if prev:
+                distance = odometer - prev.odometer
+        if distance is not None:
+            rows.append({'vehicle': v, 'odometer': odometer, 'distance': distance})
+    if not rows:
+        return _pdf_section('Distance Travelled', f'As at {dt}', [], note='No odometer readings for this date.')
+    headers = ['Vehicle', 'Odometer', 'Distance Since Last Reading (km)']
+    data = [headers] + [[r['vehicle'].registration, f"{r['odometer']:,.0f}", f"{r['distance']:,.0f}"] for r in rows]
+    data.append(['FLEET TOTAL', '', f"{sum(r['distance'] for r in rows):,.0f}"])
+    return _pdf_section('Distance Travelled', f'As at {dt}', [_pdf_table(data)])
+
+
+def _route_profitability_pdf(df, dt):
+    total_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+        DailyLog.log_date.between(df, dt)).scalar() or 0
+    total_costs = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
+        MaintenanceLog.log_date.between(df, dt)).scalar() or 0
+
+    route_data = db.session.query(
+        Route.id, Route.name, func.sum(DailyLog.gross_revenue).label('revenue'),
+        func.count(DailyLog.id).label('log_days'),
+    ).join(DailyLog, Route.id == DailyLog.route_id).filter(
+        DailyLog.log_date.between(df, dt)).group_by(Route.id).all()
+
+    rows = []
+    for r in route_data:
+        revenue = r.revenue or 0
+        allocated_cost = (revenue / total_revenue * total_costs) if total_revenue else 0
+        rows.append({'name': r.name, 'revenue': revenue, 'log_days': r.log_days,
+                    'allocated_cost': allocated_cost, 'net_profit': revenue - allocated_cost})
+    unrouted = db.session.query(
+        func.sum(DailyLog.gross_revenue).label('revenue'), func.count(DailyLog.id).label('log_days'),
+    ).filter(DailyLog.route_id.is_(None), DailyLog.log_date.between(df, dt)).first()
+    if unrouted and unrouted.log_days:
+        revenue = unrouted.revenue or 0
+        allocated_cost = (revenue / total_revenue * total_costs) if total_revenue else 0
+        rows.append({'name': '(No Route)', 'revenue': revenue, 'log_days': unrouted.log_days,
+                    'allocated_cost': allocated_cost, 'net_profit': revenue - allocated_cost})
+    rows.sort(key=lambda x: x['net_profit'], reverse=True)
+    if not rows:
+        return _pdf_section('Route Profitability', f'Period: {df} to {dt}', [], note='No route activity in this period.')
+    headers = ['Route', 'Log Days', 'Revenue', 'Allocated Cost', 'Net Profit']
+    data = [headers] + [[r['name'], str(r['log_days']), f"${r['revenue']:,.2f}",
+                         f"${r['allocated_cost']:,.2f}", f"${r['net_profit']:,.2f}"] for r in rows]
+    data.append(['TOTAL', '', f"${total_revenue:,.2f}", f"${total_costs:,.2f}", f"${total_revenue - total_costs:,.2f}"])
+    return _pdf_section('Route Profitability', f'Period: {df} to {dt}', [_pdf_table(data)])
+
+
+def _daily_transactions_pdf(df, dt):
+    logs = DailyLog.query.filter(DailyLog.log_date.between(df, dt)).order_by(DailyLog.log_date.desc()).all()
+    if not logs:
+        return _pdf_section('Daily Transactions', f'Period: {df} to {dt}', [], note='No daily transactions in this period.')
+    headers = ['Date', 'Vehicle', 'Driver', 'Route', 'Trips', 'Revenue', 'Garnish']
+    data = [headers] + [[
+        l.log_date, l.vehicle.registration, l.driver.name if l.driver else '—',
+        l.route.name if l.route else '—', str(l.trips_completed), f"${l.gross_revenue:,.2f}",
+        f"${l.garnish:,.2f}" if l.garnish else '—',
+    ] for l in logs]
+    data.append(['TOTAL', '', '', '', str(len(logs)), f"${sum(l.gross_revenue for l in logs):,.2f}",
+                f"${sum(l.garnish or 0 for l in logs):,.2f}"])
+    return _pdf_section('Daily Transactions', f'Period: {df} to {dt} — {len(logs)} entries', [_pdf_table(data)])
+
+
+def _franchise_reconciliation_pdf(df, dt):
+    daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
+    weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
+    daily_rows = _group_income_by_period(daily_entries, 'entry_date')
+    weekly_rows = _group_income_by_period(weekly_entries, 'week_start')
+    daily_totals = _income_entry_totals(daily_entries)
+    weekly_totals = _income_entry_totals(weekly_entries)
+
+    def rows_table(rows, totals, period_label):
+        headers = [period_label, 'Vehicles', 'Income', 'Expenditure', 'Net Income', 'Deposited', 'Variance']
+        data = [headers] + [[
+            r['period'], str(r['vehicle_count']), f"${r['income']:,.2f}", f"${r['total_expenditure']:,.2f}",
+            f"${r['cash_in_hand']:,.2f}", f"${r['deposited']:,.2f}", f"${r['variance']:,.2f}",
+        ] for r in rows]
+        data.append(['TOTAL', '', f"${totals['income']:,.2f}", f"${totals['total_expenditure']:,.2f}",
+                    f"${totals['cash_in_hand']:,.2f}", f"${totals['deposited']:,.2f}", f"${totals['variance']:,.2f}"])
+        return _pdf_table(data)
+
+    styles = _pdf_styles()
+    flowables = [Paragraph('Daily Franchise Income', styles['Heading3']), Spacer(1, 4)]
+    flowables.append(rows_table(daily_rows, daily_totals, 'Date') if daily_rows
+                     else Paragraph('No daily entries in this period.', styles['Normal']))
+    flowables += [Spacer(1, 14), Paragraph('Weekly Franchise Income', styles['Heading3']), Spacer(1, 4)]
+    flowables.append(rows_table(weekly_rows, weekly_totals, 'Week Of') if weekly_rows
+                     else Paragraph('No weekly entries in this period.', styles['Normal']))
+    return _pdf_section('Franchise Reconciliation Schedule', f'Period: {df} to {dt}', flowables)
+
+
+def _franchise_weekly_analysis_pdf(df, dt):
+    daily_entries = FranchiseDailyIncome.query.filter(
+        FranchiseDailyIncome.entry_date.between(df, dt)).order_by(FranchiseDailyIncome.entry_date.asc()).all()
+    weekly_entries = FranchiseWeeklyIncome.query.filter(
+        FranchiseWeeklyIncome.week_start.between(df, dt)).order_by(FranchiseWeeklyIncome.week_start.asc()).all()
+    weekly_by_week = {}
+    for e in weekly_entries:
+        weekly_by_week.setdefault(e.week_start, []).append(e)
+    daily_by_week = {}
+    for e in daily_entries:
+        week_start = e.entry_date - timedelta(days=e.entry_date.weekday())
+        daily_by_week.setdefault(week_start, []).append(e)
+    week_starts = sorted(set(daily_by_week.keys()) | set(weekly_by_week.keys()))
+    if not week_starts:
+        return _pdf_section('Franchise Weekly Analysis', f'Period: {df} to {dt}', [],
+                            note='No franchise income in this period.')
+    rows = []
+    for start in week_starts:
+        dtot = _income_entry_totals(daily_by_week.get(start, []))
+        wtot = _income_entry_totals(weekly_by_week.get(start, []))
+        total_income = dtot['income'] + wtot['income']
+        total_exp = dtot['total_expenditure'] + wtot['total_expenditure']
+        rows.append({'week_start': start, 'total_income': total_income, 'total_expenditure': total_exp,
+                    'net_profit': total_income - total_exp})
+    headers = ['Week Of', 'Total Income', 'Total Expenditure', 'Net Profit']
+    data = [headers] + [[r['week_start'], f"${r['total_income']:,.2f}", f"${r['total_expenditure']:,.2f}",
+                         f"${r['net_profit']:,.2f}"] for r in rows]
+    data.append(['TOTAL', f"${sum(r['total_income'] for r in rows):,.2f}",
+                f"${sum(r['total_expenditure'] for r in rows):,.2f}", f"${sum(r['net_profit'] for r in rows):,.2f}"])
+    return _pdf_section('Franchise Weekly Analysis', f'Period: {df} to {dt}', [_pdf_table(data)])
+
+
+def _franchise_consolidated_pdf(df, dt):
+    daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
+    weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
+    daily_totals = _income_entry_totals(daily_entries)
+    weekly_totals = _income_entry_totals(weekly_entries)
+    total_income = daily_totals['income'] + weekly_totals['income']
+    total_expenditure = daily_totals['total_expenditure'] + weekly_totals['total_expenditure']
+    rows = [
+        ['Daily Franchise Income', f"${daily_totals['income']:,.2f}"],
+        ['Weekly Franchise Income', f"${weekly_totals['income']:,.2f}"],
+        ['TOTAL INCOME', f"${total_income:,.2f}"],
+        ['Total Expenditure', f"${total_expenditure:,.2f}"],
+        ['NET PROFIT', f"${total_income - total_expenditure:,.2f}"],
+    ]
+    return _pdf_section('Franchise Consolidated P&L', f'Period: {df} to {dt}',
+                        [_pdf_statement_table(rows, bold_indices={2, 4})])
+
+
+def _store_trading_account_pdf(df, dt):
+    sales = StoreSale.query.filter(StoreSale.sale_date.between(df, dt)).all()
+    sales_revenue = sum(s.total_amount for s in sales)
+    cost_of_sales = sum(s.unit_cost * s.quantity for s in sales)
+    gross_profit = sales_revenue - cost_of_sales
+    purchases_total = db.session.query(func.sum(StorePurchase.total_cost)).filter(
+        StorePurchase.purchase_date.between(df, dt)).scalar() or 0
+    closing_stock_value = sum(p.stock_value for p in SparePart.query.all())
+    rows = [
+        ['Sales Revenue', f"${sales_revenue:,.2f}"],
+        ['Cost of Sales', f"-${cost_of_sales:,.2f}"],
+        ['GROSS PROFIT', f"${gross_profit:,.2f}"],
+        ['Purchases This Period', f"${purchases_total:,.2f}"],
+        ['Closing Stock Value', f"${closing_stock_value:,.2f}"],
+    ]
+    return _pdf_section('Spares Store Trading Account', f'Period: {df} to {dt}',
+                        [_pdf_statement_table(rows, bold_indices={2})])
+
+
+def _compliance_pdf():
+    today = date.today()
+    threshold = today + timedelta(days=30)
+    expired = VehicleDocument.query.filter(VehicleDocument.expiry_date < today).order_by(
+        VehicleDocument.expiry_date).all()
+    expiring = VehicleDocument.query.filter(VehicleDocument.expiry_date.between(today, threshold)).order_by(
+        VehicleDocument.expiry_date).all()
+    for v in Vehicle.query.filter(Vehicle.insurance_expiry.isnot(None)).all():
+        entry = {'vehicle': v, 'doc_type': 'Insurance', 'expiry_date': v.insurance_expiry}
+        if v.insurance_status == 'expired':
+            expired.append(entry)
+        elif v.insurance_status == 'warning':
+            expiring.append(entry)
+    if not expired and not expiring:
+        return _pdf_section('Compliance', f'As at {today}', [], note='No expired or soon-to-expire documents.')
+
+    def doc_row(d):
+        if isinstance(d, dict):
+            return [d['vehicle'].registration, d['doc_type'], str(d['expiry_date'])]
+        return [d.vehicle.registration, d.doc_type.title(), str(d.expiry_date)]
+
+    styles = _pdf_styles()
+    flowables = []
+    if expired:
+        flowables += [Paragraph(f'Expired ({len(expired)})', styles['Heading3']), Spacer(1, 4),
+                     _pdf_table([['Vehicle', 'Document', 'Expired On']] + [doc_row(d) for d in expired],
+                                bold_last_row=False), Spacer(1, 14)]
+    if expiring:
+        flowables += [Paragraph(f'Expiring Within 30 Days ({len(expiring)})', styles['Heading3']), Spacer(1, 4),
+                     _pdf_table([['Vehicle', 'Document', 'Expires On']] + [doc_row(d) for d in expiring],
+                                bold_last_row=False)]
+    return _pdf_section('Compliance', f'As at {today}', flowables)
+
+
+@app.route('/reports/full-pack/export.pdf')
+@login_required
+@permission_required('reports')
+def export_full_report_pack():
+    """Every standalone report the current user has access to, bundled
+    into one PDF — each report is its own page-broken section, so the
+    document is a handover/filing pack rather than one merged table."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    sections = [
+        ('Consolidated Overview', True, lambda: _consolidated_overview_pdf(df, dt)),
+        ('Income Statement', True, lambda: _income_statement_pdf(df, dt)),
+        ('Cash Flow Statement', True, lambda: _cash_flow_pdf(df, dt)),
+        ('Statement of Financial Position', True, lambda: _financial_position_pdf(dt)),
+        ('Budget vs Actual', True, lambda: _budget_pdf(dt)),
+        ('Revenue Shortfalls', True, lambda: _shortfalls_pdf(df, dt)),
+        ('Crew Payroll / Commissions', True, lambda: _payroll_pdf(df, dt)),
+        ('Vehicle Performance', True, lambda: _vehicle_performance_pdf(df, dt)),
+        ('Fuel Efficiency', True, lambda: _fuel_efficiency_pdf(df, dt)),
+        ('Distance Travelled', True, lambda: _distance_travelled_pdf(dt)),
+        ('Route Profitability', True, lambda: _route_profitability_pdf(df, dt)),
+        ('Daily Transactions', True, lambda: _daily_transactions_pdf(df, dt)),
+        ('Franchise Reconciliation Schedule', current_user.has_permission('franchise'),
+         lambda: _franchise_reconciliation_pdf(df, dt)),
+        ('Franchise Weekly Analysis', current_user.has_permission('franchise'),
+         lambda: _franchise_weekly_analysis_pdf(df, dt)),
+        ('Franchise Consolidated P&L', current_user.has_permission('franchise'),
+         lambda: _franchise_consolidated_pdf(df, dt)),
+        ('Spares Store Trading Account', current_user.has_permission('store'),
+         lambda: _store_trading_account_pdf(df, dt)),
+        ('Compliance', current_user.has_permission('compliance'), lambda: _compliance_pdf()),
+    ]
+    included = [(name, build) for name, allowed, build in sections if allowed]
+    if not included:
+        flash('No reports available for your permissions.', 'danger')
+        return redirect(url_for('report_consolidated'))
+
+    elements = _full_pack_cover(df, dt, [name for name, _ in included])
+    for _name, build in included:
+        elements.extend(build())
+    if elements and isinstance(elements[-1], PageBreak):
+        elements.pop()
+
+    out = io.BytesIO()
+    doc = SimpleDocTemplate(out, pagesize=A4,
+                             leftMargin=14 * mm, rightMargin=14 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
+    doc.build(elements)
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'application/pdf'
+    resp.headers['Content-Disposition'] = f'attachment; filename=full_report_pack_{date_from_str}_to_{date_to_str}.pdf'
+    return resp
+
+
 @app.route('/reports/shortfalls')
 @login_required
 @permission_required('reports')
@@ -4668,6 +5454,43 @@ def report_shortfalls():
         date_from=date_from_str, date_to=date_to_str)
 
 
+@app.route('/finance/commission-payments')
+@login_required
+@permission_required('finance')
+def commission_payments_list():
+    """Flat list of individual CommissionPayment records with edit/delete —
+    the Payroll report only shows accrued/paid/outstanding totals per
+    driver, with no per-payment row to attach those actions to."""
+    page = request.args.get('page', 1, type=int)
+    payments = CommissionPayment.query.join(Driver).order_by(
+        CommissionPayment.payment_date.desc()).paginate(page=page, per_page=30)
+    return render_template('reports/commission_payments.html', payments=payments)
+
+
+@app.route('/finance/commission-payments/<int:pid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def commission_payment_edit(pid):
+    payment = CommissionPayment.query.filter_by(id=pid).first_or_404()
+    if request.method == 'POST':
+        payment.driver_id = form_int(request.form, 'driver_id')
+        payment.payment_date = parse_date(request.form['payment_date'])
+        payment.amount = form_float(request.form, 'amount', min_value=0)
+        payment.period_start = parse_date(request.form.get('period_start'))
+        payment.period_end = parse_date(request.form.get('period_end'))
+        payment.method = request.form.get('method', '').strip()
+        payment.notes = request.form.get('notes', '').strip()
+        log_audit('UPDATE', 'commission_payments', payment.id,
+                  f'Updated commission payment to driver #{payment.driver_id}')
+        touch_sync_fields(payment)
+        db.session.commit()
+        flash('Commission payment updated.', 'success')
+        return redirect(url_for('commission_payments_list'))
+    all_drivers = Driver.query.order_by(Driver.name).all()
+    return render_template('reports/commission_payment_form.html', payment=payment, drivers=all_drivers)
+
+
 @app.route('/finance/commission-payments/add', methods=['POST'])
 @login_required
 @permission_required('finance')
@@ -4706,13 +5529,9 @@ def commission_payment_delete(pid):
     return redirect(request.referrer or url_for('report_payroll'))
 
 
-@app.route('/reports/cash-flow')
-@login_required
-@permission_required('reports')
-def report_cash_flow():
-    df, dt = query_date_range()
-    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
-
+def compute_cash_flow(df, dt):
+    """Cash Flow statement for [df, dt] — shared by the report page and
+    the Full Report Pack PDF."""
     def in_range(col):
         return col.between(df, dt)
 
@@ -4751,15 +5570,26 @@ def report_cash_flow():
     opening_cash = compute_financial_position(df - timedelta(days=1))['cash_and_equivalents']
     closing_cash = compute_financial_position(dt)['cash_and_equivalents']
 
-    return render_template('reports/cash_flow.html',
-        date_from=date_from_str, date_to=date_to_str,
+    return dict(
         operating_in=operating_in, receivables_in=receivables_in,
         maint_out=maint_out, expenses_out=expenses_out,
         commission_out=commission_out, payables_out=payables_out, net_operating=net_operating,
         investing_out=investing_out, net_investing=net_investing, vehicles_bought=vehicles_bought,
         loan_proceeds_in=loan_proceeds_in, loan_repay_out=loan_repay_out,
         capital_in=capital_in, drawings_out=drawings_out, net_financing=net_financing,
-        net_change=net_change, opening_cash=opening_cash, closing_cash=closing_cash)
+        net_change=net_change, opening_cash=opening_cash, closing_cash=closing_cash,
+    )
+
+
+@app.route('/reports/cash-flow')
+@login_required
+@permission_required('reports')
+def report_cash_flow():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    cf = compute_cash_flow(df, dt)
+    return render_template('reports/cash_flow.html',
+        date_from=date_from_str, date_to=date_to_str, **cf)
 
 
 @app.route('/reports/budget')
@@ -5251,6 +6081,27 @@ def loan_add():
     return render_template('finance/loan_form.html', today=date.today().strftime('%Y-%m-%d'))
 
 
+@app.route('/finance/loans/<int:lid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def loan_edit(lid):
+    loan = Loan.query.filter_by(id=lid).first_or_404()
+    if request.method == 'POST':
+        loan.lender = request.form['lender'].strip()
+        loan.principal = form_float(request.form, 'principal', min_value=0)
+        loan.interest_rate = form_float(request.form, 'interest_rate', required=False, default=0, min_value=0)
+        loan.start_date = parse_date(request.form['start_date'])
+        loan.term_months = form_int(request.form, 'term_months', required=False)
+        loan.notes = request.form.get('notes', '').strip()
+        log_audit('UPDATE', 'loans', loan.id, f'Updated loan from {loan.lender}')
+        touch_sync_fields(loan)
+        db.session.commit()
+        flash('Loan updated.', 'success')
+        return redirect(url_for('loans_list'))
+    return render_template('finance/loan_form.html', loan=loan, today=loan.start_date.strftime('%Y-%m-%d'))
+
+
 @app.route('/finance/loans/<int:lid>/delete', methods=['POST'])
 @login_required
 @admin_required
@@ -5290,6 +6141,22 @@ def loan_payment_add(lid):
     touch_sync_fields(payment)
     db.session.commit()
     flash('Loan repayment recorded.', 'success')
+    return redirect(url_for('loans_list'))
+
+
+@app.route('/finance/loan-payments/<int:pid>/edit', methods=['POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def loan_payment_edit(pid):
+    payment = LoanPayment.query.filter_by(id=pid).first_or_404()
+    payment.payment_date = parse_date(request.form['payment_date'])
+    payment.amount = form_float(request.form, 'amount', min_value=0)
+    payment.notes = request.form.get('notes', '').strip()
+    log_audit('UPDATE', 'loan_payments', payment.id, f'Updated repayment on loan from {payment.loan.lender}')
+    touch_sync_fields(payment)
+    db.session.commit()
+    flash('Loan repayment updated.', 'success')
     return redirect(url_for('loans_list'))
 
 
@@ -5355,6 +6222,26 @@ def payable_mark_paid(pid):
     return redirect(url_for('payables_list'))
 
 
+@app.route('/finance/payables/<int:pid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def payable_edit(pid):
+    p = Payable.query.filter_by(id=pid).first_or_404()
+    if request.method == 'POST':
+        p.supplier_name = request.form['supplier_name'].strip()
+        p.description = request.form.get('description', '').strip()
+        p.amount = form_float(request.form, 'amount', min_value=0)
+        p.invoice_date = parse_date(request.form['invoice_date'])
+        p.due_date = parse_date(request.form.get('due_date'))
+        log_audit('UPDATE', 'payables', p.id, f'Updated payable to {p.supplier_name}')
+        touch_sync_fields(p)
+        db.session.commit()
+        flash('Payable updated.', 'success')
+        return redirect(url_for('payables_list'))
+    return render_template('finance/payable_form.html', payable=p, today=p.invoice_date.strftime('%Y-%m-%d'))
+
+
 @app.route('/finance/payables/<int:pid>/delete', methods=['POST'])
 @login_required
 @admin_required
@@ -5417,6 +6304,26 @@ def receivable_mark_collected(rid):
     return redirect(url_for('receivables_list'))
 
 
+@app.route('/finance/receivables/<int:rid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def receivable_edit(rid):
+    r = Receivable.query.filter_by(id=rid).first_or_404()
+    if request.method == 'POST':
+        r.client_name = request.form['client_name'].strip()
+        r.description = request.form.get('description', '').strip()
+        r.amount = form_float(request.form, 'amount', min_value=0)
+        r.invoice_date = parse_date(request.form['invoice_date'])
+        r.due_date = parse_date(request.form.get('due_date'))
+        log_audit('UPDATE', 'receivables', r.id, f'Updated receivable from {r.client_name}')
+        touch_sync_fields(r)
+        db.session.commit()
+        flash('Receivable updated.', 'success')
+        return redirect(url_for('receivables_list'))
+    return render_template('finance/receivable_form.html', receivable=r, today=r.invoice_date.strftime('%Y-%m-%d'))
+
+
 @app.route('/finance/receivables/<int:rid>/delete', methods=['POST'])
 @login_required
 @admin_required
@@ -5465,6 +6372,26 @@ def capital_contribution_add():
     return render_template('finance/capital_contribution_form.html', today=date.today().strftime('%Y-%m-%d'))
 
 
+@app.route('/finance/capital/contributions/<int:cid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def capital_contribution_edit(cid):
+    c = CapitalContribution.query.filter_by(id=cid).first_or_404()
+    if request.method == 'POST':
+        c.contributor = request.form['contributor'].strip()
+        c.amount = form_float(request.form, 'amount', min_value=0)
+        c.contribution_date = parse_date(request.form['contribution_date'])
+        c.notes = request.form.get('notes', '').strip()
+        log_audit('UPDATE', 'capital_contributions', c.id, f'Updated capital contribution from {c.contributor}')
+        touch_sync_fields(c)
+        db.session.commit()
+        flash('Capital contribution updated.', 'success')
+        return redirect(url_for('capital_list'))
+    return render_template('finance/capital_contribution_form.html', contribution=c,
+                           today=c.contribution_date.strftime('%Y-%m-%d'))
+
+
 @app.route('/finance/capital/contributions/<int:cid>/delete', methods=['POST'])
 @login_required
 @admin_required
@@ -5498,6 +6425,25 @@ def owner_drawing_add():
         flash('Owner drawing recorded.', 'success')
         return redirect(url_for('capital_list'))
     return render_template('finance/owner_drawing_form.html', today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/finance/capital/drawings/<int:did>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def owner_drawing_edit(did):
+    d = OwnerDrawing.query.filter_by(id=did).first_or_404()
+    if request.method == 'POST':
+        d.amount = form_float(request.form, 'amount', min_value=0)
+        d.drawing_date = parse_date(request.form['drawing_date'])
+        d.notes = request.form.get('notes', '').strip()
+        log_audit('UPDATE', 'owner_drawings', d.id, f'Updated owner drawing of {d.amount}')
+        touch_sync_fields(d)
+        db.session.commit()
+        flash('Owner drawing updated.', 'success')
+        return redirect(url_for('capital_list'))
+    return render_template('finance/owner_drawing_form.html', drawing=d,
+                           today=d.drawing_date.strftime('%Y-%m-%d'))
 
 
 @app.route('/finance/capital/drawings/<int:did>/delete', methods=['POST'])
@@ -5757,7 +6703,15 @@ def franchise_daily_income_add():
             db.session.add(entry)
         entry.income = form_float(request.form, 'income', required=False, default=0)
         entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
-        entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
+        # Cash Deposited is admin-only (see franchise_daily_income_deposit) —
+        # a non-admin submission is silently ignored rather than trusted,
+        # since the field is hidden from their form but a crafted POST could
+        # still include it. Preserves whatever an admin already recorded on
+        # a restored soft-deleted row instead of zeroing it back out.
+        if current_user.role == 'admin':
+            entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
+        elif entry.deposited is None:
+            entry.deposited = 0
         entry.description = request.form.get('description', '').strip()
         entry.created_by = current_user.id
         for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
@@ -5778,6 +6732,53 @@ def franchise_daily_income_add():
         flash(str(e), 'danger')
 
     return redirect(url_for('franchise_daily_income_list', vehicle_id=vehicle_id, period=period))
+
+
+@app.route('/franchise/daily-income/<int:eid>/deposit', methods=['POST'])
+@login_required
+@admin_required
+def franchise_daily_income_deposit(eid):
+    """Record/update Cash Deposited on an existing entry — the only way to
+    set this field, since the Record Income form doesn't offer it to
+    non-admins and entries otherwise can't be edited after creation."""
+    entry = FranchiseDailyIncome.query.filter_by(id=eid).first_or_404()
+    entry.deposited = form_float(request.form, 'deposited', label='Cash deposited', required=False, default=0, min_value=0)
+    log_audit('UPDATE', 'franchise_daily_income', entry.id,
+              f'Cash deposited for {entry.entry_date} set to {entry.deposited}')
+    touch_sync_fields(entry)
+    db.session.commit()
+    flash('Cash deposited recorded.', 'success')
+    return redirect(url_for('franchise_daily_income_list', vehicle_id=entry.vehicle_id))
+
+
+@app.route('/franchise/daily-income/<int:eid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def franchise_daily_income_edit(eid):
+    """Full edit of an existing entry — income+deposited fields for a
+    vehicle-scoped row, expenditure fields for the shared (vehicle_id-less)
+    row, matching whichever half of the split the entry belongs to (see
+    the Daily Income list page)."""
+    entry = FranchiseDailyIncome.query.filter_by(id=eid).first_or_404()
+    if request.method == 'POST':
+        entry.entry_date = parse_date(request.form['entry_date'])
+        if entry.vehicle_id:
+            entry.income = form_float(request.form, 'income', required=False, default=0)
+            entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
+        else:
+            for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
+                setattr(entry, f, form_float(request.form, f, label=lbl, required=False, default=0))
+            entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
+        entry.description = request.form.get('description', '').strip()
+        log_audit('UPDATE', 'franchise_daily_income', entry.id, f'Updated daily franchise entry for {entry.entry_date}')
+        touch_sync_fields(entry)
+        db.session.commit()
+        flash('Entry updated.', 'success')
+        return redirect(url_for('franchise_daily_income_list', vehicle_id=entry.vehicle_id))
+    return render_template('franchise/income_entry_edit.html', entry=entry, date_field='entry_date',
+                           date_value=entry.entry_date, date_label='Date',
+                           list_endpoint='franchise_daily_income_list', edit_endpoint='franchise_daily_income_edit')
 
 
 @app.route('/franchise/daily-income/export')
@@ -5880,7 +6881,12 @@ def franchise_weekly_income_add():
             db.session.add(entry)
         entry.income = form_float(request.form, 'income', required=False, default=0)
         entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
-        entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
+        # Cash Deposited is admin-only — see franchise_daily_income_add /
+        # franchise_weekly_income_deposit.
+        if current_user.role == 'admin':
+            entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
+        elif entry.deposited is None:
+            entry.deposited = 0
         entry.description = request.form.get('description', '').strip()
         entry.created_by = current_user.id
         for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
@@ -5901,6 +6907,50 @@ def franchise_weekly_income_add():
         flash(str(e), 'danger')
 
     return redirect(url_for('franchise_weekly_income_list', vehicle_id=vehicle_id, period=period))
+
+
+@app.route('/franchise/weekly-income/<int:eid>/deposit', methods=['POST'])
+@login_required
+@admin_required
+def franchise_weekly_income_deposit(eid):
+    """Record/update Cash Deposited on an existing entry — see
+    franchise_daily_income_deposit."""
+    entry = FranchiseWeeklyIncome.query.filter_by(id=eid).first_or_404()
+    entry.deposited = form_float(request.form, 'deposited', label='Cash deposited', required=False, default=0, min_value=0)
+    log_audit('UPDATE', 'franchise_weekly_income', entry.id,
+              f'Cash deposited for week of {entry.week_start} set to {entry.deposited}')
+    touch_sync_fields(entry)
+    db.session.commit()
+    flash('Cash deposited recorded.', 'success')
+    return redirect(url_for('franchise_weekly_income_list', vehicle_id=entry.vehicle_id))
+
+
+@app.route('/franchise/weekly-income/<int:eid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def franchise_weekly_income_edit(eid):
+    """Full edit of an existing entry — see franchise_daily_income_edit."""
+    entry = FranchiseWeeklyIncome.query.filter_by(id=eid).first_or_404()
+    if request.method == 'POST':
+        raw_date = parse_date(request.form['week_start'])
+        entry.week_start = raw_date - timedelta(days=raw_date.weekday())
+        if entry.vehicle_id:
+            entry.income = form_float(request.form, 'income', required=False, default=0)
+            entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
+        else:
+            for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
+                setattr(entry, f, form_float(request.form, f, label=lbl, required=False, default=0))
+            entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
+        entry.description = request.form.get('description', '').strip()
+        log_audit('UPDATE', 'franchise_weekly_income', entry.id, f'Updated weekly franchise entry for week of {entry.week_start}')
+        touch_sync_fields(entry)
+        db.session.commit()
+        flash('Entry updated.', 'success')
+        return redirect(url_for('franchise_weekly_income_list', vehicle_id=entry.vehicle_id))
+    return render_template('franchise/income_entry_edit.html', entry=entry, date_field='week_start',
+                           date_value=entry.week_start, date_label='Week Of (any date in the week)',
+                           list_endpoint='franchise_weekly_income_list', edit_endpoint='franchise_weekly_income_edit')
 
 
 @app.route('/franchise/weekly-income/export')

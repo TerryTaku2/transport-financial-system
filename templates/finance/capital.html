@@ -27,8 +27,9 @@
             <td>{{ c.contribution_date }}</td>
             <td>{{ c.contributor }}{% if c.notes %}<div class="form-hint">{{ c.notes }}</div>{% endif %}</td>
             <td class="text-right">{{ c.amount|currency }}</td>
-            <td>
+            <td class="btn-group">
               {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('capital_contribution_edit', cid=c.id) }}" class="btn btn-outline btn-xs">Edit</a>
               <form method="POST" action="{{ url_for('capital_contribution_delete', cid=c.id) }}" data-confirm="Delete this contribution?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-danger btn-xs">Del</button>
@@ -57,8 +58,9 @@
             <td>{{ d.drawing_date }}</td>
             <td>{{ d.notes or '—' }}</td>
             <td class="text-right">{{ d.amount|currency }}</td>
-            <td>
+            <td class="btn-group">
               {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('owner_drawing_edit', did=d.id) }}" class="btn btn-outline btn-xs">Edit</a>
               <form method="POST" action="{{ url_for('owner_drawing_delete', did=d.id) }}" data-confirm="Delete this drawing?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-danger btn-xs">Del</button>

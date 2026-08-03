@@ -115,28 +115,35 @@
           <label>Income (USD)</label>
           <input type="number" class="calc-input" name="income" step="0.01" min="0" placeholder="0.00">
         </div>
+        {% if current_user.role == 'admin' %}
         <div class="form-group">
           <label>Cash Deposited (USD)</label>
           <input type="number" class="calc-input" name="deposited" step="0.01" min="0" placeholder="0.00">
         </div>
+        {% endif %}
         <div class="form-group">
           <label>Description</label>
           <input type="text" name="description" placeholder="Optional note">
         </div>
       </div>
 
+      {% if current_user.role == 'admin' %}
       <div class="kpi-grid mb-16">
         <div class="kpi-card kpi-amber">
           <div class="kpi-label">Variance: Cash Deposited vs. Income (computed)</div>
           <div class="kpi-value" id="calc-income-variance">$0.00</div>
         </div>
       </div>
+      {% else %}
+      <div class="form-hint mb-16">Cash Deposited is recorded by an admin after this entry is saved.</div>
+      {% endif %}
 
       <button type="submit" class="btn btn-primary"><i data-feather="plus"></i> Add Income Entry</button>
     </form>
   </div>
 </div>
 
+{% if current_user.role == 'admin' %}
 <script>
 (function () {
   var form = document.getElementById('franchise-weekly-income-form');
@@ -161,6 +168,7 @@
   recalc();
 })();
 </script>
+{% endif %}
 
 <div class="kpi-grid mb-16">
   <div class="kpi-card kpi-blue">
@@ -187,6 +195,7 @@
           <th>Description</th>
           {% if current_user.role == 'admin' %}
           <th></th>
+          <th></th>
           {% endif %}
         </tr>
       </thead>
@@ -200,6 +209,14 @@
           <td>{{ e.description or '—' }}</td>
           {% if current_user.role == 'admin' %}
           <td>
+            <form method="POST" action="{{ url_for('franchise_weekly_income_deposit', eid=e.id) }}" style="display:flex;gap:4px;align-items:center;margin:0;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="number" name="deposited" step="0.01" min="0" value="{{ e.deposited }}" style="width:90px;font-size:12px;padding:4px 6px;">
+              <button class="btn btn-outline btn-xs" title="Record cash deposited">Save</button>
+            </form>
+          </td>
+          <td class="btn-group">
+            <a href="{{ url_for('franchise_weekly_income_edit', eid=e.id) }}" class="btn btn-outline btn-xs">Edit</a>
             <form method="POST" action="{{ url_for('franchise_weekly_income_delete', eid=e.id) }}" data-confirm="Delete this weekly income entry?">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-xs">Del</button>
@@ -338,7 +355,8 @@
           <td class="text-right">{{ e.total_expenditure|currency }}</td>
           <td>{{ e.description or '—' }}</td>
           {% if current_user.role == 'admin' %}
-          <td>
+          <td class="btn-group">
+            <a href="{{ url_for('franchise_weekly_income_edit', eid=e.id) }}" class="btn btn-outline btn-xs">Edit</a>
             <form method="POST" action="{{ url_for('franchise_weekly_income_delete', eid=e.id) }}" data-confirm="Delete this expenditure entry?">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-xs">Del</button>

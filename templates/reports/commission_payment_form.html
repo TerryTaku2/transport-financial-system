@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% block title %}Edit Commission Payment{% endblock %}
+{% block page_title %}Edit Commission Payment{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Edit Commission Payment</h1>
+    <div class="subtitle">{{ payment.driver.name if payment.driver else 'Unknown driver' }}</div>
+  </div>
+  <a href="{{ url_for('commission_payments_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Crew Member<span class="req">*</span></label>
+          <select name="driver_id" required>
+            {% for d in drivers %}
+            <option value="{{ d.id }}" {% if payment.driver_id==d.id %}selected{% endif %}>{{ d.name }} ({{ d.role|title }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Payment Date<span class="req">*</span></label>
+          <input type="date" name="payment_date" required value="{{ payment.payment_date }}">
+        </div>
+        <div class="form-group">
+          <label>Amount (USD)<span class="req">*</span></label>
+          <input type="number" name="amount" step="0.01" min="0" required value="{{ payment.amount }}">
+        </div>
+        <div class="form-group">
+          <label>Period Start</label>
+          <input type="date" name="period_start" value="{{ payment.period_start or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Period End</label>
+          <input type="date" name="period_end" value="{{ payment.period_end or '' }}">
+        </div>
+        <div class="form-group">
+          <label>Method</label>
+          <input type="text" name="method" placeholder="e.g. Cash, EcoCash, Bank Transfer" value="{{ payment.method or '' }}">
+        </div>
+        <div class="form-group full">
+          <label>Notes</label>
+          <textarea name="notes">{{ payment.notes or '' }}</textarea>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Payment</button>
+        <a href="{{ url_for('commission_payments_list') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

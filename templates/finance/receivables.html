@@ -47,6 +47,7 @@
               </form>
               {% endif %}
               {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('receivable_edit', rid=r.id) }}" class="btn btn-outline btn-xs">Edit</a>
               <form method="POST" action="{{ url_for('receivable_delete', rid=r.id) }}" data-confirm="Delete this receivable?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-danger btn-xs">Del</button>

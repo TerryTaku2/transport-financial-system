@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Record Fuel Log{% endblock %}
-{% block page_title %}Record Fuel Log{% endblock %}
+{% block title %}{{ 'Edit' if log else 'Record' }} Fuel Log{% endblock %}
+{% block page_title %}{{ 'Edit' if log else 'Record' }} Fuel Log{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Record Fuel Top-Up</h1>
+    <h1>{{ 'Edit' if log else 'Record' }} Fuel Top-Up</h1>
     <div class="subtitle">Liters and odometer reading</div>
   </div>
   <a href="{{ url_for('fuel_logs') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
@@ -13,7 +13,7 @@
 
 <div class="card">
   <div class="card-body">
-    <form method="POST" data-offline-form>
+    <form method="POST" {% if not log %}data-offline-form{% endif %}>
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid mb-16">
         <div class="form-group">
@@ -25,25 +25,25 @@
           <select name="vehicle_id" required data-refdata="vehicles">
             <option value="">Select vehicle</option>
             {% for v in vehicles %}
-            <option value="{{ v.id }}">{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
+            <option value="{{ v.id }}" {% if log and log.vehicle_id==v.id %}selected{% endif %}>{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
             {% endfor %}
           </select>
         </div>
         <div class="form-group">
           <label>Liters<span class="req">*</span></label>
-          <input type="number" id="liters" name="liters" step="0.01" min="0" required>
+          <input type="number" id="liters" name="liters" step="0.01" min="0" required value="{{ log.liters if log }}">
         </div>
         <div class="form-group">
           <label>Odometer Reading (km)</label>
-          <input type="number" name="odometer" step="0.1" min="0">
+          <input type="number" name="odometer" step="0.1" min="0" value="{{ log.odometer or '' if log }}">
         </div>
         <div class="form-group">
           <label>Supplier</label>
-          <input type="text" name="supplier" placeholder="e.g. Total, Puma, Zuva">
+          <input type="text" name="supplier" placeholder="e.g. Total, Puma, Zuva" value="{{ log.supplier or '' if log }}">
         </div>
         <div class="form-group full">
           <label>Notes</label>
-          <textarea name="notes"></textarea>
+          <textarea name="notes">{{ log.notes or '' if log }}</textarea>
         </div>
       </div>
       <div class="btn-group">

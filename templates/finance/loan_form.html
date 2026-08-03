@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Add Loan{% endblock %}
-{% block page_title %}Add Loan{% endblock %}
+{% block title %}{{ 'Edit' if loan else 'Add' }} Loan{% endblock %}
+{% block page_title %}{{ 'Edit' if loan else 'Add' }} Loan{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Add Loan</h1>
+    <h1>{{ 'Edit' if loan else 'Add' }} Loan</h1>
     <div class="subtitle">Record a new loan facility</div>
   </div>
   <a href="{{ url_for('loans_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Loans</a>
@@ -18,15 +18,15 @@
       <div class="form-grid mb-16">
         <div class="form-group">
           <label>Lender<span class="req">*</span></label>
-          <input type="text" name="lender" required placeholder="e.g. CBZ Bank">
+          <input type="text" name="lender" required placeholder="e.g. CBZ Bank" value="{{ loan.lender or '' if loan }}">
         </div>
         <div class="form-group">
           <label>Principal (USD)<span class="req">*</span></label>
-          <input type="number" name="principal" step="0.01" min="0" required placeholder="0.00">
+          <input type="number" name="principal" step="0.01" min="0" required placeholder="0.00" value="{{ loan.principal if loan }}">
         </div>
         <div class="form-group">
           <label>Interest Rate (% p.a.)</label>
-          <input type="number" name="interest_rate" step="0.01" min="0" placeholder="0.00">
+          <input type="number" name="interest_rate" step="0.01" min="0" placeholder="0.00" value="{{ loan.interest_rate if loan else '' }}">
           <div class="form-hint">Recorded for reference only — not separately expensed in reports (see SOFP notes).</div>
         </div>
         <div class="form-group">
@@ -35,12 +35,12 @@
         </div>
         <div class="form-group">
           <label>Term (months)</label>
-          <input type="number" name="term_months" min="1" placeholder="e.g. 24">
+          <input type="number" name="term_months" min="1" placeholder="e.g. 24" value="{{ loan.term_months or '' if loan }}">
         </div>
       </div>
       <div class="form-group mb-16">
         <label>Notes</label>
-        <textarea name="notes" rows="2"></textarea>
+        <textarea name="notes" rows="2">{{ loan.notes or '' if loan }}</textarea>
       </div>
       <div class="btn-group">
         <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Loan</button>

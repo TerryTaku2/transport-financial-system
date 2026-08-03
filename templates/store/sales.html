@@ -51,8 +51,9 @@
             {{ s.customer_name or '—' }}
             {% endif %}
           </td>
-          <td>
+          <td class="btn-group">
             {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('store_sale_edit', sid=s.id) }}" class="btn btn-outline btn-xs">Edit</a>
             <form method="POST" action="{{ url_for('store_sale_delete', sid=s.id) }}" data-confirm="Delete this sale? Stock will be restored.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-xs">Del</button>

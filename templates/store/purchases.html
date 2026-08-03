@@ -55,8 +55,9 @@
           <td class="text-right">{{ pu.unit_cost|currency }}</td>
           <td class="text-right"><strong>{{ pu.total_cost|currency }}</strong></td>
           <td>{{ pu.supplier or '—' }}</td>
-          <td>
+          <td class="btn-group">
             {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('store_purchase_edit', pid=pu.id) }}" class="btn btn-outline btn-xs">Edit</a>
             <form method="POST" action="{{ url_for('store_purchase_delete', pid=pu.id) }}" data-confirm="Delete this purchase? Stock will be reduced accordingly.">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-xs">Del</button>

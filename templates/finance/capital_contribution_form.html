@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Record Capital Contribution{% endblock %}
-{% block page_title %}Record Capital Contribution{% endblock %}
+{% block title %}{{ 'Edit' if contribution else 'Record' }} Capital Contribution{% endblock %}
+{% block page_title %}{{ 'Edit' if contribution else 'Record' }} Capital Contribution{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Record Capital Contribution</h1>
+    <h1>{{ 'Edit' if contribution else 'Record' }} Capital Contribution</h1>
     <div class="subtitle">Money the owner (or another party) put into the business</div>
   </div>
   <a href="{{ url_for('capital_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
@@ -18,11 +18,11 @@
       <div class="form-grid mb-16">
         <div class="form-group">
           <label>Contributor<span class="req">*</span></label>
-          <input type="text" name="contributor" required placeholder="e.g. Owner">
+          <input type="text" name="contributor" required placeholder="e.g. Owner" value="{{ contribution.contributor or '' if contribution }}">
         </div>
         <div class="form-group">
           <label>Amount (USD)<span class="req">*</span></label>
-          <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00">
+          <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00" value="{{ contribution.amount if contribution }}">
         </div>
         <div class="form-group">
           <label>Date<span class="req">*</span></label>
@@ -31,7 +31,7 @@
       </div>
       <div class="form-group mb-16">
         <label>Notes</label>
-        <textarea name="notes" rows="2" placeholder="e.g. Opening capital used to fund vehicles bought before this system existed"></textarea>
+        <textarea name="notes" rows="2" placeholder="e.g. Opening capital used to fund vehicles bought before this system existed">{{ contribution.notes or '' if contribution }}</textarea>
       </div>
       <div class="btn-group">
         <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save</button>

@@ -122,6 +122,9 @@
       <a href="{{ url_for('report_route_profitability') }}" class="nav-item {% if request.endpoint == 'report_route_profitability' %}active{% endif %}">
         <i data-feather="map"></i> Route Profitability
       </a>
+      <a href="{{ url_for('export_full_report_pack') }}" class="nav-item {% if request.endpoint == 'export_full_report_pack' %}active{% endif %}">
+        <i data-feather="book-open"></i> Full Report Pack (PDF)
+      </a>
     </div>
     {% endif %}
 

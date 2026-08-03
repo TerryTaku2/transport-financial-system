@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Record Sale{% endblock %}
-{% block page_title %}Record Sale{% endblock %}
+{% block title %}{{ 'Edit' if sale else 'Record' }} Sale{% endblock %}
+{% block page_title %}{{ 'Edit' if sale else 'Record' }} Sale{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Record Spares Sale</h1>
+    <h1>{{ 'Edit' if sale else 'Record' }} Spares Sale</h1>
     <div class="subtitle">Sold at the part's marked-up price — reduces stock on hand</div>
   </div>
   <a href="{{ url_for('store_sales') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
@@ -16,7 +16,7 @@
 {% else %}
 <div class="card">
   <div class="card-body">
-    <form method="POST" data-offline-form>
+    <form method="POST" {% if not sale %}data-offline-form{% endif %}>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid mb-16">
         <div class="form-group">
@@ -28,7 +28,7 @@
           <select id="sale_part" name="part_id" required data-refdata="parts">
             <option value="">Select part</option>
             {% for p in parts %}
-            <option value="{{ p.id }}" data-price="{{ p.selling_price }}" data-stock="{{ p.quantity_on_hand }}">
+            <option value="{{ p.id }}" data-price="{{ p.selling_price }}" data-stock="{{ p.quantity_on_hand }}" {% if sale and sale.part_id==p.id %}selected{% endif %}>
               {{ p.name }}{% if p.part_number %} ({{ p.part_number }}){% endif %} — {{ p.quantity_on_hand }} {{ p.unit }} available
             </option>
             {% endfor %}
@@ -37,33 +37,33 @@
         </div>
         <div class="form-group">
           <label>Quantity<span class="req">*</span></label>
-          <input type="number" id="sale_qty" name="quantity" min="1" step="1" required>
+          <input type="number" id="sale_qty" name="quantity" min="1" step="1" required value="{{ sale.quantity if sale }}">
         </div>
         <div class="form-group">
           <label>Unit Price (USD)<span class="req">*</span></label>
-          <input type="number" id="sale_price" name="unit_price" step="0.01" min="0" required>
+          <input type="number" id="sale_price" name="unit_price" step="0.01" min="0" required value="{{ sale.unit_price if sale }}">
         </div>
         <div class="form-group">
           <label>Sold To Vehicle (internal)</label>
           <select name="vehicle_id" id="sale_vehicle" data-refdata="vehicles">
             <option value="">— External customer —</option>
             {% for v in vehicles %}
-            <option value="{{ v.id }}">{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
+            <option value="{{ v.id }}" {% if sale and sale.vehicle_id==v.id %}selected{% endif %}>{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
             {% endfor %}
           </select>
           <div class="form-hint">If sold to a company vehicle, the amount is booked as an expense on that vehicle's income statement.</div>
         </div>
-        <div class="form-group" id="sale_customer_group">
+        <div class="form-group" id="sale_customer_group" {% if sale and sale.vehicle_id %}style="display:none;"{% endif %}>
           <label>Customer</label>
-          <input type="text" name="customer_name" id="sale_customer">
+          <input type="text" name="customer_name" id="sale_customer" value="{{ sale.customer_name or '' if sale }}">
         </div>
         <div class="form-group">
           <label>Total (auto-calculated)</label>
-          <div style="font-size:20px;font-weight:700;color:var(--success);padding-top:6px;" id="sale_total_preview">$0.00</div>
+          <div style="font-size:20px;font-weight:700;color:var(--success);padding-top:6px;" id="sale_total_preview">{{ (sale.total_amount if sale else 0)|currency }}</div>
         </div>
         <div class="form-group full">
           <label>Notes</label>
-          <textarea name="notes"></textarea>
+          <textarea name="notes">{{ sale.notes or '' if sale }}</textarea>
         </div>
       </div>
       <div class="btn-group">

@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Add Payable{% endblock %}
-{% block page_title %}Add Payable{% endblock %}
+{% block title %}{{ 'Edit' if payable else 'Add' }} Payable{% endblock %}
+{% block page_title %}{{ 'Edit' if payable else 'Add' }} Payable{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Add Payable</h1>
+    <h1>{{ 'Edit' if payable else 'Add' }} Payable</h1>
     <div class="subtitle">Money owed to a supplier (e.g. an insurance invoice)</div>
   </div>
   <a href="{{ url_for('payables_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Payables</a>
@@ -18,11 +18,11 @@
       <div class="form-grid mb-16">
         <div class="form-group">
           <label>Supplier<span class="req">*</span></label>
-          <input type="text" name="supplier_name" required>
+          <input type="text" name="supplier_name" required value="{{ payable.supplier_name or '' if payable }}">
         </div>
         <div class="form-group">
           <label>Amount (USD)<span class="req">*</span></label>
-          <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00">
+          <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00" value="{{ payable.amount if payable }}">
         </div>
         <div class="form-group">
           <label>Invoice Date<span class="req">*</span></label>
@@ -30,12 +30,12 @@
         </div>
         <div class="form-group">
           <label>Due Date</label>
-          <input type="date" name="due_date">
+          <input type="date" name="due_date" value="{{ payable.due_date or '' if payable }}">
         </div>
       </div>
       <div class="form-group mb-16">
         <label>Description</label>
-        <textarea name="description" rows="2"></textarea>
+        <textarea name="description" rows="2">{{ payable.description or '' if payable }}</textarea>
       </div>
       <div class="btn-group">
         <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Payable</button>

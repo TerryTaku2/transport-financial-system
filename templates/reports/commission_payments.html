@@ -1,0 +1,65 @@
+{% extends 'base.html' %}
+{% block title %}Commission Payments{% endblock %}
+{% block page_title %}Finance — Commission Payments{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Commission Payments</h1>
+    <div class="subtitle">Every individual payment recorded from the Payroll report</div>
+  </div>
+  <a href="{{ url_for('report_payroll') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Payroll</a>
+</div>
+
+<div class="card">
+  {% if payments.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Crew Member</th>
+          <th class="text-right">Amount</th>
+          <th>Period</th>
+          <th>Method</th>
+          <th>Notes</th>
+          {% if current_user.role == 'admin' %}
+          <th></th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in payments.items %}
+        <tr>
+          <td>{{ p.payment_date }}</td>
+          <td>{{ p.driver.name if p.driver else '—' }}</td>
+          <td class="text-right">{{ p.amount|currency }}</td>
+          <td>{% if p.period_start and p.period_end %}{{ p.period_start }} – {{ p.period_end }}{% else %}—{% endif %}</td>
+          <td>{{ p.method or '—' }}</td>
+          <td>{{ p.notes or '—' }}</td>
+          {% if current_user.role == 'admin' %}
+          <td class="btn-group">
+            <a href="{{ url_for('commission_payment_edit', pid=p.id) }}" class="btn btn-outline btn-xs">Edit</a>
+            <form method="POST" action="{{ url_for('commission_payment_delete', pid=p.id) }}" data-confirm="Delete this commission payment?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if payments.pages > 1 %}
+  <div class="pagination">
+    {% if payments.has_prev %}<a href="{{ url_for('commission_payments_list', page=payments.prev_num) }}">&laquo; Prev</a>{% endif %}
+    <span>Page {{ payments.page }} of {{ payments.pages }}</span>
+    {% if payments.has_next %}<a href="{{ url_for('commission_payments_list', page=payments.next_num) }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="empty-state"><p>No commission payments recorded yet.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

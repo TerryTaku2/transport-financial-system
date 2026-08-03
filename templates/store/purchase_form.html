@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Record Purchase{% endblock %}
-{% block page_title %}Record Purchase{% endblock %}
+{% block title %}{{ 'Edit' if purchase else 'Record' }} Purchase{% endblock %}
+{% block page_title %}{{ 'Edit' if purchase else 'Record' }} Purchase{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Record Spares Purchase</h1>
+    <h1>{{ 'Edit' if purchase else 'Record' }} Spares Purchase</h1>
     <div class="subtitle">Adds to stock and rolls into the part's average cost</div>
   </div>
   <a href="{{ url_for('store_purchases') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
@@ -16,7 +16,7 @@
 {% else %}
 <div class="card">
   <div class="card-body">
-    <form method="POST" data-offline-form>
+    <form method="POST" {% if not purchase %}data-offline-form{% endif %}>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid mb-16">
         <div class="form-group">
@@ -28,29 +28,29 @@
           <select name="part_id" required data-refdata="parts">
             <option value="">Select part</option>
             {% for p in parts %}
-            <option value="{{ p.id }}">{{ p.name }}{% if p.part_number %} ({{ p.part_number }}){% endif %} — {{ p.quantity_on_hand }} {{ p.unit }} on hand</option>
+            <option value="{{ p.id }}" {% if purchase and purchase.part_id==p.id %}selected{% endif %}>{{ p.name }}{% if p.part_number %} ({{ p.part_number }}){% endif %} — {{ p.quantity_on_hand }} {{ p.unit }} on hand</option>
             {% endfor %}
           </select>
         </div>
         <div class="form-group">
           <label>Quantity<span class="req">*</span></label>
-          <input type="number" id="pur_qty" name="quantity" min="1" step="1" required>
+          <input type="number" id="pur_qty" name="quantity" min="1" step="1" required value="{{ purchase.quantity if purchase }}">
         </div>
         <div class="form-group">
           <label>Unit Cost (USD)<span class="req">*</span></label>
-          <input type="number" id="pur_cost" name="unit_cost" step="0.01" min="0" required>
+          <input type="number" id="pur_cost" name="unit_cost" step="0.01" min="0" required value="{{ purchase.unit_cost if purchase }}">
         </div>
         <div class="form-group">
           <label>Supplier</label>
-          <input type="text" name="supplier">
+          <input type="text" name="supplier" value="{{ purchase.supplier or '' if purchase }}">
         </div>
         <div class="form-group">
           <label>Total Cost (auto-calculated)</label>
-          <div style="font-size:20px;font-weight:700;color:var(--danger);padding-top:6px;" id="pur_total_preview">$0.00</div>
+          <div style="font-size:20px;font-weight:700;color:var(--danger);padding-top:6px;" id="pur_total_preview">{{ (purchase.total_cost if purchase else 0)|currency }}</div>
         </div>
         <div class="form-group full">
           <label>Notes</label>
-          <textarea name="notes"></textarea>
+          <textarea name="notes">{{ purchase.notes or '' if purchase }}</textarea>
         </div>
       </div>
       <div class="btn-group">

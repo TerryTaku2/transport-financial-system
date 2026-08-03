@@ -40,8 +40,9 @@
           <td>{{ log.liters }}L</td>
           <td>{{ log.odometer or '—' }}</td>
           <td>{{ log.supplier or '—' }}</td>
-          <td>
+          <td class="btn-group">
             {% if current_user.role == 'admin' %}
+            <a href="{{ url_for('fuel_log_edit', lid=log.id) }}" class="btn btn-outline btn-xs">Edit</a>
             <form method="POST" action="{{ url_for('fuel_log_delete', lid=log.id) }}" data-confirm="Delete this fuel log?">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <button class="btn btn-danger btn-xs">Del</button>

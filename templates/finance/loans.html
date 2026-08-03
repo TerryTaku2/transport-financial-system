@@ -43,6 +43,7 @@
           <td>
             <div class="actions">
               {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('loan_edit', lid=loan.id) }}" class="btn btn-outline btn-xs">Edit</a>
               <form method="POST" action="{{ url_for('loan_delete', lid=loan.id) }}" data-confirm="Delete loan from {{ loan.lender }}? This also deletes its repayment history.">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-danger btn-xs">Del</button>
@@ -64,10 +65,41 @@
                 <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00" style="padding:6px;width:120px;">
               </div>
               <button type="submit" class="btn btn-outline btn-xs">Record Repayment</button>
-              {% if loan.payments %}
-              <span class="form-hint">{{ loan.payments|length }} repayment(s) recorded</span>
-              {% endif %}
             </form>
+            {% if loan.payments %}
+            <div class="table-wrap" style="margin-top:8px;">
+              <table>
+                <thead><tr><th>Repayment Date</th><th class="text-right">Amount</th><th>Notes</th>{% if current_user.role == 'admin' %}<th></th>{% endif %}</tr></thead>
+                <tbody>
+                  {% for p in loan.payments %}
+                  <tr>
+                    {% if current_user.role == 'admin' %}
+                    <td colspan="3">
+                      <form method="POST" action="{{ url_for('loan_payment_edit', pid=p.id) }}" style="display:flex;gap:6px;align-items:center;margin:0;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <input type="date" name="payment_date" value="{{ p.payment_date }}" style="padding:4px;font-size:12px;">
+                        <input type="number" name="amount" step="0.01" min="0" value="{{ p.amount }}" style="padding:4px;font-size:12px;width:100px;">
+                        <input type="text" name="notes" value="{{ p.notes or '' }}" placeholder="Notes" style="padding:4px;font-size:12px;flex:1;">
+                        <button class="btn btn-outline btn-xs">Save</button>
+                      </form>
+                    </td>
+                    <td>
+                      <form method="POST" action="{{ url_for('loan_payment_delete', pid=p.id) }}" data-confirm="Delete this repayment?" style="margin:0;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                        <button class="btn btn-danger btn-xs">Del</button>
+                      </form>
+                    </td>
+                    {% else %}
+                    <td>{{ p.payment_date }}</td>
+                    <td class="text-right">{{ p.amount|currency }}</td>
+                    <td>{{ p.notes or '—' }}</td>
+                    {% endif %}
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}

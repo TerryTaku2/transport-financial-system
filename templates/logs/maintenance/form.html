@@ -1,11 +1,11 @@
 {% extends 'base.html' %}
-{% block title %}Record Maintenance{% endblock %}
-{% block page_title %}Record Maintenance{% endblock %}
+{% block title %}{{ 'Edit' if log else 'Record' }} Maintenance{% endblock %}
+{% block page_title %}{{ 'Edit' if log else 'Record' }} Maintenance{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Record Maintenance / Repair</h1>
+    <h1>{{ 'Edit' if log else 'Record' }} Maintenance / Repair</h1>
     <div class="subtitle">Spare parts and mechanic labor cost</div>
   </div>
   <a href="{{ url_for('maintenance_logs') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
@@ -13,7 +13,7 @@
 
 <div class="card">
   <div class="card-body">
-    <form method="POST" data-offline-form>
+    <form method="POST" {% if not log %}data-offline-form{% endif %}>
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid mb-16">
         <div class="form-group">
@@ -25,33 +25,33 @@
           <select name="vehicle_id" required data-refdata="vehicles">
             <option value="">Select vehicle</option>
             {% for v in vehicles %}
-            <option value="{{ v.id }}">{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
+            <option value="{{ v.id }}" {% if log and log.vehicle_id==v.id %}selected{% endif %}>{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
             {% endfor %}
           </select>
         </div>
         <div class="form-group full">
           <label>Description<span class="req">*</span></label>
-          <input type="text" name="description" required placeholder="e.g. Brake pads replacement, clutch repair">
+          <input type="text" name="description" required placeholder="e.g. Brake pads replacement, clutch repair" value="{{ log.description or '' if log }}">
         </div>
         <div class="form-group">
           <label>Parts Cost (USD)</label>
-          <input type="number" id="parts_cost" name="parts_cost" step="0.01" min="0" value="0">
+          <input type="number" id="parts_cost" name="parts_cost" step="0.01" min="0" value="{{ log.parts_cost if log else 0 }}">
         </div>
         <div class="form-group">
           <label>Labor Cost (USD)</label>
-          <input type="number" id="labor_cost" name="labor_cost" step="0.01" min="0" value="0">
+          <input type="number" id="labor_cost" name="labor_cost" step="0.01" min="0" value="{{ log.labor_cost if log else 0 }}">
         </div>
         <div class="form-group">
           <label>Mechanic / Garage</label>
-          <input type="text" name="mechanic">
+          <input type="text" name="mechanic" value="{{ log.mechanic or '' if log }}">
         </div>
         <div class="form-group">
           <label>Total Cost (auto-calculated)</label>
-          <div style="font-size:20px;font-weight:700;color:var(--danger);padding-top:6px;" id="maint_total_preview">$0.00</div>
+          <div style="font-size:20px;font-weight:700;color:var(--danger);padding-top:6px;" id="maint_total_preview">{{ (log.total_cost if log else 0)|currency }}</div>
         </div>
         <div class="form-group full">
           <label>Notes</label>
-          <textarea name="notes"></textarea>
+          <textarea name="notes">{{ log.notes or '' if log }}</textarea>
         </div>
       </div>
       <div class="btn-group">
