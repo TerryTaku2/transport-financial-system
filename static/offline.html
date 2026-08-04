@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Offline — TransFleet ERP</title>
+<title>Offline — GRATZ</title>
 <link rel="stylesheet" href="/static/css/style.css">
 <link rel="manifest" href="/static/manifest.json">
 <meta name="theme-color" content="#2563eb">
@@ -54,7 +54,7 @@
   }
 
   function render() {
-    window.TransFleetOffline.getAll().then(function (items) {
+    window.GratzOffline.getAll().then(function (items) {
       var list = document.getElementById('queue-list');
       var statusLine = document.getElementById('status-line');
 
@@ -89,14 +89,14 @@
       list.querySelectorAll('.retry-btn').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var clientId = btn.closest('.queue-item').dataset.clientId;
-          window.TransFleetOffline.retryItem(clientId);
+          window.GratzOffline.retryItem(clientId);
         });
       });
       list.querySelectorAll('.discard-btn').forEach(function (btn) {
         btn.addEventListener('click', function () {
           var clientId = btn.closest('.queue-item').dataset.clientId;
           if (confirm('Discard this queued entry? This cannot be undone.')) {
-            window.TransFleetOffline.discardItem(clientId);
+            window.GratzOffline.discardItem(clientId);
           }
         });
       });

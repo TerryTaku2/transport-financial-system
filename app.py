@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
+GRATZ Logistics Company
 Transport Fleet & Finance Management System
-T-Tech Solutions | June 2026
 """
 
 import ctypes
@@ -1247,10 +1247,40 @@ def parse_date(s):
         raise ValueError(f'"{s}" is not a valid date (expected YYYY-MM-DD).')
 
 
-def parse_import_date(value):
+def _detect_dayfirst(values):
+    """Infer whether an uploaded file's slash/dash-separated dates are
+    day-first (DD/MM/YYYY) or month-first (MM/DD/YYYY), by scanning for any
+    value whose two leading numeric components can only be valid one way —
+    e.g. 15/03/2026 must be day-first, since no month is 15. A file's dates
+    all come from the same source/locale, so one determination covers every
+    row in it; this is used instead of guessing per-row, which would silently
+    swap day and month whenever both readings happen to be valid (03/04/2026
+    could be 3 April or 4 March) and corrupt the date without ever raising an
+    error. Returns True (dayfirst), False (monthfirst), or None if nothing in
+    the sample disambiguates (every value was ISO, an Excel datetime, or
+    genuinely ambiguous throughout) — callers should default to day-first."""
+    for value in values:
+        if isinstance(value, (datetime, date)):
+            continue
+        m = re.match(r'^(\d{1,2})[/-](\d{1,2})[/-]\d{4}$', str(value or '').strip())
+        if not m:
+            continue
+        a, b = int(m.group(1)), int(m.group(2))
+        if a > 12 and b <= 12:
+            return True
+        if b > 12 and a <= 12:
+            return False
+    return None
+
+
+def parse_import_date(value, dayfirst=True):
     """Parse a date cell from an uploaded CSV/Excel row. Excel cells come
     through openpyxl as datetime objects already; CSV cells are plain
-    strings, tried against the common formats a logbook might use."""
+    strings, tried against the common formats a logbook might use.
+    dayfirst picks which of the ambiguous DD/MM vs MM/DD slash/dash formats
+    is tried first for a given value — callers importing a batch of rows
+    should resolve this once per file via _detect_dayfirst (see there for
+    why) rather than leaving every row to guess independently."""
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
@@ -1258,7 +1288,9 @@ def parse_import_date(value):
     s = str(value).strip()
     if not s:
         raise ValueError('Date is required.')
-    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y'):
+    slash_dash = (['%d/%m/%Y', '%m/%d/%Y', '%d-%m-%Y', '%m-%d-%Y'] if dayfirst else
+                  ['%m/%d/%Y', '%d/%m/%Y', '%m-%d-%Y', '%d-%m-%Y'])
+    for fmt in ['%Y-%m-%d'] + slash_dash:
         try:
             return datetime.strptime(s, fmt).date()
         except ValueError:
@@ -1489,6 +1521,9 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
     created_drivers = []
     created_records = []
     last_driver = None  # carries forward across blank-driver rows, see below
+    dayfirst = _detect_dayfirst(r.get('date') for r in file_rows)
+    if dayfirst is None:
+        dayfirst = True
 
     imported = 0
     errors = []
@@ -1499,7 +1534,7 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
             date_raw = row.get('date')
             if date_raw in (None, ''):
                 continue
-            log_date = parse_import_date(date_raw)
+            log_date = parse_import_date(date_raw, dayfirst)
 
             driver_name = str(row.get('driver') or '').strip()
             driver = driver_by_name.get(driver_name.lower()) if driver_name else None
@@ -1638,6 +1673,9 @@ def import_franchise_income_rows(file_rows, model_cls, date_field, week_normaliz
     table_name = model_cls.__tablename__
     created_vehicles = []
     created_records = []
+    dayfirst = _detect_dayfirst(r.get('date') for r in file_rows)
+    if dayfirst is None:
+        dayfirst = True
 
     imported = 0
     errors = []
@@ -1648,7 +1686,7 @@ def import_franchise_income_rows(file_rows, model_cls, date_field, week_normaliz
             date_raw = row.get('date')
             if date_raw in (None, ''):
                 continue
-            entry_date = parse_import_date(date_raw)
+            entry_date = parse_import_date(date_raw, dayfirst)
             if week_normalize:
                 entry_date = entry_date - timedelta(days=entry_date.weekday())
 
@@ -1830,6 +1868,9 @@ def import_stock_purchase_rows(file_rows, auto_create_parts=False):
     part_by_name = {p.name.strip().lower(): p for p in parts}
     created_parts = []
     created_records = []
+    dayfirst = _detect_dayfirst(r.get('date') for r in file_rows)
+    if dayfirst is None:
+        dayfirst = True
 
     imported = 0
     errors = []
@@ -1840,7 +1881,7 @@ def import_stock_purchase_rows(file_rows, auto_create_parts=False):
             date_raw = row.get('date')
             if date_raw in (None, ''):
                 continue
-            purchase_date = parse_import_date(date_raw)
+            purchase_date = parse_import_date(date_raw, dayfirst)
 
             part_raw = str(row.get('part') or '').strip()
             quantity_raw = parse_import_number(row.get('quantity'), 'Quantity')
@@ -2278,7 +2319,7 @@ def setup():
 
         login_user(admin)
         session.permanent = True
-        flash('Setup complete — welcome to TransFleet ERP.', 'success')
+        flash('Setup complete — welcome to GRATZ.', 'success')
         return redirect(url_for('dashboard'))
     return render_template('auth/setup.html', hostname=socket.gethostname())
 

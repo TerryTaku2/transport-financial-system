@@ -13,8 +13,8 @@
  * cached page while offline — acceptable here since each field user installs
  * their own copy of the app on their own device.
  */
-var CACHE_NAME = 'transfleet-shell-v3';
-var RUNTIME_CACHE = 'transfleet-pages-runtime';
+var CACHE_NAME = 'gratz-shell-v1';
+var RUNTIME_CACHE = 'gratz-pages-runtime';
 var SHELL_FILES = [
   '/login',
   '/static/css/style.css',
@@ -27,6 +27,8 @@ var SHELL_FILES = [
   '/static/img/icons/icon-192.png',
   '/static/img/icons/icon-512.png',
   '/static/img/icons/apple-touch-icon.png',
+  '/static/img/logo-mark.png',
+  '/static/img/logo-horizontal-dark.png',
 ];
 
 self.addEventListener('install', function (event) {
@@ -68,11 +70,31 @@ self.addEventListener('fetch', function (event) {
     return;
   }
 
+  // Network-first, cache-fallback: a redeploy's new CSS/JS/icons should
+  // reach a returning device the very next time it's online, instead of
+  // being stuck behind whatever got cached under this CACHE_NAME the first
+  // time (pure cache-first never re-checks the network for an asset it
+  // already has, so it self-heals only when a human remembers to bump
+  // CACHE_NAME — easy to forget on a deploy that doesn't touch sw.js).
+  // Falls back to cache on any failure — a real network error/offline, or
+  // an on-the-wire hiccup (a Render restart returning a transient 5xx
+  // mid-deploy) — since serving a stale-but-working asset beats an
+  // unstyled page. Only a non-ok response with nothing cached passes that
+  // response through as-is (nothing better available); a network error
+  // with nothing cached — first-ever load, offline, before install's
+  // precache finished — has nothing to fall back to either.
   var url = new URL(request.url);
   if (request.method === 'GET' && url.pathname.startsWith('/static/')) {
     event.respondWith(
-      caches.match(request).then(function (cached) {
-        return cached || fetch(request);
+      fetch(request).then(function (response) {
+        if (response.ok) {
+          var copy = response.clone();
+          caches.open(CACHE_NAME).then(function (cache) { cache.put(request, copy); });
+          return response;
+        }
+        return caches.match(request).then(function (cached) { return cached || response; });
+      }).catch(function () {
+        return caches.match(request);
       })
     );
     return;

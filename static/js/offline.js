@@ -410,7 +410,7 @@
 
   // Exposed for static/offline.html, which lists/retries/discards queued
   // items directly — it isn't a Jinja page so it can't render server state.
-  window.TransFleetOffline = {
+  window.GratzOffline = {
     getAll: getAll,
     syncQueue: syncQueue,
     retryItem: retryItem,
