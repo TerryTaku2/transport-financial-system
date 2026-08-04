@@ -754,6 +754,13 @@ class ExpenseCategory(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(60), nullable=False)
     parent_id = db.Column(db.Integer, db.ForeignKey('expense_categories.id'), nullable=True)
+    # Pre-fills the Amount field on Add Expense when this category is picked
+    # (see expense_form.html) — for a recurring, roughly-fixed charge like a
+    # monthly garage fee, this saves re-typing the same figure once per
+    # vehicle every month. Never enforced server-side: the typed amount on
+    # the expense itself is still what gets saved, so a one-off exception
+    # is just as easy to enter as the usual figure.
+    default_amount = db.Column(db.Float, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     sync_uuid = db.Column(db.String(36), unique=True, index=True)
@@ -1447,6 +1454,31 @@ def read_uploaded_workbook_sheets(file):
     return sheets
 
 
+def read_uploaded_workbook_raw_sheets(file):
+    """Parse a multi-sheet XLSX/XLSM workbook into {sheet_name: raw_rows} —
+    each sheet's untouched 2D grid (a list of row tuples), with no header
+    detection or dict-keying applied. Unlike read_uploaded_workbook_sheets,
+    which assumes a single flat table filling the whole sheet, this is for
+    importers that need to locate one specific labeled block within a sheet
+    that also holds other, unrelated tables side by side — see
+    _find_franchise_reconciliation_block. Raises ValueError on an
+    unsupported or unreadable file."""
+    ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in file.filename else ''
+    if ext not in ('xlsx', 'xlsm'):
+        raise ValueError('Upload a .xlsx or .xlsm workbook.')
+    try:
+        wb = openpyxl.load_workbook(file, data_only=True)
+    except Exception:
+        raise ValueError('Could not read that file. Make sure it is a valid Excel workbook.')
+
+    sheets = {}
+    for ws in wb.worksheets:
+        raw_rows = [list(r) for r in ws.iter_rows(values_only=True)]
+        if raw_rows:
+            sheets[ws.title] = raw_rows
+    return sheets
+
+
 def _normalize_registration(name):
     return re.sub(r'\s+', ' ', str(name or '')).strip().upper()
 
@@ -1734,6 +1766,153 @@ def import_franchise_income_rows(file_rows, model_cls, date_field, week_normaliz
             error_rows.append({**row, 'System_Error': str(e)})
 
     return imported, errors, error_rows, created_vehicles, created_records
+
+
+# ─────────────────────────────────────────────────────────────
+# Franchise Reconciliation Workbook Import — auto-located, auto-parsed
+# alternative to the column-mapping importer above, for the franchise's own
+# monthly Excel logbook shape: one sheet per month, each holding a
+# "FRANCHISE COLLECTION RECONCILIATION SCHEDULE" block for whole-franchise
+# daily income/expenses/deposits, side by side with an unrelated per-vehicle
+# collections matrix (and sometimes a derived weekly-summary block) sharing
+# the same rows. Since the shape is fixed and known — just shifted in
+# position, because the matrix widens with the month's day count — this
+# locates and parses it directly instead of asking the user to map columns.
+# ─────────────────────────────────────────────────────────────
+def _find_franchise_reconciliation_block(raw_rows):
+    """Locate every 'FRANCHISE COLLECTION RECONCILIATION SCHEDULE'-shaped
+    block within one sheet of a franchise monthly logbook and extract their
+    rows, already shaped for import_franchise_income_rows.
+
+    A real sheet can hold more than one such block — e.g. a "WEEKLY
+    ANALYSIS" sheet in the wild turned out to have three, appended one below
+    another as later weeks were added — and, seen across a real workbook,
+    they don't always share one column layout (some have an OTHER
+    expenditure column, some don't). So every block is found independently
+    and parsed with its own column map, rather than detecting the first one
+    and assuming the rest of the sheet matches it: reusing one block's
+    layout for another's rows silently misreads them whenever the layouts
+    differ (an OTHER column shifts CASH IN HAND/DEPOSITED over by one).
+
+    Each block's own header is three rows deep — a group row (DATE / INCOME
+    [$] / EXPENDITURE [$] / [OTHER] / CASH IN HAND [$] / DEPOSITED [$]), a
+    DAILY/WEEKLY sub-row under INCOME and again under EXPENDITURE, and a
+    category row (TRAFFIC FINES / FACILITATION FEES / WORKSHOP ALL / WAGES)
+    repeated under each of those two EXPENDITURE sub-columns. That
+    DAILY/WEEKLY split is two revenue/expense streams recorded side by side
+    for the *same* date, not "today" vs "this week" — so each is summed
+    into the single income/expense figure the app's Daily Income model
+    actually stores; a caller never needs to know the split existed.
+
+    A group row is found by content (a row containing cells matching 'date',
+    'income', and 'expenditure') rather than assumed to sit at a fixed
+    row/column: a real export like this puts its first block beside an
+    unrelated per-vehicle collections matrix on a short (partial-month)
+    sheet, but *below* that matrix — hundreds of rows down — on a full
+    month's sheet, since the matrix grows one row per vehicle regardless of
+    the month's length while a full month simply has more vehicle rows to
+    list; its starting column shifts too, for the same reason. So the whole
+    sheet is searched, not just the first few rows.
+
+    Returns a list of row dicts (keys: date, income, exp_traffic_fines,
+    exp_facilitation_fees, exp_workshop, exp_wages, other_expenditure,
+    deposited) pooled from every block found, or None if the sheet has no
+    such block at all (e.g. a sheet that's purely a derived pivot report,
+    with nothing shaped like this to import) — distinct from returning an
+    empty list, which means at least one block was found but none of its
+    rows had a usable date."""
+    def norm(v):
+        return re.sub(r'\s+', ' ', str(v or '')).strip().lower()
+
+    date_like_re = re.compile(r'^\d{1,4}[/-]\d{1,2}[/-]\d{1,4}$')
+
+    def looks_like_date(v):
+        # A block's row range runs to the next block's header (or end of
+        # sheet) and can outrun where its own real data actually ends — e.g.
+        # a short partial-month sheet's single block spans the rest of an
+        # otherwise-unrelated sheet below it — so anything landing in the
+        # date column has to look like a date, not just be non-blank, or
+        # this would also scoop up day names, "TOTAL" rows, even vehicle
+        # plates from an unrelated table sharing that column further down.
+        if isinstance(v, (datetime, date)):
+            return True
+        return isinstance(v, str) and bool(date_like_re.match(v.strip()))
+
+    group_rows = [r for r in range(len(raw_rows))
+                  if (lambda cells: 'date' in cells and any('income' in c for c in cells)
+                      and any('expenditure' in c for c in cells))([norm(c) for c in raw_rows[r]])]
+    if not group_rows:
+        return None
+
+    def find_col(header, *needles):
+        for i, c in enumerate(header):
+            if any(n in norm(c) for n in needles):
+                return i
+        return None
+
+    def cell_num(row, idx):
+        if idx is None or idx >= len(row) or not isinstance(row[idx], (int, float)):
+            return 0
+        return row[idx]
+
+    expense_categories = [
+        ('exp_traffic_fines', ['traffic fines', 'traffic fine']),
+        ('exp_facilitation_fees', ['facilitation fees', 'facilitation fee']),
+        ('exp_workshop', ['workshop']),
+        ('exp_wages', ['wages', 'wage']),
+    ]
+
+    rows = []
+    for block_i, group_row in enumerate(group_rows):
+        # A block's data ends where the next one's header begins (or end of
+        # sheet, for the last one) — never spills into a differently-laid-out
+        # block below it.
+        block_end = group_rows[block_i + 1] if block_i + 1 < len(group_rows) else len(raw_rows)
+
+        header = raw_rows[group_row]
+        date_col = find_col(header, 'date')
+        income_col = find_col(header, 'income')
+        expenditure_col = find_col(header, 'expenditure')
+        other_col = find_col(header, 'other')
+        cash_col = find_col(header, 'cash in hand')
+        deposited_col = find_col(header, 'deposited')
+        if date_col is None or income_col is None or expenditure_col is None:
+            continue
+        end_col = (other_col if other_col is not None else cash_col if cash_col is not None
+                   else deposited_col if deposited_col is not None else len(header))
+
+        sub_row = raw_rows[group_row + 1] if group_row + 1 < block_end else []
+        income_cols = [i for i, c in enumerate(sub_row)
+                       if income_col <= i < expenditure_col and norm(c) in ('daily', 'weekly')]
+
+        cat_row = raw_rows[group_row + 2] if group_row + 2 < block_end else []
+        expense_cols = {
+            key: [i for i, c in enumerate(cat_row) if expenditure_col <= i < end_col and any(n in norm(c) for n in needles)]
+            for key, needles in expense_categories
+        }
+
+        for r in range(group_row + 3, block_end):
+            row = raw_rows[r]
+            date_val = row[date_col] if date_col < len(row) else None
+            if not looks_like_date(date_val):
+                continue  # skips blank rows and any unrelated table sharing these columns
+            # Passed through as-is even when it's text (e.g. a manually-typed
+            # "29/6/2026" cell rather than a real Excel date) rather than
+            # parsed here — import_franchise_income_rows already parses
+            # (and dayfirst-detects) whatever lands in 'date', the same way
+            # it does for a CSV's string dates; a value that turns out not
+            # to be parseable after all surfaces as a normal per-row import
+            # error instead of silently vanishing.
+            entry = {
+                'date': date_val,
+                'income': sum(cell_num(row, c) for c in income_cols),
+                'other_expenditure': cell_num(row, other_col),
+                'deposited': row[deposited_col] if deposited_col is not None and deposited_col < len(row) else None,
+            }
+            for key, cols in expense_cols.items():
+                entry[key] = sum(cell_num(row, c) for c in cols)
+            rows.append(entry)
+    return rows
 
 
 # ─────────────────────────────────────────────────────────────
@@ -4403,6 +4582,26 @@ def statement_expense_line_items(df, dt, vehicle_id=None):
     return items
 
 
+def statement_revenue_line_items(df, dt, vehicle_id=None):
+    """The DailyLog rows behind the Gross Revenue line — same purpose as
+    statement_expense_line_items but for the one revenue line, so it can
+    drill down to its source the same way instead of being a dead end."""
+    q = DailyLog.query.filter(DailyLog.log_date.between(df, dt))
+    if vehicle_id:
+        q = q.filter(DailyLog.vehicle_id == vehicle_id)
+    items = []
+    for log in q.order_by(DailyLog.log_date.desc()).all():
+        if not log.gross_revenue:
+            continue
+        crew = ' / '.join(n.name for n in (log.driver, log.conductor) if n) or '—'
+        items.append({
+            'date': log.log_date, 'source': 'Daily Transaction',
+            'vehicle': log.vehicle.registration, 'description': crew,
+            'amount': log.gross_revenue,
+        })
+    return items
+
+
 def compute_income_statement(df, dt, vehicle_id=None):
     """Fleet-wide (vehicle_id=None) or per-vehicle income statement for
     [df, dt] — shared by the Income Statement report page and the Full
@@ -4481,10 +4680,12 @@ def report_income():
 
     stmt = compute_income_statement(df, dt, vehicle_id)
     statement_expense_items = statement_expense_line_items(df, dt, vehicle_id or None)
+    revenue_items = statement_revenue_line_items(df, dt, vehicle_id or None)
 
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     return render_template('reports/income.html',
         statement_expense_items=statement_expense_items,
+        revenue_items=revenue_items,
         vehicles=all_vehicles,
         date_from=date_from_str, date_to=date_to_str, vehicle_id=vehicle_id,
         **stmt)
@@ -6587,11 +6788,13 @@ def expense_category_add():
 
     redirect_to = request.form.get('redirect_to') or request.referrer or url_for('expenses_list')
 
+    default_amount = form_float(request.form, 'default_amount', label='Default amount', required=False, min_value=0)
+
     existing = ExpenseCategory.query.filter_by(name=name, parent_id=parent_id).first()
     if existing:
         flash(f'"{name}" already exists under {parent.name if parent else "top-level headings"}.', 'warning')
     else:
-        new_cat = ExpenseCategory(name=name, parent_id=parent_id)
+        new_cat = ExpenseCategory(name=name, parent_id=parent_id, default_amount=default_amount)
         db.session.add(new_cat)
         db.session.flush()
         log_audit('CREATE', 'expense_categories', new_cat.id, f'Added expense category {new_cat.display_name}')
@@ -6627,6 +6830,8 @@ def expense_category_edit(cid):
         old_label = cat.display_name
         cat.name = name
         cat.parent_id = parent_id
+        cat.default_amount = form_float(request.form, 'default_amount', label='Default amount',
+                                        required=False, min_value=0)
         log_audit('UPDATE', 'expense_categories', cid, f'Renamed expense category {old_label} to {cat.display_name}')
         touch_sync_fields(cat)
         db.session.commit()
@@ -7250,6 +7455,79 @@ def franchise_income_import_bulk():
                            filename=file.filename, results=results, kind=kind, list_endpoint=list_endpoint,
                            total_imported=total_imported, period=period,
                            fields=CANONICAL_FRANCHISE_INCOME_FIELDS_SCOPED)
+
+
+@app.route('/franchise/income/import/reconciliation', methods=['POST'])
+@login_required
+@permission_required('franchise')
+def franchise_income_import_reconciliation():
+    """Import a franchise monthly logbook workbook — one sheet per month,
+    each holding a 'FRANCHISE COLLECTION RECONCILIATION SCHEDULE' block
+    (whole-franchise daily income/expenses/deposits) alongside other,
+    unrelated tables on the same sheet. Unlike the generic column-mapping
+    importer above, this format is located and parsed automatically (see
+    _find_franchise_reconciliation_block) since its shape is fixed and
+    known, just shifted in position — there's no column mapping to confirm.
+    Always Daily Income, whole-franchise: the schedule is inherently one row
+    per date, not per vehicle or per week."""
+    period = request.form.get('period', 'month')
+    file = request.files.get('file')
+    if not file or not file.filename:
+        flash('Choose an Excel workbook to import.', 'danger')
+        return redirect(url_for('franchise_daily_income_list', period=period))
+
+    try:
+        sheets = read_uploaded_workbook_raw_sheets(file)
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('franchise_daily_income_list', period=period))
+
+    if not sheets:
+        flash('That workbook has no sheets with data to import.', 'warning')
+        return redirect(url_for('franchise_daily_income_list', period=period))
+
+    results = []
+    for sheet_name, raw_rows in sheets.items():
+        savepoint = db.session.begin_nested()
+        try:
+            found_rows = _find_franchise_reconciliation_block(raw_rows)
+            if found_rows is None:
+                results.append({'sheet': sheet_name, 'rows_found': 0, 'imported': 0,
+                                 'errors': [], 'skip_reason': 'No reconciliation schedule found on this sheet.'})
+                savepoint.commit()
+                continue
+            if not found_rows:
+                results.append({'sheet': sheet_name, 'rows_found': 0, 'imported': 0,
+                                 'errors': [], 'skip_reason': 'Schedule found, but it has no dated rows.'})
+                savepoint.commit()
+                continue
+
+            imported, errors, error_rows, _created_vehicles, created_records = import_franchise_income_rows(
+                found_rows, FranchiseDailyIncome, 'entry_date', week_normalize=False, forced_vehicle=None)
+            if imported or error_rows:
+                save_import_batch('franchise_daily_income', f'{file.filename} ({sheet_name})',
+                                  len(found_rows), imported, error_rows, created_records)
+            if imported:
+                log_audit('CREATE', 'franchise_daily_income', None,
+                          f'Imported {imported} daily income row(s) for the whole franchise '
+                          f'from {file.filename} (sheet "{sheet_name}")')
+            results.append({'sheet': sheet_name, 'rows_found': len(found_rows), 'imported': imported,
+                             'errors': errors, 'skip_reason': None})
+            savepoint.commit()
+        except Exception as e:
+            savepoint.rollback()
+            results.append({'sheet': sheet_name, 'rows_found': 0, 'imported': 0,
+                             'errors': [], 'skip_reason': f'Unexpected error: {e}'})
+
+    total_imported = sum(r['imported'] for r in results)
+    if total_imported:
+        db.session.commit()
+    else:
+        db.session.rollback()
+
+    return render_template('franchise/income_reconciliation_import_result.html',
+                           filename=file.filename, results=results, period=period,
+                           total_imported=total_imported)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -8121,11 +8399,11 @@ def api_refdata():
     expense_categories = []
     for h in headings:
         if h.children:
-            expense_categories.append({'id': h.id, 'label': f'{h.name} (general)'})
+            expense_categories.append({'id': h.id, 'label': f'{h.name} (general)', 'default_amount': h.default_amount})
             for c in sorted(h.children, key=lambda x: x.name):
-                expense_categories.append({'id': c.id, 'label': f'{h.name} — {c.name}'})
+                expense_categories.append({'id': c.id, 'label': f'{h.name} — {c.name}', 'default_amount': c.default_amount})
         else:
-            expense_categories.append({'id': h.id, 'label': h.name})
+            expense_categories.append({'id': h.id, 'label': h.name, 'default_amount': h.default_amount})
 
     return jsonify({
         'vehicles': [{'id': v.id, 'label': f'{v.registration} — {v.make} {v.model}'} for v in vehicles],
@@ -8176,7 +8454,7 @@ SYNC_MODELS = {
         'reorder_level', 'status', 'notes', 'created_by', 'created_at', 'deleted_at',
     ), {}),
     'expense_categories': (ExpenseCategory, (
-        'name', 'created_at', 'deleted_at',
+        'name', 'default_amount', 'created_at', 'deleted_at',
     ), {'parent_id': 'expense_categories'}),
     'drivers': (Driver, (
         'name', 'license_number', 'phone', 'role', 'commission_rate', 'status',
@@ -9103,6 +9381,8 @@ def migrate_db():
             if 'parent_id' not in exp_cat_cols:
                 conn.execute(text(
                     "ALTER TABLE expense_categories ADD COLUMN parent_id INTEGER REFERENCES expense_categories(id)"))
+            if 'default_amount' not in exp_cat_cols:
+                conn.execute(text("ALTER TABLE expense_categories ADD COLUMN default_amount FLOAT"))
 
         if inspector.has_table('store_sales'):
             store_sale_cols = [c['name'] for c in inspector.get_columns('store_sales')]
@@ -9366,12 +9646,23 @@ def _seed_category_uuid(name, parent_name=None):
 
 
 def create_default_expense_categories():
-    """Vehicle Expenses are classified under exactly five top-level
-    headings: Maintenance, Wages, Traffic Fines, Insurance, Admin."""
-    headings = ('Maintenance', 'Wages', 'Traffic Fines', 'Insurance', 'Admin')
+    """Vehicle Expenses are classified under exactly six top-level
+    headings: Maintenance, Wages, Traffic Fines, Insurance, Admin, Garage
+    Fee. Garage Fee carries a default_amount ($100) since — unlike the
+    other five — it's a roughly-fixed charge booked once per vehicle every
+    month, so Add Expense can pre-fill it (see expense_form.html)."""
+    headings = ('Maintenance', 'Wages', 'Traffic Fines', 'Insurance', 'Admin', 'Garage Fee')
+    default_amounts = {'Garage Fee': 100}
     for name in headings:
-        if not ExpenseCategory.query.filter_by(name=name, parent_id=None).first():
-            db.session.add(ExpenseCategory(name=name, sync_uuid=_seed_category_uuid(name)))
+        existing = ExpenseCategory.query.filter_by(name=name, parent_id=None).first()
+        if not existing:
+            db.session.add(ExpenseCategory(name=name, default_amount=default_amounts.get(name),
+                                           sync_uuid=_seed_category_uuid(name)))
+        elif name in default_amounts and existing.default_amount is None:
+            # Backfills the default onto an instance that already created
+            # this heading (e.g. via sync) before default_amount existed —
+            # never overwrites one an admin has since edited.
+            existing.default_amount = default_amounts[name]
     db.session.flush()
 
     # Retire the older, differently-named default headings this list

@@ -97,6 +97,18 @@
   </div>
 </div>
 
+<div class="card mb-24" style="padding:10px 14px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+    <div class="form-hint" style="margin:0;">Import a monthly logbook workbook — one sheet per month, each with a "Franchise Collection Reconciliation Schedule" block. Found and read automatically; no column mapping needed.</div>
+    <form method="POST" action="{{ url_for('franchise_income_import_reconciliation') }}" enctype="multipart/form-data" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="period" value="{{ period }}">
+      <input type="file" name="file" accept=".xlsx,.xlsm" required style="font-size:12px;">
+      <button type="submit" class="btn btn-xs btn-outline"><i data-feather="calendar"></i> Import Reconciliation Workbook</button>
+    </form>
+  </div>
+</div>
+
 <div class="card mb-24">
   <div class="card-header"><h3>Record Income — {{ vehicle.number_plate }} ({{ vehicle.franchisee_name }})</h3></div>
   <div class="card-body">

@@ -26,17 +26,17 @@
       <div class="form-grid mb-16">
         <div class="form-group">
           <label>Category<span class="req">*</span></label>
-          <select name="category_id" required data-refdata="expense_categories">
+          <select name="category_id" id="expense_category" required data-refdata="expense_categories">
             {% for h in headings %}
             {% if h.children %}
             <optgroup label="{{ h.name }}">
-              <option value="{{ h.id }}" {% if selected_category_id|string == h.id|string %}selected{% endif %}>{{ h.name }} (general)</option>
+              <option value="{{ h.id }}" data-default-amount="{{ h.default_amount or '' }}" {% if selected_category_id|string == h.id|string %}selected{% endif %}>{{ h.name }} (general)</option>
               {% for c in h.children|sort(attribute='name') %}
-              <option value="{{ c.id }}" {% if selected_category_id|string == c.id|string %}selected{% endif %}>{{ c.name }}</option>
+              <option value="{{ c.id }}" data-default-amount="{{ c.default_amount or '' }}" {% if selected_category_id|string == c.id|string %}selected{% endif %}>{{ c.name }}</option>
               {% endfor %}
             </optgroup>
             {% else %}
-            <option value="{{ h.id }}" {% if selected_category_id|string == h.id|string %}selected{% endif %}>{{ h.name }}</option>
+            <option value="{{ h.id }}" data-default-amount="{{ h.default_amount or '' }}" {% if selected_category_id|string == h.id|string %}selected{% endif %}>{{ h.name }}</option>
             {% endif %}
             {% endfor %}
           </select>
@@ -58,7 +58,7 @@
         </div>
         <div class="form-group">
           <label>Amount (USD)<span class="req">*</span></label>
-          <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00">
+          <input type="number" id="expense_amount" name="amount" step="0.01" min="0" required placeholder="0.00">
         </div>
         <div class="form-group">
           <label>Date<span class="req">*</span></label>
@@ -85,4 +85,22 @@
     </form>
   </div>
 </div>
+
+<script>
+(function () {
+  var categorySelect = document.getElementById('expense_category');
+  var amountInput = document.getElementById('expense_amount');
+  if (!categorySelect || !amountInput) return;
+
+  function applyDefault() {
+    var opt = categorySelect.options[categorySelect.selectedIndex];
+    var def = opt ? opt.getAttribute('data-default-amount') : '';
+    // Only pre-fills an empty field — never overwrites an amount already typed.
+    if (def && !amountInput.value) amountInput.value = def;
+  }
+
+  categorySelect.addEventListener('change', applyDefault);
+  applyDefault();
+})();
+</script>
 {% endblock %}

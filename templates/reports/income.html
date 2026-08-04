@@ -59,11 +59,41 @@
 
 <div class="card mb-24">
   <div class="card-header"><h3>Statement Summary</h3></div>
-  <div class="form-hint" style="margin:0 16px 8px;">Click an expense line to see where it came from.</div>
+  <div class="form-hint" style="margin:0 16px 8px;">Click a line to see where it came from.</div>
   <div class="table-wrap">
     <table>
       <tbody>
-        <tr><td>Gross Revenue</td><td class="text-right">{{ gross_revenue|currency }}</td></tr>
+        <tr class="{% if revenue_items %}expense-row-toggle{% endif %}"
+            {% if revenue_items %}data-target="revenue-detail" style="cursor:pointer;"{% endif %}>
+          <td>
+            Gross Revenue
+            {% if revenue_items %}<span class="expense-chevron" style="color:var(--text-muted);margin-left:6px;">&#9656;</span>
+            <span class="form-hint">({{ revenue_items|length }} item{{ 's' if revenue_items|length != 1 else '' }})</span>{% endif %}
+          </td>
+          <td class="text-right">{{ gross_revenue|currency }}</td>
+        </tr>
+        {% if revenue_items %}
+        <tr class="expense-detail-row" id="revenue-detail" style="display:none;">
+          <td colspan="2" style="padding:0;background:var(--hover-bg);">
+            <table style="margin:0;">
+              <thead>
+                <tr><th>Date</th><th>Source</th><th>Vehicle</th><th>Driver / Conductor</th><th class="text-right">Amount</th></tr>
+              </thead>
+              <tbody>
+                {% for item in revenue_items %}
+                <tr>
+                  <td>{{ item.date.strftime('%d %b %Y') }}</td>
+                  <td>{{ item.source }}</td>
+                  <td>{{ item.vehicle }}</td>
+                  <td>{{ item.description }}</td>
+                  <td class="text-right">{{ item.amount|currency }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </td>
+        </tr>
+        {% endif %}
         {% for name, amount in statement_expenses %}
         {% set line_items = statement_expense_items.get(name, []) %}
         <tr class="{% if line_items %}expense-row-toggle{% endif %}"

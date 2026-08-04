@@ -17,6 +17,9 @@
     {% for h in headings %}
     <div style="margin-bottom:10px;">
       <span class="badge badge-blue">{{ h.name }}</span>
+      {% if h.default_amount %}
+      <span class="form-hint" style="margin-left:4px;">defaults to {{ h.default_amount|currency }}</span>
+      {% endif %}
       {% if current_user.has_permission('finance') %}
       <a href="{{ url_for('expense_category_edit', cid=h.id) }}" class="btn btn-outline btn-xs" style="padding:2px 6px;">Edit</a>
       {% if not h.children and not h.expenses %}
@@ -57,6 +60,7 @@
         {% endfor %}
       </select>
       <input type="text" name="name" placeholder="Name" style="padding:6px;" required>
+      <input type="number" name="default_amount" placeholder="Default amount (optional)" step="0.01" min="0" style="padding:6px;width:170px;">
       <button type="submit" class="btn btn-outline btn-xs">Add</button>
     </form>
     {% endif %}

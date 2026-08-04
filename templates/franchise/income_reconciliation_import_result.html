@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+{% block title %}Reconciliation Workbook Import{% endblock %}
+{% block page_title %}Franchise Daily Income — Reconciliation Workbook Import{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Reconciliation Workbook Import</h1>
+    <div class="subtitle">{{ filename }} — {{ results|length }} sheet(s) processed</div>
+  </div>
+  <a href="{{ url_for('franchise_daily_income_list', period=period) }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Daily Income</a>
+</div>
+
+<div class="kpi-grid mb-24">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Rows Imported</div>
+    <div class="kpi-value">{{ total_imported }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Schedules Found</div>
+    <div class="kpi-value">{{ results|rejectattr('skip_reason')|list|length }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Sheets Skipped</div>
+    <div class="kpi-value">{{ results|selectattr('skip_reason')|list|length }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Per-Sheet Results</h3></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Sheet</th>
+          <th class="text-right">Rows Found</th>
+          <th class="text-right">Imported</th>
+          <th>Notes</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in results %}
+        <tr>
+          <td>{{ r.sheet }}</td>
+          <td class="text-right">{{ r.rows_found }}</td>
+          <td class="text-right">{{ r.imported }}</td>
+          <td>
+            {% if r.skip_reason %}
+              <span class="text-muted">Skipped — {{ r.skip_reason }}</span>
+            {% else %}
+              {% if r.errors %}
+                {% set shown = r.errors[:5] %}
+                {{ shown|join('; ') }}{% if r.errors|length > 5 %} (+{{ r.errors|length - 5 }} more){% endif %}
+              {% elif r.imported %}
+                All rows imported cleanly.
+              {% else %}
+                No importable rows on this sheet.
+              {% endif %}
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
