@@ -18,3 +18,11 @@ services:
         value: sqlite:////var/data/transport_erp.db
       - key: ADMIN_PASSWORD
         sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: WHATSAPP_PHONE_NUMBER_ID
+        sync: false
+      - key: WHATSAPP_VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_APP_SECRET
+        sync: false

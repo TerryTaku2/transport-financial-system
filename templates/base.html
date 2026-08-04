@@ -6,6 +6,8 @@
   <title>{% block title %}TransFleet ERP{% endblock %} | T-Tech Solutions</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v={{ asset_v('css/style.css') }}">
   <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='img/logo-mark.svg') }}">
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='img/icons/favicon.ico') }}">
   <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/icons/apple-touch-icon.png') }}">
   <meta name="theme-color" content="#2563eb">
   <script src="{{ url_for('static', filename='js/vendor/feather.min.js') }}"></script>
@@ -18,7 +20,18 @@
   <!-- ── Sidebar ── -->
   <aside class="sidebar" id="sidebar">
     <a class="sidebar-brand" href="{{ url_for('dashboard') }}">
-      <div class="brand-icon">🚌</div>
+      <div class="brand-icon">
+        <svg viewBox="0 0 200 200" width="20" height="20" aria-hidden="true">
+          <rect x="24" y="150" width="152" height="8" rx="4" fill="#fff" opacity="0.55"/>
+          <rect x="26" y="78" width="26" height="8" rx="4" fill="#fff"/>
+          <rect x="34" y="96" width="30" height="8" rx="4" fill="#fff"/>
+          <rect x="26" y="114" width="24" height="8" rx="4" fill="#fff"/>
+          <rect x="64" y="70" width="76" height="54" rx="8" fill="#fff"/>
+          <polygon points="140,124 140,92 156,78 172,78 172,124" fill="#fff"/>
+          <circle cx="96" cy="132" r="5" fill="#fff"/>
+          <circle cx="156" cy="132" r="5" fill="#fff"/>
+        </svg>
+      </div>
       <div>
         <div class="brand-name">TransFleet ERP</div>
         <div class="brand-sub">T-Tech Solutions</div>
@@ -227,21 +240,30 @@
       </a>
     </div>
     {% endif %}
+
+    <div class="sidebar-footer-mobile">
+      <a href="{{ url_for('change_password') }}" class="nav-item"><i data-feather="key"></i> Change Password</a>
+    </div>
   </aside>
+
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
   <!-- ── Main ── -->
   <div class="main">
 
     <!-- Topbar -->
     <header class="topbar">
+      <button type="button" class="menu-toggle" id="sidebarToggle" aria-label="Toggle navigation" aria-expanded="false" aria-controls="sidebar">
+        <i data-feather="menu"></i>
+      </button>
       <div class="topbar-title">{% block page_title %}{% endblock %}</div>
       <div class="topbar-user">
         <div class="avatar">{{ current_user.username[0].upper() }}</div>
-        <span>{{ current_user.username }}</span>
-        <span class="badge badge-blue">{{ current_user.role }}</span>
+        <span class="topbar-username">{{ current_user.username }}</span>
+        <span class="badge badge-blue topbar-role">{{ current_user.role }}</span>
         <span id="connectivity-badge" class="badge badge-gray">Offline</span>
         <span id="offline-sync-badge" class="badge" style="display:none;"></span>
-        <a href="{{ url_for('change_password') }}" class="btn-logout" style="margin-right:4px;">Change Password</a>
+        <a href="{{ url_for('change_password') }}" class="btn-logout topbar-change-pw" style="margin-right:4px;">Change Password</a>
         <a href="{{ url_for('logout') }}" class="btn-logout">Sign out</a>
       </div>
     </header>

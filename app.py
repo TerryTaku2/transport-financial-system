@@ -4,10 +4,13 @@ Transport Fleet & Finance Management System
 T-Tech Solutions | June 2026
 """
 
+import ctypes
 import os
 import sys
 import csv
 import difflib
+import hashlib
+import hmac
 import io
 import json
 import re
@@ -134,6 +137,10 @@ app.config.update(
     SYNC_HUB_URL=os.environ.get('SYNC_HUB_URL', '').rstrip('/'),
     SYNC_API_KEY=os.environ.get('SYNC_API_KEY', ''),
     SYNC_INTERVAL_SECONDS=int(os.environ.get('SYNC_INTERVAL_SECONDS', '60')),
+    WHATSAPP_TOKEN=os.environ.get('WHATSAPP_TOKEN', ''),
+    WHATSAPP_PHONE_NUMBER_ID=os.environ.get('WHATSAPP_PHONE_NUMBER_ID', ''),
+    WHATSAPP_VERIFY_TOKEN=os.environ.get('WHATSAPP_VERIFY_TOKEN', ''),
+    WHATSAPP_APP_SECRET=os.environ.get('WHATSAPP_APP_SECRET', ''),
 )
 
 db = SQLAlchemy(app)
@@ -172,6 +179,11 @@ class User(UserMixin, db.Model):
     is_active = db.Column(db.Boolean, default=True)
     permissions = db.Column(db.Text, default='[]')
     driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=True)
+    # Digits-only WhatsApp number (country code + number, no '+' or spaces —
+    # e.g. "263771234567") this user is reachable/authenticated as on the
+    # WhatsApp report bot. Null means the user hasn't been linked yet, and
+    # the bot won't respond to their number. See whatsapp_dispatch below.
+    whatsapp_phone = db.Column(db.String(20), unique=True, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     linked_driver = db.relationship('Driver', foreign_keys=[driver_id])
@@ -7651,6 +7663,26 @@ def user_permissions(uid):
                            current_perms=u.get_permissions())
 
 
+@app.route('/users/<int:uid>/whatsapp', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def user_whatsapp(uid):
+    u = User.query.get_or_404(uid)
+    if request.method == 'POST':
+        raw = request.form.get('whatsapp_phone', '').strip()
+        phone = re.sub(r'\D', '', raw) or None
+        if phone:
+            check_unique(User, 'whatsapp_phone', phone, label='WhatsApp number', exclude_id=u.id)
+        u.whatsapp_phone = phone
+        log_audit('UPDATE', 'users', uid,
+                  f'Set WhatsApp number for {u.username}: {phone or "(unlinked)"}')
+        db.session.commit()
+        flash(f'WhatsApp number updated for {u.username}.', 'success')
+        return redirect(url_for('users'))
+    return render_template('users/whatsapp.html', u=u)
+
+
 @app.route('/users/<int:uid>/reset-password', methods=['POST'])
 @login_required
 @admin_required
@@ -8709,12 +8741,259 @@ def start_sync_thread():
 
 
 # ─────────────────────────────────────────────────────────────
-# WhatsApp Webhook stub
+# WhatsApp Report Bot — lets a linked user text plain commands (e.g.
+# "income last month") to a WhatsApp number and get one of the existing
+# reports back as a formatted text message. Built on Meta's WhatsApp
+# Cloud API. Report figures are computed with the exact same
+# compute_consolidated_overview/compute_income_statement/etc. helpers the
+# web report pages use, so the bot can never drift from what's shown
+# on-screen. Access is gated by the sender's number being linked to an
+# active user with the 'reports' permission (see User.whatsapp_phone and
+# users/whatsapp.html) — command parsing is deliberately simple
+# keyword+period matching, not free-form NLU.
 # ─────────────────────────────────────────────────────────────
+def _wa_money(x):
+    return f'${x:,.2f}'
+
+
+def _wa_period(tokens):
+    """Parse the words after a report command into a (from_date, to_date,
+    label) tuple. Recognizes a handful of keywords plus an explicit
+    'YYYY-MM-DD YYYY-MM-DD' range; defaults to the current month, same
+    default as the web reports' query_date_range."""
+    today = date.today()
+    month_start = today.replace(day=1)
+    joined = ' '.join(tokens).strip().lower()
+
+    if not joined or joined in ('month', 'this month'):
+        return month_start, today, 'this month'
+    if joined == 'today':
+        return today, today, 'today'
+    if joined == 'yesterday':
+        y = today - timedelta(days=1)
+        return y, y, 'yesterday'
+    if joined in ('week', 'this week'):
+        start = today - timedelta(days=today.weekday())
+        return start, today, 'this week'
+    if joined in ('last month', 'lastmonth'):
+        last_end = month_start - timedelta(days=1)
+        return last_end.replace(day=1), last_end, 'last month'
+    if joined in ('year', 'ytd', 'this year'):
+        return today.replace(month=1, day=1), today, 'this year'
+
+    parts = joined.split()
+    if len(parts) == 2:
+        try:
+            df = datetime.strptime(parts[0], '%Y-%m-%d').date()
+            dt = datetime.strptime(parts[1], '%Y-%m-%d').date()
+            if df > dt:
+                df, dt = dt, df
+            return df, dt, f'{df} to {dt}'
+        except ValueError:
+            pass
+
+    return month_start, today, 'this month'
+
+
+def _wa_consolidated(tokens):
+    df, dt, label = _wa_period(tokens)
+    segments, totals = compute_consolidated_overview(df, dt)
+    lines = [f'*Consolidated Overview — {label}*', f'_{df} to {dt}_', '']
+    for s in segments:
+        lines.append(f"*{s['name']}*  ({s['count']} entries)")
+        lines.append(f"  Revenue: {_wa_money(s['revenue'])}")
+        lines.append(f"  Expenses: {_wa_money(s['expenses'])}")
+        lines.append(f"  Net: {_wa_money(s['net_profit'])}")
+    lines.append('')
+    lines.append('*TOTAL*')
+    lines.append(f"  Revenue: {_wa_money(totals['revenue'])}")
+    lines.append(f"  Expenses: {_wa_money(totals['expenses'])}")
+    lines.append(f"  Net Profit: {_wa_money(totals['net_profit'])}")
+    return '\n'.join(lines)
+
+
+def _wa_income(tokens):
+    df, dt, label = _wa_period(tokens)
+    stmt = compute_income_statement(df, dt)
+    lines = [f'*Income Statement — {label}*', f'_{df} to {dt}_', '']
+    lines.append(f"Gross Revenue: {_wa_money(stmt['gross_revenue'])}")
+    for name, amt in stmt['statement_expenses']:
+        lines.append(f'  {name}: {_wa_money(amt)}')
+    lines.append(f"Total Expenses: {_wa_money(stmt['total_expenses'])}")
+    lines.append(f"*Net Profit: {_wa_money(stmt['net_profit'])}* ({stmt['profit_margin']:.1f}% margin)")
+    top = stmt['vehicle_breakdown'][:5]
+    if top:
+        lines.append('')
+        lines.append('Top vehicles:')
+        for row in top:
+            lines.append(f"  {row['vehicle'].registration}: {_wa_money(row['net_profit'])}")
+    return '\n'.join(lines)
+
+
+def _wa_payroll(tokens):
+    df, dt, label = _wa_period(tokens)
+    earnings, total_commissions, total_garnish, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
+    lines = [f'*Payroll — {label}*', f'_{df} to {dt}_', '']
+    for e in earnings:
+        lines.append(f"{e['driver'].name} ({e['driver'].role}): "
+                      f"{_wa_money(e['commission'])} accrued, {_wa_money(e['outstanding'])} outstanding")
+    lines.append('')
+    lines.append(f'*Total accrued: {_wa_money(total_commissions)}*')
+    lines.append(f'Paid: {_wa_money(total_paid)}  |  Outstanding: {_wa_money(total_outstanding)}')
+    return '\n'.join(lines)
+
+
+def _wa_cashflow(tokens):
+    df, dt, label = _wa_period(tokens)
+    cf = compute_cash_flow(df, dt)
+    lines = [f'*Cash Flow — {label}*', f'_{df} to {dt}_', '']
+    lines.append(f"Operating: {_wa_money(cf['net_operating'])}")
+    lines.append(f"Investing: {_wa_money(cf['net_investing'])}")
+    lines.append(f"Financing: {_wa_money(cf['net_financing'])}")
+    lines.append(f"*Net Change: {_wa_money(cf['net_change'])}*")
+    lines.append(f"Opening Cash: {_wa_money(cf['opening_cash'])}  |  Closing Cash: {_wa_money(cf['closing_cash'])}")
+    return '\n'.join(lines)
+
+
+def _wa_help(tokens=None):
+    return (
+        '*Transport ERP Report Bot*\n'
+        'Send one of these commands, optionally followed by a period:\n\n'
+        '• *consolidated* — company-wide P&L\n'
+        '• *income* — income statement\n'
+        '• *payroll* — crew commissions\n'
+        '• *cashflow* — cash flow statement\n\n'
+        'Periods: today, yesterday, week, month (default), last month, year, '
+        'or an explicit range like `2026-08-01 2026-08-31`.\n'
+        'Example: `income last month`'
+    )
+
+
+WHATSAPP_COMMANDS = {
+    'consolidated': _wa_consolidated,
+    'overview': _wa_consolidated,
+    'income': _wa_income,
+    'payroll': _wa_payroll,
+    'commissions': _wa_payroll,
+    'cashflow': _wa_cashflow,
+    'cash': _wa_cashflow,
+    'help': _wa_help,
+}
+
+
+def whatsapp_dispatch(text):
+    """Route one inbound message body to a report and return the reply
+    text. Caller (whatsapp_webhook) has already checked the sender is a
+    linked, active user with the 'reports' permission."""
+    tokens = (text or '').strip().split()
+    if not tokens:
+        return _wa_help()
+    command, rest = tokens[0].lower(), tokens[1:]
+    handler = WHATSAPP_COMMANDS.get(command)
+    if not handler:
+        return f'Unrecognized command "{tokens[0]}".\n\n' + _wa_help()
+    try:
+        return handler(rest)
+    except Exception:
+        app.logger.exception('WhatsApp report command failed: %r', text)
+        return 'Sorry, something went wrong generating that report. Try again or contact your admin.'
+
+
+def send_whatsapp_message(to, body):
+    """POST a plain-text reply to a WhatsApp number via Meta's Cloud API.
+    `to` is the digits-only sender id WhatsApp itself hands back in the
+    webhook payload. No-ops (with a log line) if WHATSAPP_TOKEN/
+    WHATSAPP_PHONE_NUMBER_ID aren't configured yet, so the webhook stays
+    functional in dev before credentials are set up."""
+    token = app.config['WHATSAPP_TOKEN']
+    phone_number_id = app.config['WHATSAPP_PHONE_NUMBER_ID']
+    if not token or not phone_number_id:
+        app.logger.warning('WhatsApp not configured — dropped reply to %s', to)
+        return
+    url = f'https://graph.facebook.com/v20.0/{phone_number_id}/messages'
+    payload = {
+        'messaging_product': 'whatsapp',
+        'to': to,
+        'type': 'text',
+        'text': {'body': body[:4096]},
+    }
+    try:
+        resp = requests.post(url, json=payload,
+                             headers={'Authorization': f'Bearer {token}'}, timeout=10)
+        if resp.status_code >= 300:
+            app.logger.error('WhatsApp send failed (%s): %s', resp.status_code, resp.text)
+    except requests.RequestException:
+        app.logger.exception('WhatsApp send request failed')
+
+
+def _whatsapp_signature_valid(raw_body):
+    """Verify Meta's X-Hub-Signature-256 header against WHATSAPP_APP_SECRET
+    so the webhook only acts on requests actually from Meta. Passes
+    (unverified) if no app secret is configured yet, matching how the rest
+    of first-run setup in this app degrades gracefully before secrets are
+    filled in — set WHATSAPP_APP_SECRET before going live."""
+    secret = app.config['WHATSAPP_APP_SECRET']
+    if not secret:
+        return True
+    signature = request.headers.get('X-Hub-Signature-256', '')
+    if not signature.startswith('sha256='):
+        return False
+    expected = hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature[7:], expected)
+
+
+@app.route('/api/whatsapp/webhook', methods=['GET'])
+@csrf.exempt
+def whatsapp_webhook_verify():
+    """Meta's one-time handshake when the webhook URL is registered in the
+    App Dashboard — echoes hub.challenge back only if hub.verify_token
+    matches WHATSAPP_VERIFY_TOKEN, proving this endpoint is under our
+    control."""
+    mode = request.args.get('hub.mode')
+    token = request.args.get('hub.verify_token')
+    challenge = request.args.get('hub.challenge', '')
+    if token and mode == 'subscribe' and token == app.config['WHATSAPP_VERIFY_TOKEN']:
+        return challenge, 200
+    return 'Forbidden', 403
+
+
 @app.route('/api/whatsapp/webhook', methods=['POST'])
 @csrf.exempt
+@limiter.limit('60 per minute')
 def whatsapp_webhook():
-    # Future: parse Twilio/Vonage WhatsApp messages and create daily logs
+    """Inbound WhatsApp messages from Meta's Cloud API. Only text messages
+    from a number linked to an active user with the 'reports' permission
+    get a report reply; every other case still returns 200 (Meta retries
+    non-2xx responses, and there's nothing to fix by retrying an
+    unrecognized sender)."""
+    if not _whatsapp_signature_valid(request.get_data()):
+        return jsonify({'status': 'invalid signature'}), 403
+
+    data = request.get_json(force=True, silent=True) or {}
+    for entry in data.get('entry', []):
+        for change in entry.get('changes', []):
+            value = change.get('value', {})
+            for msg in value.get('messages', []):
+                if msg.get('type') != 'text':
+                    continue
+                sender = msg.get('from', '')
+                body = msg.get('text', {}).get('body', '')
+                if not sender:
+                    continue
+
+                user = User.query.filter_by(whatsapp_phone=sender).first()
+                if not user or not user.is_active:
+                    send_whatsapp_message(sender,
+                        "This number isn't registered on the Transport ERP report bot. "
+                        "Ask an admin to link it under Users.")
+                    continue
+                if not user.has_permission('reports'):
+                    send_whatsapp_message(sender,
+                        "Your account doesn't have Reports access — ask an admin to grant it.")
+                    continue
+
+                send_whatsapp_message(sender, whatsapp_dispatch(body))
+
     return jsonify({'status': 'received'})
 
 
@@ -8755,6 +9034,8 @@ def migrate_db():
             conn.execute(text("ALTER TABLE users ADD COLUMN permissions TEXT DEFAULT '[]'"))
         if 'driver_id' not in user_cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN driver_id INTEGER REFERENCES drivers(id)"))
+        if 'whatsapp_phone' not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN whatsapp_phone VARCHAR(20)"))
 
         # Depots were removed — drop the leftover columns/table from any DB that has them.
         for table in ('vehicles', 'drivers', 'routes'):
@@ -9138,11 +9419,42 @@ with app.app_context():
 if app.config['SYNC_ENABLED']:
     start_sync_thread()
 
+def _disable_console_quick_edit():
+    """A stray click into this console window (to read it, or by
+    accident) triggers Windows Console "Quick Edit Mode": the whole
+    process's console I/O pauses until Enter/Esc is pressed. Since every
+    request thread logs its access line to this console (see
+    werkzeug's log_request), one click freezes every in-flight AND
+    future HTTP request — the server looks completely hung (port still
+    listening, TCP connects fine, but no response ever comes back) until
+    someone notices and hits a key. For an unattended spoke deployment
+    (see SPOKE_SETUP.md's NSSM service-wrap) that's effectively a
+    silent, click-triggered outage. Disabling Quick Edit Mode (keeping
+    Insert Mode) removes the trap. Best-effort: never let a console-mode
+    tweak block startup if the handle/API isn't available."""
+    try:
+        kernel32 = ctypes.windll.kernel32
+        STD_INPUT_HANDLE = -10
+        ENABLE_EXTENDED_FLAGS = 0x0080
+        ENABLE_QUICK_EDIT_MODE = 0x0040
+        ENABLE_INSERT_MODE = 0x0020
+        handle = kernel32.GetStdHandle(STD_INPUT_HANDLE)
+        mode = ctypes.c_uint32()
+        if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+            return
+        new_mode = (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS | ENABLE_INSERT_MODE
+        kernel32.SetConsoleMode(handle, new_mode)
+    except Exception:
+        pass
+
+
 if __name__ == '__main__':
     debug_mode = not IS_PRODUCTION
     host = os.environ.get('HOST', '127.0.0.1' if IS_PRODUCTION else '0.0.0.0')
     port = int(os.environ.get('PORT', 5000))
     if FROZEN:
+        if sys.platform == 'win32':
+            _disable_console_quick_edit()
         # A double-clicked .exe has no terminal to print a URL into —
         # open the browser ourselves. Timer (not a direct call) so it
         # fires shortly after app.run() below has actually bound the

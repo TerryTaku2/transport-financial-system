@@ -22,6 +22,46 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  // ── Mobile nav: hamburger toggle + backdrop ──
+  var sidebarToggle = document.getElementById('sidebarToggle');
+  var sidebarOverlay = document.getElementById('sidebarOverlay');
+  var mobileNavQuery = window.matchMedia('(max-width: 768px)');
+
+  function openSidebar() {
+    if (sidebar) sidebar.classList.add('open');
+    if (sidebarOverlay) sidebarOverlay.classList.add('show');
+    document.body.classList.add('sidebar-locked');
+    if (sidebarToggle) sidebarToggle.setAttribute('aria-expanded', 'true');
+  }
+  function closeSidebar() {
+    if (sidebar) sidebar.classList.remove('open');
+    if (sidebarOverlay) sidebarOverlay.classList.remove('show');
+    document.body.classList.remove('sidebar-locked');
+    if (sidebarToggle) sidebarToggle.setAttribute('aria-expanded', 'false');
+  }
+  if (sidebarToggle) {
+    sidebarToggle.addEventListener('click', function () {
+      if (sidebar && sidebar.classList.contains('open')) closeSidebar();
+      else openSidebar();
+    });
+  }
+  if (sidebarOverlay) sidebarOverlay.addEventListener('click', closeSidebar);
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeSidebar();
+  });
+  if (sidebar) {
+    sidebar.querySelectorAll('.nav-item').forEach(function (link) {
+      link.addEventListener('click', function () {
+        if (mobileNavQuery.matches) closeSidebar();
+      });
+    });
+  }
+  // Dropping below/above the mobile breakpoint (rotation, resize) shouldn't
+  // leave the sidebar open+locked when the layout no longer needs a toggle.
+  mobileNavQuery.addEventListener('change', function (e) {
+    if (!e.matches) closeSidebar();
+  });
+
   // ── Auto-dismiss flash alerts ──
   setTimeout(function () {
     document.querySelectorAll('.alert').forEach(function (el) {

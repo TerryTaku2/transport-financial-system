@@ -15,7 +15,7 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Permissions</th><th>Created</th><th></th></tr>
+        <tr><th>Username</th><th>Email</th><th>Role</th><th>Status</th><th>Permissions</th><th>WhatsApp</th><th>Created</th><th></th></tr>
       </thead>
       <tbody>
         {% for u in users %}
@@ -39,12 +39,20 @@
               {% endif %}
             {% endif %}
           </td>
+          <td>
+            {% if u.whatsapp_phone %}
+              <span class="badge badge-green">{{ u.whatsapp_phone }}</span>
+            {% else %}
+              <span class="badge badge-gray">Not linked</span>
+            {% endif %}
+          </td>
           <td>{{ u.created_at.strftime('%d %b %Y') }}</td>
           <td>
             <div class="actions">
               {% if u.role != 'admin' %}
               <a href="{{ url_for('user_permissions', uid=u.id) }}" class="btn btn-outline btn-xs">Permissions</a>
               {% endif %}
+              <a href="{{ url_for('user_whatsapp', uid=u.id) }}" class="btn btn-outline btn-xs">WhatsApp</a>
               {% if u.id != current_user.id %}
               <form method="POST" action="{{ url_for('user_toggle', uid=u.id) }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -56,7 +64,7 @@
           </td>
         </tr>
         <tr id="pw-{{ u.id }}" style="display:none;">
-          <td colspan="6">
+          <td colspan="8">
             <form method="POST" action="{{ url_for('user_reset_password', uid=u.id) }}" class="flex gap-8 items-center">
   <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="password" name="new_password" placeholder="New password (min 6 chars)" style="max-width:240px;" required>
