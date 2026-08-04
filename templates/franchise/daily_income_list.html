@@ -23,6 +23,14 @@
     <div class="kpi-label">Net Income</div>
     <div class="kpi-value">{{ net_income|currency }}</div>
   </div>
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Total Cash Deposited</div>
+    <div class="kpi-value">{{ fleet_deposited|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Cash Variance (Deposited vs. Net Income)</div>
+    <div class="kpi-value">{{ fleet_variance|currency }}</div>
+  </div>
 </div>
 
 <form method="GET" class="filter-bar mb-24">
@@ -124,71 +132,29 @@
         </div>
         <div class="form-group">
           <label>Income (USD)</label>
-          <input type="number" class="calc-input" name="income" step="0.01" min="0" placeholder="0.00">
+          <input type="number" name="income" step="0.01" min="0" placeholder="0.00"
+                 value="{{ vehicle.daily_fee if vehicle and vehicle.daily_fee is not none else '' }}">
+          {% if vehicle and vehicle.daily_fee is not none %}
+          <div class="form-hint">Defaults to this vehicle's agreed Daily Fee ({{ vehicle.daily_fee|currency }}) — edit if today's collection differs.</div>
+          {% endif %}
         </div>
-        {% if current_user.role == 'admin' %}
-        <div class="form-group">
-          <label>Cash Deposited (USD)</label>
-          <input type="number" class="calc-input" name="deposited" step="0.01" min="0" placeholder="0.00">
-        </div>
-        {% endif %}
         <div class="form-group">
           <label>Description</label>
           <input type="text" name="description" placeholder="Optional note">
         </div>
       </div>
 
-      {% if current_user.role == 'admin' %}
-      <div class="kpi-grid mb-16">
-        <div class="kpi-card kpi-amber">
-          <div class="kpi-label">Variance: Cash Deposited vs. Income (computed)</div>
-          <div class="kpi-value" id="calc-income-variance">$0.00</div>
-        </div>
-      </div>
-      {% else %}
-      <div class="form-hint mb-16">Cash Deposited is recorded by an admin after this entry is saved.</div>
-      {% endif %}
+      <div class="form-hint mb-16">Cash Deposited is recorded once per date for the whole fleet, in Shared Expenditure below.</div>
 
       <button type="submit" class="btn btn-primary"><i data-feather="plus"></i> Add Income Entry</button>
     </form>
   </div>
 </div>
 
-{% if current_user.role == 'admin' %}
-<script>
-(function () {
-  var form = document.getElementById('franchise-daily-income-form');
-  var varEl = document.getElementById('calc-income-variance');
-
-  function num(name) {
-    var v = parseFloat(form.querySelector('[name="' + name + '"]').value);
-    return isNaN(v) ? 0 : v;
-  }
-
-  function fmt(v) {
-    return '$' + v.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2});
-  }
-
-  function recalc() {
-    varEl.textContent = fmt(num('deposited') - num('income'));
-  }
-
-  Array.prototype.forEach.call(form.querySelectorAll('.calc-input'), function (input) {
-    input.addEventListener('input', recalc);
-  });
-  recalc();
-})();
-</script>
-{% endif %}
-
 <div class="kpi-grid mb-16">
   <div class="kpi-card kpi-blue">
     <div class="kpi-label">{{ vehicle.number_plate }} — Total Income</div>
     <div class="kpi-value">{{ vehicle_income_total|currency }}</div>
-  </div>
-  <div class="kpi-card kpi-green">
-    <div class="kpi-label">{{ vehicle.number_plate }} — Total Cash Deposited</div>
-    <div class="kpi-value">{{ vehicle_deposited_total|currency }}</div>
   </div>
 </div>
 
@@ -201,11 +167,8 @@
         <tr>
           <th>Date</th>
           <th class="text-right">Income</th>
-          <th class="text-right">Cash Deposited</th>
-          <th class="text-right">Variance</th>
           <th>Description</th>
           {% if current_user.role == 'admin' %}
-          <th></th>
           <th></th>
           {% endif %}
         </tr>
@@ -215,17 +178,8 @@
         <tr>
           <td>{{ e.entry_date }}</td>
           <td class="text-right">{{ e.income|currency }}</td>
-          <td class="text-right">{{ e.deposited|currency }}</td>
-          <td class="text-right"><span class="{% if e.deposited - e.income < 0 %}text-danger{% elif e.deposited - e.income > 0 %}text-warning{% endif %}">{{ (e.deposited - e.income)|currency }}</span></td>
           <td>{{ e.description or '—' }}</td>
           {% if current_user.role == 'admin' %}
-          <td>
-            <form method="POST" action="{{ url_for('franchise_daily_income_deposit', eid=e.id) }}" style="display:flex;gap:4px;align-items:center;margin:0;">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="number" name="deposited" step="0.01" min="0" value="{{ e.deposited }}" style="width:90px;font-size:12px;padding:4px 6px;">
-              <button class="btn btn-outline btn-xs" title="Record cash deposited">Save</button>
-            </form>
-          </td>
           <td class="btn-group">
             <a href="{{ url_for('franchise_daily_income_edit', eid=e.id) }}" class="btn btn-outline btn-xs">Edit</a>
             <form method="POST" action="{{ url_for('franchise_daily_income_delete', eid=e.id) }}" data-confirm="Delete this daily income entry?">
@@ -289,6 +243,13 @@
           <label>Other Expenditure (USD)</label>
           <input type="number" class="calc-input" name="other_expenditure" step="0.01" min="0" placeholder="0.00">
         </div>
+        {% if current_user.role == 'admin' %}
+        <div class="form-group">
+          <label>Cash Deposited (USD)</label>
+          <input type="number" name="deposited" step="0.01" min="0" placeholder="0.00">
+          <div class="form-hint">One lump sum for this date — the total cash banked covering every vehicle's collections combined.</div>
+        </div>
+        {% endif %}
         <div class="form-group">
           <label>Description</label>
           <input type="text" name="description" placeholder="Optional note">
@@ -347,8 +308,10 @@
           <th class="text-right">Wages</th>
           <th class="text-right">Other</th>
           <th class="text-right">Total Expenditure</th>
+          <th class="text-right">Cash Deposited</th>
           <th>Description</th>
           {% if current_user.role == 'admin' %}
+          <th></th>
           <th></th>
           {% endif %}
         </tr>
@@ -363,8 +326,16 @@
           <td class="text-right">{{ e.exp_wages|currency }}</td>
           <td class="text-right">{{ e.other_expenditure|currency }}</td>
           <td class="text-right">{{ e.total_expenditure|currency }}</td>
+          <td class="text-right">{{ e.deposited|currency }}</td>
           <td>{{ e.description or '—' }}</td>
           {% if current_user.role == 'admin' %}
+          <td>
+            <form method="POST" action="{{ url_for('franchise_daily_income_deposit', eid=e.id) }}" style="display:flex;gap:4px;align-items:center;margin:0;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="number" name="deposited" step="0.01" min="0" value="{{ e.deposited }}" style="width:90px;font-size:12px;padding:4px 6px;">
+              <button class="btn btn-outline btn-xs" title="Record cash deposited">Save</button>
+            </form>
+          </td>
           <td class="btn-group">
             <a href="{{ url_for('franchise_daily_income_edit', eid=e.id) }}" class="btn btn-outline btn-xs">Edit</a>
             <form method="POST" action="{{ url_for('franchise_daily_income_delete', eid=e.id) }}" data-confirm="Delete this expenditure entry?">

@@ -6917,13 +6917,19 @@ def franchise_daily_income_list():
     expenditure_entries = _franchise_income_period_rows(FranchiseDailyIncome, 'entry_date', None, df, dt)
     fleet_income = _franchise_fleet_income_total(FranchiseDailyIncome, 'entry_date', df, dt)
     total_expenditure = sum(e.total_expenditure for e in expenditure_entries)
+    # Cash Deposited is one lump sum per date covering every vehicle's
+    # collections combined, not split per vehicle — so it's recorded on the
+    # shared (vehicle-less) expenditure row, and the fleet variance compares
+    # it against the whole fleet's net income for the period, not any one
+    # vehicle's.
+    fleet_deposited = sum(e.deposited for e in expenditure_entries)
+    net_income = fleet_income - total_expenditure
     return render_template('franchise/daily_income_list.html', vehicles=all_vehicles, vehicle=vehicle,
         income_entries=income_entries, expenditure_entries=expenditure_entries,
         period=period, today=today.strftime('%Y-%m-%d'),
         vehicle_income_total=sum(e.income for e in income_entries),
-        vehicle_deposited_total=sum(e.deposited for e in income_entries),
         fleet_income=fleet_income, total_expenditure=total_expenditure,
-        net_income=fleet_income - total_expenditure)
+        net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_deposited - net_income)
 
 
 @app.route('/franchise/daily-income/add', methods=['POST'])
@@ -6959,14 +6965,22 @@ def franchise_daily_income_add():
         else:
             entry = FranchiseDailyIncome(entry_date=entry_date, vehicle_id=vehicle.id if vehicle else None)
             db.session.add(entry)
-        entry.income = form_float(request.form, 'income', required=False, default=0)
+        # Defaults to this vehicle's agreed Daily Fee (set on the vehicle
+        # record) when left blank, rather than 0 — the form pre-fills it
+        # too, but a blank submission (e.g. a stale offline form) should
+        # still land on the agreed amount, not silently record nothing.
+        income_default = vehicle.daily_fee if vehicle and vehicle.daily_fee is not None else 0
+        entry.income = form_float(request.form, 'income', required=False, default=income_default)
         entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
-        # Cash Deposited is admin-only (see franchise_daily_income_deposit) —
-        # a non-admin submission is silently ignored rather than trusted,
-        # since the field is hidden from their form but a crafted POST could
-        # still include it. Preserves whatever an admin already recorded on
-        # a restored soft-deleted row instead of zeroing it back out.
-        if current_user.role == 'admin':
+        # Cash Deposited is one lump sum per date covering every vehicle
+        # combined, entered only on the shared (vehicle-less) row — see
+        # franchise_daily_income_list. Admin-only (see
+        # franchise_daily_income_deposit) — a non-admin or vehicle-scoped
+        # submission is silently ignored rather than trusted, since the
+        # field is hidden from those forms but a crafted POST could still
+        # include it. Preserves whatever an admin already recorded on a
+        # restored soft-deleted row instead of zeroing it back out.
+        if current_user.role == 'admin' and not vehicle:
             entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
         elif entry.deposited is None:
             entry.deposited = 0
@@ -7023,11 +7037,11 @@ def franchise_daily_income_edit(eid):
         entry.entry_date = parse_date(request.form['entry_date'])
         if entry.vehicle_id:
             entry.income = form_float(request.form, 'income', required=False, default=0)
-            entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
         else:
             for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
                 setattr(entry, f, form_float(request.form, f, label=lbl, required=False, default=0))
             entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
+            entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
         entry.description = request.form.get('description', '').strip()
         log_audit('UPDATE', 'franchise_daily_income', entry.id, f'Updated daily franchise entry for {entry.entry_date}')
         touch_sync_fields(entry)
@@ -7098,13 +7112,16 @@ def franchise_weekly_income_list():
     expenditure_entries = _franchise_income_period_rows(FranchiseWeeklyIncome, 'week_start', None, df, dt)
     fleet_income = _franchise_fleet_income_total(FranchiseWeeklyIncome, 'week_start', df, dt)
     total_expenditure = sum(e.total_expenditure for e in expenditure_entries)
+    # See franchise_daily_income_list — Cash Deposited is one lump sum per
+    # week covering every vehicle combined, recorded on the shared row.
+    fleet_deposited = sum(e.deposited for e in expenditure_entries)
+    net_income = fleet_income - total_expenditure
     return render_template('franchise/weekly_income_list.html', vehicles=all_vehicles, vehicle=vehicle,
         income_entries=income_entries, expenditure_entries=expenditure_entries,
         period=period, today=today.strftime('%Y-%m-%d'),
         vehicle_income_total=sum(e.income for e in income_entries),
-        vehicle_deposited_total=sum(e.deposited for e in income_entries),
         fleet_income=fleet_income, total_expenditure=total_expenditure,
-        net_income=fleet_income - total_expenditure)
+        net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_deposited - net_income)
 
 
 @app.route('/franchise/weekly-income/add', methods=['POST'])
@@ -7137,11 +7154,15 @@ def franchise_weekly_income_add():
         else:
             entry = FranchiseWeeklyIncome(week_start=week_start, vehicle_id=vehicle.id if vehicle else None)
             db.session.add(entry)
-        entry.income = form_float(request.form, 'income', required=False, default=0)
+        # Defaults to this vehicle's agreed Weekly Fee when left blank — see
+        # franchise_daily_income_add.
+        income_default = vehicle.weekly_fee if vehicle and vehicle.weekly_fee is not None else 0
+        entry.income = form_float(request.form, 'income', required=False, default=income_default)
         entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
-        # Cash Deposited is admin-only — see franchise_daily_income_add /
+        # Cash Deposited is one lump sum per week, entered only on the
+        # shared row — see franchise_daily_income_add /
         # franchise_weekly_income_deposit.
-        if current_user.role == 'admin':
+        if current_user.role == 'admin' and not vehicle:
             entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
         elif entry.deposited is None:
             entry.deposited = 0
@@ -7195,11 +7216,11 @@ def franchise_weekly_income_edit(eid):
         entry.week_start = raw_date - timedelta(days=raw_date.weekday())
         if entry.vehicle_id:
             entry.income = form_float(request.form, 'income', required=False, default=0)
-            entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
         else:
             for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
                 setattr(entry, f, form_float(request.form, f, label=lbl, required=False, default=0))
             entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
+            entry.deposited = form_float(request.form, 'deposited', required=False, default=0)
         entry.description = request.form.get('description', '').strip()
         log_audit('UPDATE', 'franchise_weekly_income', entry.id, f'Updated weekly franchise entry for week of {entry.week_start}')
         touch_sync_fields(entry)

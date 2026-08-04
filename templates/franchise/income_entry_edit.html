@@ -26,10 +26,6 @@
           <label>Income (USD)</label>
           <input type="number" name="income" step="0.01" min="0" value="{{ entry.income }}">
         </div>
-        <div class="form-group">
-          <label>Cash Deposited (USD)</label>
-          <input type="number" name="deposited" step="0.01" min="0" value="{{ entry.deposited }}">
-        </div>
         {% else %}
         <div class="form-group">
           <label>Traffic Fines (USD)</label>
@@ -50,6 +46,11 @@
         <div class="form-group">
           <label>Other Expenditure (USD)</label>
           <input type="number" name="other_expenditure" step="0.01" min="0" value="{{ entry.other_expenditure }}">
+        </div>
+        <div class="form-group">
+          <label>Cash Deposited (USD)</label>
+          <input type="number" name="deposited" step="0.01" min="0" value="{{ entry.deposited }}">
+          <div class="form-hint">One lump sum for this date/week covering every vehicle's collections combined.</div>
         </div>
         {% endif %}
 
