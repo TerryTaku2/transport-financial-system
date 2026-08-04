@@ -8,7 +8,7 @@
     <h1>Crew Payroll / Commissions</h1>
     <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; based on gross revenue benchmarks</div>
   </div>
-  <div style="display:flex;gap:8px;">
+  <div style="display:flex;gap:8px;flex-wrap:wrap;">
     <a href="{{ url_for('commission_payments_list') }}" class="btn btn-outline">
       <i data-feather="list"></i> Payment History
     </a>

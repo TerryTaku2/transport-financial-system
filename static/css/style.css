@@ -109,6 +109,11 @@ a:hover { color: var(--primary-hover); }
 .main {
   margin-left: var(--sidebar-w);
   flex: 1;
+  min-width: 0; /* flex items default to min-width:auto (content-based), which
+    stops them shrinking below a wide child's natural width (e.g. an unwrapped
+    table) — that forced .content wider than the viewport on mobile, and
+    overflow-x:hidden on <body> silently clipped columns instead of letting
+    .table-wrap's own horizontal scroll handle it. */
   display: flex;
   flex-direction: column;
   min-height: 100vh;
@@ -181,7 +186,9 @@ a:hover { color: var(--primary-hover); }
 body.sidebar-locked { overflow: hidden; }
 
 /* ── Content ── */
-.content { padding: 24px; flex: 1; }
+.content { padding: 24px; flex: 1; min-width: 0; } /* .main is flex-direction:column, so
+  .content is a flex item on the cross axis too — same min-width:auto shrink-blocking as
+  .main itself (see above) if a wide table doesn't get the chance to hand off to .table-wrap's scroll. */
 
 /* ── Alerts / Flash ── */
 .alerts { padding: 0 24px; }

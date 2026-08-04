@@ -871,9 +871,13 @@ class FranchiseWeeklyIncome(db.Model):
     separate weekly franchise fee — kept as its own entity rather than
     extra columns on the same date row, since a vehicle's daily and weekly
     dues are independent obligations, not two figures on one entry.
-    vehicle_id may be null for a whole-franchise entry, same as above."""
+    vehicle_id may be null for a whole-franchise entry, same as above.
+
+    Unlike FranchiseDailyIncome, there is no (week_start, vehicle_id)
+    uniqueness — a vehicle can log more than one entry for the same week
+    (e.g. several partial payments through the week), so a repeat Add isn't
+    blocked the way a repeat daily entry still is."""
     __tablename__ = 'franchise_weekly_income'
-    __table_args__ = (db.UniqueConstraint('week_start', 'vehicle_id', name='uq_franchise_weekly_income_week_vehicle'),)
     id = db.Column(db.Integer, primary_key=True)
     week_start = db.Column(db.Date, nullable=False)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('franchise_vehicles.id'), nullable=True)
@@ -7142,18 +7146,13 @@ def franchise_weekly_income_add():
         raw_date = parse_date(request.form['week_start'])
         week_start = raw_date - timedelta(days=raw_date.weekday())  # normalize to that week's Monday
 
-        # See franchise_daily_income_add — restore a soft-deleted row at
-        # the same (week_start, vehicle_id) instead of inserting a fresh
-        # one, since that DB-level uniqueness still applies to it.
-        entry = (FranchiseWeeklyIncome.query.execution_options(include_deleted=True)
-                .filter_by(week_start=week_start, vehicle_id=vehicle.id if vehicle else None).first())
-        if entry and entry.deleted_at is None:
-            raise ValueError(f'A weekly income entry for {label} for the week of {week_start} already exists — delete it first to re-enter.')
-        if entry:
-            entry.deleted_at = None
-        else:
-            entry = FranchiseWeeklyIncome(week_start=week_start, vehicle_id=vehicle.id if vehicle else None)
-            db.session.add(entry)
+        # Unlike franchise_daily_income_add, this always inserts a fresh row
+        # rather than looking for one to restore/reuse at the same
+        # (week_start, vehicle_id) — a vehicle can have more than one weekly
+        # income entry for the same week (e.g. several partial payments), so
+        # there's no single existing slot to find.
+        entry = FranchiseWeeklyIncome(week_start=week_start, vehicle_id=vehicle.id if vehicle else None)
+        db.session.add(entry)
         # Defaults to this vehicle's agreed Weekly Fee when left blank — see
         # franchise_daily_income_add.
         income_default = vehicle.weekly_fee if vehicle and vehicle.weekly_fee is not None else 0
@@ -9560,6 +9559,48 @@ def migrate_db():
             weekly_income_cols = {c['name']: c for c in inspector.get_columns('franchise_weekly_income')}
             if 'vehicle_id' not in weekly_income_cols or not weekly_income_cols['vehicle_id']['nullable']:
                 conn.execute(text("DROP TABLE franchise_weekly_income"))
+
+        # A vehicle can now log more than one weekly income entry for the
+        # same week (e.g. several partial payments) — the old
+        # one-entry-per-(week, vehicle) UNIQUE constraint blocked that with
+        # an "already exists" error on the second Add. SQLite has no ALTER
+        # TABLE DROP CONSTRAINT, so the table is rebuilt without it; unlike
+        # the drop-and-let-create_all-rebuild above (which only ever ran
+        # against tables from before real income data existed), this one
+        # copies existing rows across instead of discarding them.
+        if inspector.has_table('franchise_weekly_income'):
+            weekly_constraints = inspector.get_unique_constraints('franchise_weekly_income')
+            if any(c['name'] == 'uq_franchise_weekly_income_week_vehicle' for c in weekly_constraints):
+                conn.execute(text("""
+                    CREATE TABLE franchise_weekly_income_new (
+                        id INTEGER NOT NULL,
+                        week_start DATE NOT NULL,
+                        vehicle_id INTEGER,
+                        income FLOAT NOT NULL,
+                        exp_traffic_fines FLOAT NOT NULL,
+                        exp_facilitation_fees FLOAT NOT NULL,
+                        exp_workshop FLOAT NOT NULL,
+                        exp_wages FLOAT NOT NULL,
+                        other_expenditure FLOAT NOT NULL,
+                        deposited FLOAT NOT NULL,
+                        description TEXT,
+                        created_by INTEGER,
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        sync_uuid VARCHAR(36),
+                        pending_push BOOLEAN DEFAULT 0,
+                        last_modified_site VARCHAR(50),
+                        deleted_at DATETIME,
+                        last_synced_updated_at DATETIME,
+                        server_touched_at DATETIME,
+                        PRIMARY KEY (id),
+                        FOREIGN KEY(vehicle_id) REFERENCES franchise_vehicles (id),
+                        FOREIGN KEY(created_by) REFERENCES users (id)
+                    )
+                """))
+                conn.execute(text("INSERT INTO franchise_weekly_income_new SELECT * FROM franchise_weekly_income"))
+                conn.execute(text("DROP TABLE franchise_weekly_income"))
+                conn.execute(text("ALTER TABLE franchise_weekly_income_new RENAME TO franchise_weekly_income"))
 
         if inspector.has_table('franchise_collections'):
             collection_cols = [c['name'] for c in inspector.get_columns('franchise_collections')]

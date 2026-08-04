@@ -9,7 +9,7 @@
   <p style="color:var(--text-secondary);max-width:380px;margin-bottom:28px;">
     Your account has no permissions yet. Please contact your administrator to grant you access to the relevant sections.
   </p>
-  <div style="display:flex;gap:10px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;">
     <a href="{{ url_for('change_password') }}" class="btn btn-outline">Change Password</a>
     <a href="{{ url_for('logout') }}" class="btn btn-outline">Sign Out</a>
   </div>
