@@ -7028,6 +7028,27 @@ def _franchise_fleet_income_total(model_cls, date_field, df, dt):
     return sum(e.income for e in q.all())
 
 
+def _franchise_income_by_vehicle_on(model_cls, date_field, target_date, vehicles):
+    """The other cut of the same data as _franchise_income_period_rows: one
+    row per vehicle for a single date/week, instead of one row per date/week
+    for a single vehicle — so all vehicles can be scanned side by side for a
+    given day/week (see the "By Date"/"By Week" view on the Daily/Weekly
+    Income pages). A vehicle can have more than one entry on the same
+    week_start (partial payments — see FranchiseWeeklyIncome), so entries
+    are summed per vehicle rather than assumed unique."""
+    col = getattr(model_cls, date_field)
+    entries = model_cls.query.filter(col == target_date, model_cls.vehicle_id.isnot(None)).all()
+    by_vehicle = {}
+    for e in entries:
+        by_vehicle.setdefault(e.vehicle_id, []).append(e)
+    rows = []
+    for v in vehicles:
+        v_entries = by_vehicle.get(v.id, [])
+        rows.append(dict(vehicle=v, entries=v_entries, income=sum(e.income for e in v_entries),
+                          description='; '.join(e.description for e in v_entries if e.description)))
+    return rows
+
+
 @app.route('/franchise/daily-income')
 @login_required
 @permission_required('franchise')
@@ -7059,12 +7080,25 @@ def franchise_daily_income_list():
     # vehicle's.
     fleet_deposited = sum(e.deposited for e in expenditure_entries)
     net_income = fleet_income - total_expenditure
+
+    # "By Date" view — every vehicle's income for one calendar date side by
+    # side, complementing the "By Vehicle" view above which is one vehicle
+    # across many dates. See _franchise_income_by_vehicle_on.
+    view = request.args.get('view', 'vehicle')
+    on_date = parse_date(request.args.get('on_date')) or today
+    by_date_rows = _franchise_income_by_vehicle_on(FranchiseDailyIncome, 'entry_date', on_date, all_vehicles) \
+        if view == 'date' else None
+    by_date_total = sum(r['income'] for r in by_date_rows) if by_date_rows is not None else 0
+    by_date_missing = sum(1 for r in by_date_rows if not r['entries']) if by_date_rows is not None else 0
+
     return render_template('franchise/daily_income_list.html', vehicles=all_vehicles, vehicle=vehicle,
         income_entries=income_entries, expenditure_entries=expenditure_entries,
         period=period, today=today.strftime('%Y-%m-%d'),
         vehicle_income_total=sum(e.income for e in income_entries),
         fleet_income=fleet_income, total_expenditure=total_expenditure,
-        net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_deposited - net_income)
+        net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_deposited - net_income,
+        view=view, on_date=on_date.strftime('%Y-%m-%d'), by_date_rows=by_date_rows, by_date_total=by_date_total,
+        by_date_missing=by_date_missing)
 
 
 @app.route('/franchise/daily-income/add', methods=['POST'])
@@ -7139,6 +7173,69 @@ def franchise_daily_income_add():
         flash(str(e), 'danger')
 
     return redirect(url_for('franchise_daily_income_list', vehicle_id=vehicle_id, period=period))
+
+
+@app.route('/franchise/daily-income/bulk-fill', methods=['POST'])
+@login_required
+@permission_required('franchise')
+def franchise_daily_income_bulk_fill():
+    """One-click alternative to picking each vehicle from the dropdown and
+    submitting the Add Income form 100+ times over — most franchise vehicles
+    charge the same flat daily fee, so on the "By Date" view an admin can
+    fill every vehicle that doesn't yet have an entry for that date in one
+    submission instead. A vehicle with its own agreed Daily Fee (see
+    FranchiseVehicle.daily_fee) still gets that fee rather than the typed
+    amount, so this only stands in for the vehicles without one — it never
+    overrides an already-agreed rate. Vehicles that already have a
+    (non-deleted) entry for the date are left untouched, same as the
+    single-entry Add form's own duplicate guard."""
+    period = request.form.get('period', 'month')
+    try:
+        on_date = parse_date(request.form['on_date'])
+        amount = form_float(request.form, 'amount', label='Income amount', required=True, min_value=0)
+    except KeyError as e:
+        flash(f'Missing required field: {e}', 'danger')
+        return redirect(url_for('franchise_daily_income_list', view='date', period=period))
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('franchise_daily_income_list', view='date', period=period))
+
+    vehicles = FranchiseVehicle.query.filter_by(status='active').all()
+    already_recorded = {e.vehicle_id for e in FranchiseDailyIncome.query
+                         .filter_by(entry_date=on_date).filter(FranchiseDailyIncome.vehicle_id.isnot(None)).all()}
+    # Soft-deleted rows at this (date, vehicle) slot must be restored in
+    # place rather than left alone — a fresh INSERT would collide with them
+    # on the unique constraint, same as franchise_daily_income_add.
+    deleted_by_vehicle = {e.vehicle_id: e for e in FranchiseDailyIncome.query.execution_options(include_deleted=True)
+                           .filter_by(entry_date=on_date).filter(FranchiseDailyIncome.vehicle_id.isnot(None),
+                                                                  FranchiseDailyIncome.deleted_at.isnot(None)).all()}
+
+    filled = 0
+    for v in vehicles:
+        if v.id in already_recorded:
+            continue
+        entry = deleted_by_vehicle.get(v.id)
+        if entry:
+            entry.deleted_at = None
+        else:
+            entry = FranchiseDailyIncome(entry_date=on_date, vehicle_id=v.id)
+            db.session.add(entry)
+        entry.income = v.daily_fee if v.daily_fee is not None else amount
+        entry.created_by = current_user.id
+        touch_sync_fields(entry)
+        filled += 1
+
+    if filled:
+        db.session.flush()
+        log_audit('CREATE', 'franchise_daily_income', None,
+                  f'Bulk-filled daily income (default {amount}) for {filled} vehicle(s) without an entry on {on_date}')
+        db.session.commit()
+        flash(f'Recorded daily income for {filled} vehicle(s) on {on_date}.', 'success')
+    else:
+        db.session.rollback()
+        flash(f'Every active vehicle already has a daily income entry for {on_date}.', 'info')
+
+    return redirect(url_for('franchise_daily_income_list', view='date', on_date=on_date.strftime('%Y-%m-%d'), period=period))
 
 
 @app.route('/franchise/daily-income/<int:eid>/deposit', methods=['POST'])
@@ -7254,12 +7351,23 @@ def franchise_weekly_income_list():
     # week covering every vehicle combined, recorded on the shared row.
     fleet_deposited = sum(e.deposited for e in expenditure_entries)
     net_income = fleet_income - total_expenditure
+
+    # "By Week" view — every vehicle's income for one week side by side. See
+    # franchise_daily_income_list's "By Date" view / _franchise_income_by_vehicle_on.
+    view = request.args.get('view', 'vehicle')
+    on_week_raw = parse_date(request.args.get('on_week')) or today
+    on_week = on_week_raw - timedelta(days=on_week_raw.weekday())
+    by_date_rows = _franchise_income_by_vehicle_on(FranchiseWeeklyIncome, 'week_start', on_week, all_vehicles) \
+        if view == 'date' else None
+    by_date_total = sum(r['income'] for r in by_date_rows) if by_date_rows is not None else 0
+
     return render_template('franchise/weekly_income_list.html', vehicles=all_vehicles, vehicle=vehicle,
         income_entries=income_entries, expenditure_entries=expenditure_entries,
         period=period, today=today.strftime('%Y-%m-%d'),
         vehicle_income_total=sum(e.income for e in income_entries),
         fleet_income=fleet_income, total_expenditure=total_expenditure,
-        net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_deposited - net_income)
+        net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_deposited - net_income,
+        view=view, on_week=on_week.strftime('%Y-%m-%d'), by_date_rows=by_date_rows, by_date_total=by_date_total)
 
 
 @app.route('/franchise/weekly-income/add', methods=['POST'])

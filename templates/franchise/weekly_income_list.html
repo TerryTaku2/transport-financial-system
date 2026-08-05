@@ -38,13 +38,71 @@
   <div class="form-group">
     <label>Period</label>
     <div class="btn-group">
-      <a href="{{ url_for('franchise_weekly_income_list', vehicle_id=vehicle.id if vehicle else '', period='today') }}" class="btn btn-xs {% if period=='today' %}btn-primary{% else %}btn-outline{% endif %}">Today</a>
-      <a href="{{ url_for('franchise_weekly_income_list', vehicle_id=vehicle.id if vehicle else '', period='week') }}" class="btn btn-xs {% if period=='week' %}btn-primary{% else %}btn-outline{% endif %}">This Week</a>
-      <a href="{{ url_for('franchise_weekly_income_list', vehicle_id=vehicle.id if vehicle else '', period='month') }}" class="btn btn-xs {% if period=='month' %}btn-primary{% else %}btn-outline{% endif %}">This Month</a>
-      <a href="{{ url_for('franchise_weekly_income_list', vehicle_id=vehicle.id if vehicle else '', period='all') }}" class="btn btn-xs {% if period=='all' %}btn-primary{% else %}btn-outline{% endif %}">All Time</a>
+      <a href="{{ url_for('franchise_weekly_income_list', vehicle_id=vehicle.id if vehicle else '', period='today', view=view) }}" class="btn btn-xs {% if period=='today' %}btn-primary{% else %}btn-outline{% endif %}">Today</a>
+      <a href="{{ url_for('franchise_weekly_income_list', vehicle_id=vehicle.id if vehicle else '', period='week', view=view) }}" class="btn btn-xs {% if period=='week' %}btn-primary{% else %}btn-outline{% endif %}">This Week</a>
+      <a href="{{ url_for('franchise_weekly_income_list', vehicle_id=vehicle.id if vehicle else '', period='month', view=view) }}" class="btn btn-xs {% if period=='month' %}btn-primary{% else %}btn-outline{% endif %}">This Month</a>
+      <a href="{{ url_for('franchise_weekly_income_list', vehicle_id=vehicle.id if vehicle else '', period='all', view=view) }}" class="btn btn-xs {% if period=='all' %}btn-primary{% else %}btn-outline{% endif %}">All Time</a>
+    </div>
+  </div>
+  <div class="form-group">
+    <label>View</label>
+    <div class="btn-group">
+      <a href="{{ url_for('franchise_weekly_income_list', vehicle_id=vehicle.id if vehicle else '', period=period) }}" class="btn btn-xs {% if view=='vehicle' %}btn-primary{% else %}btn-outline{% endif %}">By Vehicle</a>
+      <a href="{{ url_for('franchise_weekly_income_list', period=period, view='date', on_week=on_week) }}" class="btn btn-xs {% if view=='date' %}btn-primary{% else %}btn-outline{% endif %}">By Week (all vehicles)</a>
     </div>
   </div>
 </form>
+
+{% if view == 'date' %}
+<h2 class="mb-8">Income — all vehicles, by week</h2>
+<div class="card mb-24">
+  <div class="card-header">
+    <form method="GET" style="display:flex;gap:10px;align-items:flex-end;margin:0;">
+      <input type="hidden" name="period" value="{{ period }}">
+      <input type="hidden" name="view" value="date">
+      <div class="form-group" style="margin:0;">
+        <label>Any Date in the Week</label>
+        <input type="date" name="on_week" value="{{ on_week }}">
+        <div class="form-hint">Rounded to that week's Monday automatically.</div>
+      </div>
+      <button type="submit" class="btn btn-outline btn-xs">Go</button>
+    </form>
+  </div>
+  {% if by_date_rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Vehicle</th>
+          <th>Franchisee</th>
+          <th class="text-right">Income</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in by_date_rows %}
+        <tr>
+          <td>{{ r.vehicle.number_plate }}</td>
+          <td>{{ r.vehicle.franchisee_name }}</td>
+          <td class="text-right">{% if r.entries %}{{ r.income|currency }}{% else %}<span class="form-hint">— not recorded —</span>{% endif %}</td>
+          <td>{{ r.description or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th colspan="2">Total</th>
+          <th class="text-right">{{ by_date_total|currency }}</th>
+          <th></th>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No franchise vehicles registered yet.</p></div>
+  {% endif %}
+</div>
+{% else %}
 
 <h2 class="mb-8">Income — by vehicle</h2>
 
@@ -271,6 +329,8 @@
     </form>
   </div>
 </div>
+{% endif %}
+
 {% endif %}
 
 <h2 class="mb-8">Expenditure — shared across all vehicles</h2>
