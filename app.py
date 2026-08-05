@@ -7182,13 +7182,17 @@ def franchise_daily_income_bulk_fill():
     """One-click alternative to picking each vehicle from the dropdown and
     submitting the Add Income form 100+ times over — most franchise vehicles
     charge the same flat daily fee, so on the "By Date" view an admin can
-    fill every vehicle that doesn't yet have an entry for that date in one
-    submission instead. A vehicle with its own agreed Daily Fee (see
-    FranchiseVehicle.daily_fee) still gets that fee rather than the typed
-    amount, so this only stands in for the vehicles without one — it never
-    overrides an already-agreed rate. Vehicles that already have a
-    (non-deleted) entry for the date are left untouched, same as the
-    single-entry Add form's own duplicate guard."""
+    fill many vehicles at once instead. Only fills vehicles explicitly
+    checked in vehicle_ids — the "By Date" table lists every vehicle
+    without an entry pre-checked, so an admin can uncheck the ones that
+    didn't run/pay that day (rather than everyone being forced to a flat fee
+    regardless of whether they were actually out that day). A vehicle with
+    its own agreed Daily Fee (see FranchiseVehicle.daily_fee) still gets
+    that fee rather than the typed amount — this only stands in for
+    vehicles without one, it never overrides an already-agreed rate.
+    Vehicles that already have a (non-deleted) entry for the date are
+    skipped even if somehow checked, same as the single-entry Add form's
+    own duplicate guard."""
     period = request.form.get('period', 'month')
     try:
         on_date = parse_date(request.form['on_date'])
@@ -7200,7 +7204,14 @@ def franchise_daily_income_bulk_fill():
         flash(str(e), 'danger')
         return redirect(url_for('franchise_daily_income_list', view='date', period=period))
 
-    vehicles = FranchiseVehicle.query.filter_by(status='active').all()
+    selected_ids = set(request.form.getlist('vehicle_ids', type=int))
+    if not selected_ids:
+        flash('No vehicles selected — check the vehicles to fill, or uncheck the ones that didn\'t pay '
+              'that day, before submitting.', 'warning')
+        return redirect(url_for('franchise_daily_income_list', view='date',
+                                 on_date=on_date.strftime('%Y-%m-%d'), period=period))
+
+    vehicles = FranchiseVehicle.query.filter(FranchiseVehicle.id.in_(selected_ids), FranchiseVehicle.status == 'active').all()
     already_recorded = {e.vehicle_id for e in FranchiseDailyIncome.query
                          .filter_by(entry_date=on_date).filter(FranchiseDailyIncome.vehicle_id.isnot(None)).all()}
     # Soft-deleted rows at this (date, vehicle) slot must be restored in
@@ -7233,7 +7244,55 @@ def franchise_daily_income_bulk_fill():
         flash(f'Recorded daily income for {filled} vehicle(s) on {on_date}.', 'success')
     else:
         db.session.rollback()
-        flash(f'Every active vehicle already has a daily income entry for {on_date}.', 'info')
+        flash(f'No entries created — the selected vehicle(s) already have a daily income entry for {on_date}.', 'info')
+
+    return redirect(url_for('franchise_daily_income_list', view='date', on_date=on_date.strftime('%Y-%m-%d'), period=period))
+
+
+@app.route('/franchise/daily-income/bulk-delete', methods=['POST'])
+@login_required
+@admin_required
+def franchise_daily_income_bulk_delete():
+    """Companion to bulk-fill, for the other half of the same mistake: a
+    flat Fill assumes every vehicle ran that day, so any vehicle that was
+    actually absent/didn't pay ends up with a wrong entry that needs
+    clearing again. Lets an admin review the whole day's entries on the "By
+    Date" view, check the specific vehicles whose entry was wrong, and
+    remove them all in one submission instead of hunting each one down on
+    its own per-vehicle tab. Same soft-delete as the single-entry Delete
+    button (see franchise_daily_income_delete)."""
+    period = request.form.get('period', 'month')
+    try:
+        on_date = parse_date(request.form['on_date'])
+    except KeyError as e:
+        flash(f'Missing required field: {e}', 'danger')
+        return redirect(url_for('franchise_daily_income_list', view='date', period=period))
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('franchise_daily_income_list', view='date', period=period))
+
+    selected_ids = set(request.form.getlist('vehicle_ids', type=int))
+    if not selected_ids:
+        flash('No vehicles selected — check the vehicles whose entry you want to remove.', 'warning')
+        return redirect(url_for('franchise_daily_income_list', view='date',
+                                 on_date=on_date.strftime('%Y-%m-%d'), period=period))
+
+    entries = FranchiseDailyIncome.query.filter(
+        FranchiseDailyIncome.entry_date == on_date, FranchiseDailyIncome.vehicle_id.in_(selected_ids)).all()
+    deleted = 0
+    for entry in entries:
+        log_audit('DELETE', 'franchise_daily_income', entry.id,
+                  f'Bulk-deleted daily franchise income entry for {entry.vehicle.number_plate} on {entry.entry_date}')
+        entry.deleted_at = datetime.now(timezone.utc)
+        touch_sync_fields(entry)
+        deleted += 1
+
+    if deleted:
+        db.session.commit()
+        flash(f'Deleted {deleted} daily income entry(ies) for {on_date}.', 'warning')
+    else:
+        db.session.rollback()
+        flash(f'None of the selected vehicles had a daily income entry for {on_date}.', 'info')
 
     return redirect(url_for('franchise_daily_income_list', view='date', on_date=on_date.strftime('%Y-%m-%d'), period=period))
 

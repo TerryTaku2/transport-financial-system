@@ -67,28 +67,50 @@
       <button type="submit" class="btn btn-outline btn-xs">Go</button>
     </form>
   </div>
-  {% if by_date_rows and by_date_missing %}
-  <div class="card-body" style="border-bottom:1px solid var(--border);">
-    <form method="POST" action="{{ url_for('franchise_daily_income_bulk_fill') }}" data-confirm="Record this income for every vehicle below without an entry for {{ on_date }}?" style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;margin:0;">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="on_date" value="{{ on_date }}">
-      <input type="hidden" name="period" value="{{ period }}">
-      <div class="form-group" style="margin:0;max-width:160px;">
-        <label>Income (USD)</label>
-        <input type="number" name="amount" step="0.01" min="0" value="10.00" required>
-      </div>
-      <button type="submit" class="btn btn-primary btn-xs">
-        <i data-feather="zap"></i> Fill {{ by_date_missing }} vehicle(s) without an entry
-      </button>
-      <div class="form-hint" style="margin:0;">Applies this amount to every vehicle below not yet recorded for {{ on_date }} — a vehicle with its own agreed Daily Fee gets that fee instead.</div>
-    </form>
-  </div>
-  {% endif %}
+  {% set show_checkboxes = by_date_missing or current_user.role == 'admin' %}
   {% if by_date_rows %}
+  {% if show_checkboxes %}
+  <form method="POST" action="{{ url_for('franchise_daily_income_bulk_fill') }}" id="bulk-fill-form" data-confirm="Continue?">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="on_date" value="{{ on_date }}">
+    <input type="hidden" name="period" value="{{ period }}">
+    <div class="card-body" style="border-bottom:1px solid var(--border);">
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        {% if by_date_missing %}
+        <div class="form-group" style="margin:0;max-width:160px;">
+          <label>Income (USD)</label>
+          <input type="number" name="amount" step="0.01" min="0" value="10.00" required>
+        </div>
+        {% endif %}
+        <button type="button" class="btn btn-outline btn-xs" id="bulk-select-all">Select all</button>
+        <button type="button" class="btn btn-outline btn-xs" id="bulk-select-none">Clear</button>
+        {% if by_date_missing %}
+        <button type="submit" class="btn btn-primary btn-xs" id="bulk-fill-submit">
+          <i data-feather="zap"></i> Fill checked vehicle(s)
+        </button>
+        {% endif %}
+        {% if current_user.role == 'admin' %}
+        <button type="submit" formaction="{{ url_for('franchise_daily_income_bulk_delete') }}"
+                class="btn btn-danger btn-xs" id="bulk-delete-submit">
+          <i data-feather="trash-2"></i> Delete checked vehicle(s) entry
+        </button>
+        {% endif %}
+      </div>
+      <div class="form-hint mt-8">
+        Vehicles without an entry for {{ on_date }} are checked below — uncheck any that were absent or
+        didn't pay that day before filling. A vehicle with its own agreed Daily Fee gets that fee instead
+        of the amount above.
+        {% if current_user.role == 'admin' %}
+        To undo a wrong entry (e.g. a vehicle that was actually absent), check its row instead and use Delete.
+        {% endif %}
+      </div>
+    </div>
+  {% endif %}
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
+          {% if show_checkboxes %}<th></th>{% endif %}
           <th>Vehicle</th>
           <th>Franchisee</th>
           <th class="text-right">Income</th>
@@ -98,6 +120,15 @@
       <tbody>
         {% for r in by_date_rows %}
         <tr>
+          {% if show_checkboxes %}
+          <td>
+            {% if not r.entries %}
+            <input type="checkbox" class="bulk-check" name="vehicle_ids" value="{{ r.vehicle.id }}" checked>
+            {% elif current_user.role == 'admin' %}
+            <input type="checkbox" class="bulk-check" name="vehicle_ids" value="{{ r.vehicle.id }}">
+            {% endif %}
+          </td>
+          {% endif %}
           <td>{{ r.vehicle.number_plate }}</td>
           <td>{{ r.vehicle.franchisee_name }}</td>
           <td class="text-right">{% if r.entries %}{{ r.income|currency }}{% else %}<span class="form-hint">— not recorded —</span>{% endif %}</td>
@@ -107,13 +138,37 @@
       </tbody>
       <tfoot>
         <tr>
-          <th colspan="2">Total</th>
+          <th colspan="{{ 3 if show_checkboxes else 2 }}">Total</th>
           <th class="text-right">{{ by_date_total|currency }}</th>
           <th></th>
         </tr>
       </tfoot>
     </table>
   </div>
+  {% if show_checkboxes %}
+  </form>
+  <script>
+  (function () {
+    var form = document.getElementById('bulk-fill-form');
+    if (!form) return;
+    var boxes = form.querySelectorAll('.bulk-check');
+    document.getElementById('bulk-select-all').addEventListener('click', function () {
+      boxes.forEach(function (b) { b.checked = true; });
+    });
+    document.getElementById('bulk-select-none').addEventListener('click', function () {
+      boxes.forEach(function (b) { b.checked = false; });
+    });
+    var fillBtn = document.getElementById('bulk-fill-submit');
+    if (fillBtn) fillBtn.addEventListener('click', function () {
+      form.setAttribute('data-confirm', 'Record income for the checked vehicle(s) on {{ on_date }}?');
+    });
+    var delBtn = document.getElementById('bulk-delete-submit');
+    if (delBtn) delBtn.addEventListener('click', function () {
+      form.setAttribute('data-confirm', 'Delete the daily income entry for the checked vehicle(s) on {{ on_date }}? This cannot be undone from here.');
+    });
+  })();
+  </script>
+  {% endif %}
   {% else %}
   <div class="empty-state"><p>No franchise vehicles registered yet.</p></div>
   {% endif %}
