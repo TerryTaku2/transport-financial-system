@@ -16,6 +16,8 @@ services:
         generateValue: true
       - key: DATABASE_URL
         value: sqlite:////var/data/transport_erp.db
+      - key: SPOKE_RELEASES_DIR
+        value: /var/data/spoke_releases
       - key: ADMIN_PASSWORD
         sync: false
       - key: WHATSAPP_TOKEN

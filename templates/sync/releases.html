@@ -1,0 +1,85 @@
+{% extends 'base.html' %}
+{% block title %}Spoke Releases{% endblock %}
+{% block page_title %}Admin — Spoke Releases{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Spoke Releases</h1>
+    <div class="subtitle">Published builds of the spoke .exe — every spoke checks in against whichever version below is flagged "Latest" and stages it automatically, applying on its next restart. This machine's own version: <strong>{{ app_version }}</strong></div>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Publish a New Release</h3></div>
+  <div class="card-body">
+    <div class="form-hint mb-16">
+      Rebuild the spoke .exe first (<code>venv\Scripts\python.exe -m PyInstaller spoke_build.spec</code>), then zip the
+      whole <code>dist\TransportERP</code> folder and upload it here. Pick a version string that sorts/reads clearly
+      (e.g. a date like <code>2026.08.05</code> or a bumped number) — every spoke compares this against its own
+      VERSION file to decide whether to update.
+    </div>
+    <form method="POST" action="{{ url_for('spoke_release_upload') }}" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Version<span class="req">*</span></label>
+          <input type="text" name="version" required placeholder="e.g. 2026.08.05">
+        </div>
+        <div class="form-group">
+          <label>Release .zip<span class="req">*</span></label>
+          <input type="file" name="file" accept=".zip" required>
+        </div>
+        <div class="form-group full">
+          <label>Notes</label>
+          <input type="text" name="notes" placeholder="What changed in this build (optional)">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary"><i data-feather="upload-cloud"></i> Publish Release</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  {% if releases %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Version</th><th>Status</th><th class="text-right">Size</th><th>Published</th><th>By</th><th>Notes</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for r in releases %}
+        <tr>
+          <td>{{ r.version }}</td>
+          <td>
+            {% if r.is_latest %}<span class="badge badge-green">Latest</span>
+            {% else %}<span class="badge badge-gray">Superseded</span>{% endif %}
+          </td>
+          <td class="text-right">{{ (r.file_size / 1048576)|round(1) }} MB</td>
+          <td>{{ r.created_at.strftime('%d %b %Y %H:%M') if r.created_at else '—' }}</td>
+          <td>{{ r.uploader.username if r.uploader else '—' }}</td>
+          <td>{{ r.notes or '—' }}</td>
+          <td class="btn-group">
+            {% if not r.is_latest %}
+            <form method="POST" action="{{ url_for('spoke_release_set_latest', release_id=r.id) }}"
+                  onsubmit="return confirm('Make {{ r.version }} the version every spoke updates to? (Useful to roll back a bad release.)');">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-outline btn-xs">Make Latest</button>
+            </form>
+            <form method="POST" action="{{ url_for('spoke_release_delete', release_id=r.id) }}"
+                  data-confirm="Delete release {{ r.version }}? This cannot be undone.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button type="submit" class="btn btn-danger btn-xs">Delete</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body"><div class="empty-state"><p>No spoke releases published yet.</p></div></div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -15,11 +15,13 @@ import io
 import json
 import re
 import secrets
+import shutil
 import socket
 import threading
 import time
 import uuid
 import webbrowser
+import zipfile
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 
@@ -34,7 +36,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, PageBreak, SimpleDocTemplate, Spacer, Table, TableStyle
 from dotenv import load_dotenv
 from flask import (Flask, render_template, request, redirect, url_for,
-                   flash, jsonify, make_response, session, send_from_directory)
+                   flash, jsonify, make_response, session, send_from_directory, send_file)
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (LoginManager, UserMixin, login_user, logout_user,
                          login_required, current_user)
@@ -42,6 +44,7 @@ from flask_wtf.csrf import CSRFProtect, generate_csrf
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.security import generate_password_hash, check_password_hash
+from werkzeug.utils import secure_filename
 from sqlalchemy import event, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import with_loader_criteria
@@ -63,6 +66,14 @@ else:
     _env_path = os.path.join(os.getcwd(), '.env')
     load_dotenv()
     _default_db_uri = 'sqlite:///transport_erp.db'
+
+# Same "next to the .exe, not the frozen bundle's temp extraction dir"
+# reasoning as _env_path above — used for this spoke's own VERSION marker
+# (see check_for_spoke_update) and as the default landing spot for
+# published release downloads on the hub.
+BASE_DIR = _exe_dir if FROZEN else os.getcwd()
+_version_path = os.path.join(BASE_DIR, 'VERSION')
+APP_VERSION = open(_version_path, encoding='utf-8').read().strip() if os.path.exists(_version_path) else 'dev'
 
 
 def persist_env_updates(updates):
@@ -137,6 +148,17 @@ app.config.update(
     SYNC_HUB_URL=os.environ.get('SYNC_HUB_URL', '').rstrip('/'),
     SYNC_API_KEY=os.environ.get('SYNC_API_KEY', ''),
     SYNC_INTERVAL_SECONDS=int(os.environ.get('SYNC_INTERVAL_SECONDS', '60')),
+    APP_VERSION=APP_VERSION,
+    # Hub-side storage for published spoke .exe builds (see SpokeRelease) —
+    # a spoke never sets this, only reads releases over the API. Defaults
+    # next to the app for local/dev; Render points it at the mounted
+    # persistent disk (see render.yaml) so a release survives a redeploy.
+    SPOKE_RELEASES_DIR=os.environ.get('SPOKE_RELEASES_DIR', os.path.join(BASE_DIR, 'spoke_releases')),
+    # How often a spoke checks the hub for a new published version — much
+    # coarser than SYNC_INTERVAL_SECONDS above, since this is a one-shot
+    # metadata check, not per-record data sync, and there's no urgency:
+    # the update only ever applies on the next natural restart anyway.
+    SPOKE_UPDATE_CHECK_SECONDS=int(os.environ.get('SPOKE_UPDATE_CHECK_SECONDS', str(6 * 3600))),
     WHATSAPP_TOKEN=os.environ.get('WHATSAPP_TOKEN', ''),
     WHATSAPP_PHONE_NUMBER_ID=os.environ.get('WHATSAPP_PHONE_NUMBER_ID', ''),
     WHATSAPP_VERIFY_TOKEN=os.environ.get('WHATSAPP_VERIFY_TOKEN', ''),
@@ -540,6 +562,55 @@ class SyncConflict(db.Model):
     resolution_notes = db.Column(db.Text)
 
     resolver = db.relationship('User', foreign_keys=[resolved_by])
+
+
+class SpokeRelease(db.Model):
+    """A published build of the spoke .exe (see spoke_build.spec), uploaded
+    once on the hub and pulled by every spoke from there — this is what
+    lets a spoke self-update instead of someone hand-carrying a USB drive
+    to each site PC after every app change. Hub-only: this table only ever
+    has rows on Central, since only an admin there uploads releases; a
+    spoke's own copy of this table stays empty (see SpokeUpdateState for
+    what a spoke tracks about its own update checks).
+
+    Never part of the multi-site record sync (SYNC_TABLE_ORDER) — a
+    release is a hub-authored artifact pulled over its own dedicated
+    /api/spoke/* endpoints, not a row a spoke could ever legitimately own
+    or edit itself."""
+    __tablename__ = 'spoke_releases'
+    id = db.Column(db.Integer, primary_key=True)
+    version = db.Column(db.String(40), unique=True, nullable=False)
+    filename = db.Column(db.String(255), nullable=False)
+    sha256 = db.Column(db.String(64), nullable=False)
+    file_size = db.Column(db.Integer, nullable=False)
+    notes = db.Column(db.Text)
+    # Exactly one release is "latest" at a time — the one every spoke's
+    # next check-in will stage. Kept as an explicit flag rather than
+    # "highest id" so a bad release can be rolled back by re-flagging an
+    # older, known-good one without deleting the broken row's audit trail.
+    is_latest = db.Column(db.Boolean, default=False, nullable=False)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+
+    uploader = db.relationship('User', foreign_keys=[created_by])
+
+
+class SpokeUpdateState(db.Model):
+    """Local-instance-only bookkeeping for THIS spoke's self-update
+    checks — mirrors SyncPeerState's role for data sync, but for the app
+    binary itself. Never synced. Singleton: one row per spoke (id=1),
+    same convention as the config a spoke keeps only about itself."""
+    __tablename__ = 'spoke_update_state'
+    id = db.Column(db.Integer, primary_key=True)
+    last_checked_at = db.Column(db.DateTime)
+    last_error = db.Column(db.Text)
+    # Set once a newer version has been downloaded and unpacked into a
+    # staging folder next to the install — the launcher script (not this
+    # app process, which can't safely overwrite its own running files)
+    # applies it on the next start. Left blank between checks/once applied.
+    staged_version = db.Column(db.String(40))
+    staged_dir = db.Column(db.String(500))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class ImportBatch(db.Model):
@@ -8208,6 +8279,106 @@ def sync_site_toggle(site_id):
     return redirect(url_for('sync_sites'))
 
 
+# ─────────────────────────────────────────────────────────────
+# Spoke Releases — hub-side publishing of a new spoke .exe build. A spoke
+# checks /api/spoke/latest-version and downloads whichever release here is
+# flagged is_latest (see check_for_spoke_update below). This page is only
+# meaningful on the hub: a spoke's own copy of the spoke_releases table
+# stays empty, same as Sync Sites.
+# ─────────────────────────────────────────────────────────────
+@app.route('/sync/releases')
+@login_required
+@admin_required
+def spoke_releases():
+    releases = SpokeRelease.query.order_by(SpokeRelease.created_at.desc()).all()
+    return render_template('sync/releases.html', releases=releases, app_version=app.config['APP_VERSION'])
+
+
+@app.route('/sync/releases/upload', methods=['POST'])
+@login_required
+@admin_required
+def spoke_release_upload():
+    version = request.form.get('version', '').strip()
+    notes = request.form.get('notes', '').strip()
+    file = request.files.get('file')
+    try:
+        if not version or not re.match(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,38}$', version):
+            raise ValueError('Version must be non-empty and contain only letters, numbers, dots, dashes and underscores.')
+        if SpokeRelease.query.filter_by(version=version).first():
+            raise ValueError(f'Version "{version}" has already been published.')
+        if not file or not file.filename:
+            raise ValueError('Choose the release .zip file to upload.')
+        if not file.filename.lower().endswith('.zip'):
+            raise ValueError('The release file must be a .zip (zip up the whole dist\\TransportERP folder).')
+
+        os.makedirs(app.config['SPOKE_RELEASES_DIR'], exist_ok=True)
+        filename = secure_filename(f'{version}.zip')
+        dest_path = os.path.join(app.config['SPOKE_RELEASES_DIR'], filename)
+
+        hasher = hashlib.sha256()
+        size = 0
+        with open(dest_path, 'wb') as out:
+            for chunk in iter(lambda: file.stream.read(1024 * 1024), b''):
+                hasher.update(chunk)
+                size += len(chunk)
+                out.write(chunk)
+
+        # New upload becomes the one every spoke pulls next — see
+        # SpokeRelease.is_latest.
+        SpokeRelease.query.filter_by(is_latest=True).update({'is_latest': False})
+        release = SpokeRelease(version=version, filename=filename, sha256=hasher.hexdigest(),
+                               file_size=size, notes=notes, is_latest=True, created_by=current_user.id)
+        db.session.add(release)
+        log_audit('CREATE', 'spoke_releases', None, f'Published spoke release {version} ({size:,} bytes)')
+        db.session.commit()
+        flash(f'Spoke release {version} published — every spoke will pick it up on its next check-in.', 'success')
+    except ValueError as e:
+        db.session.rollback()
+        if file and file.filename:
+            # Clean up a partially-written file from a validation failure
+            # that happened mid/after the stream write (e.g. duplicate
+            # version caught before writing is fine; this covers nothing
+            # currently, but keeps the directory tidy if that check order
+            # ever changes).
+            stray = os.path.join(app.config['SPOKE_RELEASES_DIR'], secure_filename(f'{version}.zip'))
+            if os.path.exists(stray) and not SpokeRelease.query.filter_by(version=version).first():
+                os.remove(stray)
+        flash(str(e), 'danger')
+    return redirect(url_for('spoke_releases'))
+
+
+@app.route('/sync/releases/<int:release_id>/set-latest', methods=['POST'])
+@login_required
+@admin_required
+def spoke_release_set_latest(release_id):
+    release = SpokeRelease.query.filter_by(id=release_id).first_or_404()
+    SpokeRelease.query.filter_by(is_latest=True).update({'is_latest': False})
+    release.is_latest = True
+    log_audit('UPDATE', 'spoke_releases', release.id,
+              f'Marked spoke release {release.version} as latest (rollback/republish)')
+    db.session.commit()
+    flash(f'Version {release.version} is now what every spoke will update to.', 'success')
+    return redirect(url_for('spoke_releases'))
+
+
+@app.route('/sync/releases/<int:release_id>/delete', methods=['POST'])
+@login_required
+@admin_required
+def spoke_release_delete(release_id):
+    release = SpokeRelease.query.filter_by(id=release_id).first_or_404()
+    if release.is_latest:
+        flash('Mark a different version as latest before deleting this one.', 'danger')
+        return redirect(url_for('spoke_releases'))
+    path = os.path.join(app.config['SPOKE_RELEASES_DIR'], release.filename)
+    if os.path.exists(path):
+        os.remove(path)
+    log_audit('DELETE', 'spoke_releases', release.id, f'Deleted spoke release {release.version}')
+    db.session.delete(release)
+    db.session.commit()
+    flash(f'Release {release.version} deleted.', 'warning')
+    return redirect(url_for('spoke_releases'))
+
+
 @app.context_processor
 def inject_unresolved_sync_conflicts_count():
     """Powers the "Sync Conflicts" sidebar badge in base.html on every
@@ -8937,6 +9108,35 @@ def api_sync_pull():
 
 
 # ─────────────────────────────────────────────────────────────
+# Spoke self-update API — a spoke's own check_for_spoke_update() (see the
+# sync loop below) calls these on the same per-site key as /api/sync/*,
+# so a revoked/decommissioned site loses update access exactly the way it
+# loses data sync access, with no separate credential to manage.
+# ─────────────────────────────────────────────────────────────
+@app.route('/api/spoke/latest-version', methods=['GET'])
+@csrf.exempt
+@sync_auth_required
+def api_spoke_latest_version():
+    release = SpokeRelease.query.filter_by(is_latest=True).first()
+    if not release:
+        return jsonify({'version': None})
+    return jsonify({'version': release.version, 'sha256': release.sha256,
+                    'file_size': release.file_size, 'notes': release.notes,
+                    'published_at': release.created_at.isoformat()})
+
+
+@app.route('/api/spoke/download/<version>', methods=['GET'])
+@csrf.exempt
+@sync_auth_required
+def api_spoke_download(version):
+    release = SpokeRelease.query.filter_by(version=version).first_or_404()
+    path = os.path.join(app.config['SPOKE_RELEASES_DIR'], release.filename)
+    if not os.path.exists(path):
+        return jsonify({'error': 'Release file missing on the hub — contact an admin.'}), 500
+    return send_file(path, as_attachment=True, download_name=release.filename, mimetype='application/zip')
+
+
+# ─────────────────────────────────────────────────────────────
 # Local sync engine — Phase 3. Only runs on a spoke (SYNC_ENABLED=true,
 # a local-server PC at a site), never on the hub (Render). Deliberately
 # kept as functions here rather than a separate sync_engine.py module: this
@@ -9054,6 +9254,91 @@ def sync_push_to_hub():
     return len(batch)
 
 
+def _get_update_state():
+    state = SpokeUpdateState.query.get(1)
+    if not state:
+        state = SpokeUpdateState(id=1)
+        db.session.add(state)
+        db.session.commit()
+    return state
+
+
+def check_for_spoke_update():
+    """Ask the hub whether a newer spoke build is published and, if so,
+    download and unpack it into a staging folder next to this install —
+    never applied here. This process cannot safely overwrite its own
+    running .exe/_internal files (Windows keeps them locked while
+    executing), so applying is the launcher script's job, run the next
+    time this spoke actually restarts (see launcher.ps1 and
+    SPOKE_SETUP.md). Throttled well below SYNC_INTERVAL_SECONDS — see
+    SPOKE_UPDATE_CHECK_SECONDS — since this is a one-shot metadata check,
+    not per-record sync, and an update is never urgent by design."""
+    state = _get_update_state()
+    now = datetime.now(timezone.utc)
+    if state.last_checked_at:
+        elapsed = (now - state.last_checked_at.replace(tzinfo=timezone.utc)).total_seconds()
+        if elapsed < app.config['SPOKE_UPDATE_CHECK_SECONDS']:
+            return
+    state.last_checked_at = now
+
+    try:
+        resp = requests.get(f"{app.config['SYNC_HUB_URL']}/api/spoke/latest-version",
+                            headers=_sync_headers(), timeout=30)
+        resp.raise_for_status()
+        info = resp.json()
+        version = info.get('version')
+        if not version or version == APP_VERSION or version == state.staged_version:
+            state.last_error = None
+            db.session.commit()
+            return
+
+        staging_root = os.path.join(BASE_DIR, '_update_staged')
+        target_dir = os.path.join(staging_root, version)
+        if os.path.exists(target_dir):
+            shutil.rmtree(target_dir)
+        os.makedirs(target_dir, exist_ok=True)
+
+        zip_path = os.path.join(staging_root, f'{version}.zip')
+        dl = requests.get(f"{app.config['SYNC_HUB_URL']}/api/spoke/download/{version}",
+                          headers=_sync_headers(), timeout=300, stream=True)
+        dl.raise_for_status()
+        hasher = hashlib.sha256()
+        with open(zip_path, 'wb') as f:
+            for chunk in dl.iter_content(chunk_size=1024 * 1024):
+                hasher.update(chunk)
+                f.write(chunk)
+        if hasher.hexdigest() != info.get('sha256'):
+            os.remove(zip_path)
+            raise ValueError(f'downloaded release {version} failed checksum verification — discarded')
+
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(target_dir)
+        os.remove(zip_path)
+
+        state.staged_version = version
+        state.staged_dir = target_dir
+        state.last_error = None
+        db.session.commit()
+
+        # A plain marker file next to the .exe, not just the DB row above —
+        # launcher.ps1 is a dependency-free script that runs BEFORE this
+        # app (or any Python/SQLite) even starts, specifically so it can
+        # swap in the new files while nothing has them locked yet. It
+        # can't query this app's database, so this is the only way it
+        # learns an update is waiting.
+        marker = {'version': version, 'staged_dir': target_dir}
+        with open(os.path.join(BASE_DIR, 'update_ready.json'), 'w', encoding='utf-8') as f:
+            json.dump(marker, f)
+
+        app.logger.info(f'spoke update {version} downloaded and staged — applies on next restart')
+    except Exception as e:  # noqa: BLE001 — a bad check must never kill the loop
+        db.session.rollback()
+        state = _get_update_state()
+        state.last_error = str(e)
+        db.session.commit()
+        app.logger.warning(f'spoke update check failed: {e}')
+
+
 def run_sync_cycle():
     with app.app_context():
         try:
@@ -9067,6 +9352,11 @@ def run_sync_cycle():
             state.last_error = str(e)
             db.session.commit()
             app.logger.warning(f'sync cycle failed: {e}')
+        if FROZEN:
+            # Only a packaged spoke .exe can actually be replaced by the
+            # launcher script — a dev machine or Render's own gunicorn
+            # process has no launcher wrapping it, so skip there.
+            check_for_spoke_update()
 
 
 def _sync_loop():

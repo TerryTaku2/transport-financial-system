@@ -223,6 +223,9 @@
       <a href="{{ url_for('sync_sites') }}" class="nav-item {% if 'sync_site' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="server"></i> Sync Sites
       </a>
+      <a href="{{ url_for('spoke_releases') }}" class="nav-item {% if 'spoke_release' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="package"></i> Spoke Releases
+      </a>
     </div>
     {% endif %}
 

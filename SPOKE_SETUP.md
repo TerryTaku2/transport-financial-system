@@ -20,15 +20,19 @@ new one.
 
 Copy the whole `dist\TransportERP` folder (built from `spoke_build.spec`)
 onto the spoke PC — a USB drive or network share is fine. Put it somewhere
-permanent, e.g. `C:\TransportERP\`. The folder contains `TransportERP.exe`
-and an `_internal` folder it depends on — keep them together.
+permanent, e.g. `C:\TransportERP\`. The folder contains `TransportERP.exe`,
+an `_internal` folder it depends on, `launcher.bat`/`launcher.ps1`, and a
+`VERSION` file — keep them all together.
 
 To rebuild this folder yourself (e.g. after an app update), on the dev
 machine:
 ```
-venv\Scripts\python.exe -m PyInstaller spoke_build.spec
+venv\Scripts\python.exe build_spoke_release.py <version>
 ```
-Output lands in `dist\TransportERP\`.
+Output lands in `dist\TransportERP\` (this also produces a `<version>.zip`
+ready to publish — see "Keeping the spoke up to date automatically"
+below, the usual way to get an update onto an already-deployed spoke
+without touching it by hand).
 
 ## 3. Configure the spoke
 
@@ -60,9 +64,10 @@ relative one.
 
 ## 4. First run
 
-Double-click `TransportERP.exe`, or from a terminal:
+Double-click `launcher.bat` (not `TransportERP.exe` directly — see "Keeping
+the spoke up to date automatically" below for why), or from a terminal:
 ```
-C:\TransportERP\TransportERP.exe
+C:\TransportERP\launcher.bat
 ```
 First launch creates the database and prints the admin login (username
 `admin`, the password from `ADMIN_PASSWORD` above). Open
@@ -88,16 +93,59 @@ reboots. For a real deployment, wrap it as a Windows service with
 [NSSM](https://nssm.cc/) so it survives both:
 
 ```
-nssm install TransportERP "C:\TransportERP\TransportERP.exe"
+nssm install TransportERP "C:\TransportERP\launcher.bat"
 nssm set TransportERP AppDirectory "C:\TransportERP"
 nssm start TransportERP
 ```
 
-`AppDirectory` matters — it's what makes the service load `.env` and find
-`transport_erp.db` in the right place, same as running it manually from
-that folder.
+Point NSSM at `launcher.bat`, not `TransportERP.exe` — see the next
+section for why. `AppDirectory` matters either way — it's what makes the
+service load `.env` and find `transport_erp.db` in the right place, same
+as running it manually from that folder.
 
-## 6. Ongoing
+## 6. Keeping the spoke up to date automatically
+
+Once registered and synced, a spoke checks the hub every few hours for a
+newer published build (see `SPOKE_UPDATE_CHECK_SECONDS` in `.env`,
+default 6 hours) and, if one exists, downloads and unpacks it in the
+background into `_update_staged\` next to the install — this never
+interrupts anyone using the app.
+
+The update isn't applied until the spoke's **next restart** (service
+restart, reboot, or a person closing and reopening it). That's what
+`launcher.bat`/`launcher.ps1` are for: they run *before* `TransportERP.exe`
+starts, check for a staged update, and swap the files in — something the
+app itself can never safely do to its own running `.exe`/`_internal\*.dll`
+on Windows. This is also why Step 4 and the NSSM command above point at
+`launcher.bat` instead of the `.exe` directly; if you skip the launcher,
+updates will download and stage but never actually apply.
+
+Nothing here touches `.env` or `transport_erp.db` — a release only ever
+contains the app's own files, so local config and data always survive an
+update untouched.
+
+### Publishing an update
+
+On the dev machine, after making changes:
+```
+venv\Scripts\python.exe build_spoke_release.py 2026.08.05
+```
+(pick any version string that sorts/reads clearly — a date works well).
+This rebuilds the `.exe`, bundles the launcher scripts and a `VERSION`
+file into `dist\TransportERP\`, and zips the whole folder into
+`2026.08.05.zip` in the repo root.
+
+Then, on the **hub**, log in as an admin and go to **Admin → Spoke
+Releases → Publish a New Release**, enter the same version string, and
+upload that `.zip`. Every spoke picks it up on its next check-in — no
+need to touch any individual site PC.
+
+If a published version turns out to be broken, publish a fixed one the
+same way, or use **Make Latest** on Spoke Releases to point spokes back
+at a previous, known-good version — spokes that already staged the bad
+one will pick up whichever version is flagged latest on their next check.
+
+## 7. Ongoing
 
 - Local logins, offline reads/writes, and everything else work with no
   internet at all. Sync happens automatically in the background whenever

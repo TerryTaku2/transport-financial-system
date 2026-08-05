@@ -16,3 +16,14 @@ certs/
 # regenerated on demand, not something to version.
 build/
 dist/
+
+# Packaged spoke release .zip (see build_spoke_release.py) and the hub's
+# own local store of uploaded releases (see SPOKE_RELEASES_DIR) -- both
+# regenerated/re-uploaded on demand, not something to version.
+/*.zip
+spoke_releases/
+
+# VERSION is written by build_spoke_release.py right before each build --
+# not meaningful to commit, since it just reflects whatever was built
+# locally most recently.
+VERSION
