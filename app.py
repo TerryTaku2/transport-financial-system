@@ -1256,6 +1256,56 @@ def first_permitted_url(user):
     return url_for('no_access')
 
 
+# Every main list/dashboard page worth having available offline even if
+# this browser has never actually visited it — see api_precache_urls,
+# which filters this down to what the current user can see and hands it
+# to offline.js to proactively warm into the service worker's page cache
+# in the background while online. Deliberately mirrors base.html's nav
+# exactly (same (permission, endpoint) pairs, same set of pages) rather
+# than a hand-picked subset, so a page added to the nav is automatically
+# covered here too. Admin-only pages (User Management, Audit Log, Sync
+# Sites, etc.) are left out on purpose — those are operator tooling, not
+# the "whole business's data" a field user going offline actually needs.
+PRECACHE_PAGES = [
+    ('dashboard', 'dashboard'),
+    ('crew_portal', 'driver_ledger'),
+    ('crew_portal', 'crew_leaderboard'),
+    ('vehicles', 'vehicles'),
+    ('drivers', 'drivers'),
+    ('drivers', 'driver_roster'),
+    ('routes', 'routes_list'),
+    ('fuel_logs', 'fuel_logs'),
+    ('maintenance', 'maintenance_logs'),
+    ('maintenance', 'maintenance_schedules'),
+    ('reports', 'report_consolidated'),
+    ('reports', 'report_income'),
+    ('reports', 'report_cash_flow'),
+    ('reports', 'report_payroll'),
+    ('reports', 'report_shortfalls'),
+    ('reports', 'report_financial_position'),
+    ('reports', 'report_budget'),
+    ('reports', 'report_fuel_efficiency'),
+    ('reports', 'report_distance_travelled'),
+    ('reports', 'report_route_profitability'),
+    ('finance', 'loans_list'),
+    ('finance', 'payables_list'),
+    ('finance', 'receivables_list'),
+    ('finance', 'capital_list'),
+    ('finance', 'expenses_list'),
+    ('franchise', 'franchise_daily_income_list'),
+    ('franchise', 'franchise_weekly_income_list'),
+    ('franchise', 'franchise_vehicles'),
+    ('franchise', 'report_franchise_reconciliation'),
+    ('franchise', 'report_franchise_weekly'),
+    ('franchise', 'report_franchise_consolidated'),
+    ('store', 'store_parts'),
+    ('store', 'store_purchases'),
+    ('store', 'store_sales'),
+    ('store', 'store_trading_account'),
+    ('compliance', 'compliance'),
+]
+
+
 def admin_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -8605,6 +8655,20 @@ def api_refdata():
                                for v in franchise_vehicles],
         'expense_categories': expense_categories,
     })
+
+
+@app.route('/api/precache-urls')
+@login_required
+def api_precache_urls():
+    """URLs of every main list/dashboard page this user can see (see
+    PRECACHE_PAGES) — offline.js fetches this in the background while
+    online and warms each one into the service worker's page cache, so
+    the whole business's current data is available offline even for a
+    page this browser has never actually visited. Same has_permission
+    check as base.html's nav, so this never hands out a URL the user
+    couldn't reach anyway."""
+    urls = [url_for(endpoint) for perm, endpoint in PRECACHE_PAGES if current_user.has_permission(perm)]
+    return jsonify({'urls': urls})
 
 
 # ─────────────────────────────────────────────────────────────

@@ -63,7 +63,18 @@ self.addEventListener('fetch', function (event) {
         return response;
       }).catch(function () {
         return caches.match(request).then(function (cached) {
-          return cached || caches.match('/static/offline.html');
+          if (cached) return cached;
+          // No exact match (same path + same query string) — try again
+          // ignoring the query string. offline.js's precacheKeyPages()
+          // warms each page's bare URL (e.g. /reports/income, no
+          // ?period=...) in the background before anyone's ever visited
+          // it; a real request with a filter/date-range query attached
+          // would otherwise miss that entirely and fall through to the
+          // generic offline page even though a close, useful version of
+          // that same page is sitting right there in the cache.
+          return caches.match(request, { ignoreSearch: true }).then(function (approxCached) {
+            return approxCached || caches.match('/static/offline.html');
+          });
         });
       })
     );

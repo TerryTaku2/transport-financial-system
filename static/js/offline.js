@@ -14,6 +14,15 @@
   var REFDATA_STORE = 'refdata';
   var SYNC_INTERVAL_MS = 30000;
   var FETCH_TIMEOUT_MS = 8000;
+  // Same cache name sw.js's navigate handler reads from — writing into it
+  // directly from here (via the Cache Storage API, not through the service
+  // worker's fetch handler) is what lets a page get cached before anyone
+  // has ever actually navigated to it. Much longer interval than
+  // SYNC_INTERVAL_MS: this walks ~30 pages per run, so running it every
+  // 30s would be needless load for something that only needs to be
+  // reasonably fresh, not real-time.
+  var PAGES_CACHE_NAME = 'gratz-pages-runtime';
+  var PRECACHE_INTERVAL_MS = 10 * 60 * 1000;
 
   var syncing = false;
 
@@ -223,6 +232,35 @@
       });
   }
 
+  // Runs on every page, not just ones with a form — this is what makes a
+  // page work offline the FIRST time it's opened offline, not just the
+  // second time onward (sw.js's own runtime cache only ever fills in
+  // reactively, from pages actually visited while online). Silently
+  // no-ops offline (nothing to fetch) or if caches storage isn't
+  // available (very old browser) — this is a background nicety, never
+  // something a page should wait on or surface an error for.
+  function precacheKeyPages() {
+    if (connectivity !== 'online' || !window.caches) return Promise.resolve();
+    return fetchWithTimeout('/api/precache-urls', { credentials: 'same-origin', cache: 'no-store' }, FETCH_TIMEOUT_MS)
+      .then(function (resp) { return resp.ok ? resp.json() : { urls: [] }; })
+      .then(function (data) {
+        var urls = data.urls || [];
+        return caches.open(PAGES_CACHE_NAME).then(function (cache) {
+          // Sequential, not Promise.all — this is a background low-priority
+          // task walking ~30 pages; no reason to burst them all at once
+          // against the same server a real user might be waiting on.
+          return urls.reduce(function (chain, url) {
+            return chain.then(function () {
+              return fetchWithTimeout(url, { credentials: 'same-origin' }, FETCH_TIMEOUT_MS)
+                .then(function (resp) { if (resp.ok) return cache.put(url, resp); })
+                .catch(function () {}); // one page failing must never stop the rest
+            });
+          }, Promise.resolve());
+        });
+      })
+      .catch(function () {});
+  }
+
   function enqueueSubmission(form) {
     var formData = new FormData(form);
     var clientId = crypto.randomUUID();
@@ -391,12 +429,17 @@
   document.addEventListener('offline-queue-changed', updateBadge);
   document.addEventListener('connectivity-changed', updateConnectivityBadge);
 
-  window.addEventListener('online', function () { checkConnectivity(); syncQueue(); });
+  // Regaining connectivity is exactly when a stale offline cache most
+  // needs refreshing — whatever changed while this device was offline
+  // (its own queued writes syncing back via syncQueue, or anyone else's)
+  // should be reflected before the next time it goes offline again.
+  window.addEventListener('online', function () { checkConnectivity(); syncQueue(); precacheKeyPages(); });
   window.addEventListener('offline', function () { checkConnectivity(); });
   document.addEventListener('visibilitychange', function () {
     if (!document.hidden) { checkConnectivity(); syncQueue(); }
   });
   setInterval(function () { checkConnectivity(); syncQueue(); }, SYNC_INTERVAL_MS);
+  setInterval(precacheKeyPages, PRECACHE_INTERVAL_MS);
 
   document.addEventListener('DOMContentLoaded', function () {
     attachFormInterception();
@@ -407,6 +450,7 @@
     if (document.querySelector('select[data-refdata]')) {
       refreshRefData();
     }
+    precacheKeyPages();
   });
 
   // Exposed for static/offline.html, which lists/retries/discards queued
