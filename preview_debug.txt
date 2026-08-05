@@ -1,0 +1,102 @@
+status 200
+Preview | Logistics Company</title>
+  <link rel="stylesheet" href="/static/css/style.css?v=1785860035">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" type="image/png" sizes="192x192" href="/static/img/icons/icon-192.png">
+  <link rel="icon" type="image/x-icon" href="/static/img/icons/favicon.ico">
+  <link rel="apple-touch-icon" href="/static/img/icons/apple-touch-icon.png">
+  <meta name="theme-color" content="#2563eb">
+  <script src="/static/js/vendor/feather.min.js"></script>
+  
+</head>
+<body>
+
+<div class="app-layout">
+
+  <!-- ?? Sidebar ?? -->
+  <aside class="sidebar" id="sidebar">
+    <a class="sidebar-brand" href="/dashboard">
+      <img class="brand-logo" src="/static/img/logo-horizontal-dark.png" alt="GRATZ Logistics Company">
+    </a>
+
+    
+    <div class="nav-section">
+      <div class="nav-section-label">Overview</div>
+      <a href="/dashboard" class="nav-item ">
+        <i data-feather="grid"></i> Dashboard
+      </a>
+    </div>
+    
+
+    
+    <div class="nav-section">
+      <div class="nav-section-label">Crew Portal</div>
+      <a href="/logs/ledger" class="nav-item ">
+        <i data-feather="edit-3"></i> Daily Transactions
+      </a>
+      <a href="/crew/leaderboard" class="nav-item ">
+        <i data-feather="award"></i> Performance
+      </a>
+    </div>
+    
+
+    
+    <div class="nav-section">
+      <div class="nav-section-label">Fleet</div>
+      
+      <a href="/vehicles" class="nav-item ">
+        <i data-feather="truck"></i> Vehicles
+      </a>
+      
+      
+      <a href="/drivers" class="nav-item ">
+        <i data-feather="users"></i> Crew
+      </a>
+      <a href="/drivers/roster" class="nav-item ">
+        <i data-feather="calendar"></i> Driver Roster
+      </a>
+      
+      
+      <a href="/routes" class="nav-item ">
+        <i data-feather="map"></i> Routes
+      </a>
+      
+    </div>
+    
+
+    
+    <div class="nav-section">
+      <div class="nav-section-label">Operations</div>
+      
+      <a href="/logs/fuel" class="nav-item ">
+        <i data-feather="droplet"></i> Fuel Logs
+      </a>
+      
+      
+      <a href="/logs/maintenance" class="nav-item ">
+        <i data-feather="tool"></i> Maintenance
+      </a>
+      <a href="/maintenance/schedules" class="nav-item ">
+        <i data-feather="calendar"></i> Service Schedules
+      </a>
+      
+    </div>
+    
+
+    
+    <div class="nav-section">
+      <div class="nav-section-label">Finance</div>
+      <a href="/reports/consolidated" class="nav-item ">
+        <i data-feather="layers"></i> Consolidated Overview
+      </a>
+      <a href="/reports/income" class="nav-item ">
+        <i data-feather="bar-chart-2"></i> Income Statement
+      </a>
+      <a href="/reports/cash-flow" class="nav-item ">
+        <i data-feather="repeat"></i> Cash Flow
+      </a>
+      <a href="/reports/payroll" class="nav-item ">
+        <i data-feather="dollar-sign"></i> Payroll
+      </a>
+      <a href="/reports/shortfalls" class="nav-item ">
+        <i data-feather="al

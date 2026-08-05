@@ -51,39 +51,73 @@
 {% if vehicles %}
 <!-- Vehicle picker — type a plate to filter, or use the dropdown button to browse. Income is always attributed to a specific vehicle, never a whole-franchise total. -->
 <div class="card mb-24" style="padding:14px;overflow:visible;">
-  <div class="form-group" style="max-width:320px;margin:0;">
-    <label>Vehicle</label>
-    <select id="weekly-income-vehicle-picker" data-refdata="franchise_vehicles">
-      {% for v in vehicles %}
-      <option value="{{ v.id }}" {% if vehicle and vehicle.id==v.id %}selected{% endif %}>{{ v.number_plate }} — {{ v.franchisee_name }}</option>
-      {% endfor %}
-    </select>
+  <div style="display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;">
+    <div class="form-group" style="max-width:320px;margin:0;">
+      <label>Vehicle</label>
+      <select id="weekly-income-vehicle-picker" data-refdata="franchise_vehicles">
+        <option value="" {% if not vehicle %}selected{% endif %}>— Whole Franchise (import/view many vehicles at once) —</option>
+        {% for v in vehicles %}
+        <option value="{{ v.id }}" {% if vehicle and vehicle.id==v.id %}selected{% endif %}>{{ v.number_plate }} — {{ v.franchisee_name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="button" class="btn btn-outline btn-xs" id="weekly-income-new-vehicle-toggle">
+      <i data-feather="plus"></i> New Vehicle
+    </button>
   </div>
+  <form method="POST" action="{{ url_for('franchise_vehicle_quick_add') }}" id="weekly-income-new-vehicle-form"
+        style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="kind" value="weekly">
+    <input type="hidden" name="period" value="{{ period }}">
+    <div class="form-hint mb-16">Registers a new franchise vehicle with just a plate and franchisee name — an admin will be alerted to fill in the fee agreement and other details.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <div class="form-group" style="max-width:200px;">
+        <label>Number Plate<span class="req">*</span></label>
+        <input type="text" name="number_plate" required>
+      </div>
+      <div class="form-group" style="max-width:240px;">
+        <label>Franchisee Name<span class="req">*</span></label>
+        <input type="text" name="franchisee_name" required>
+      </div>
+      <button type="submit" class="btn btn-primary btn-xs">Register</button>
+    </div>
+  </form>
 </div>
 <script>
 (function () {
   var picker = document.getElementById('weekly-income-vehicle-picker');
-  if (!picker) return;
-  picker.addEventListener('change', function () {
-    if (!picker.value) return;
-    var url = new URL(window.location.href);
-    url.searchParams.set('vehicle_id', picker.value);
-    window.location.href = url.toString();
-  });
+  if (picker) {
+    picker.addEventListener('change', function () {
+      // Empty value is the "Whole Franchise" option, a real, navigable
+      // choice now — not just an unset/placeholder state.
+      var url = new URL(window.location.href);
+      url.searchParams.set('vehicle_id', picker.value);
+      window.location.href = url.toString();
+    });
+  }
+  var toggle = document.getElementById('weekly-income-new-vehicle-toggle');
+  var form = document.getElementById('weekly-income-new-vehicle-form');
+  if (toggle && form) {
+    toggle.addEventListener('click', function () {
+      form.style.display = form.style.display === 'none' ? 'block' : 'none';
+    });
+  }
 })();
 </script>
 
+{% if vehicle %}
 <div class="card mb-24" style="padding:10px 14px;">
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
-    <div class="form-hint" style="margin:0;">Import or export {{ vehicle.number_plate if vehicle else 'this vehicle' }}'s weekly income as CSV/Excel</div>
+    <div class="form-hint" style="margin:0;">Import or export {{ vehicle.number_plate }}'s weekly income as CSV/Excel</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <a href="{{ url_for('franchise_weekly_income_export', vehicle_id=vehicle.id if vehicle else '', period=period) }}" class="btn btn-xs btn-outline">
+      <a href="{{ url_for('franchise_weekly_income_export', vehicle_id=vehicle.id, period=period) }}" class="btn btn-xs btn-outline">
         <i data-feather="download"></i> Export CSV
       </a>
       <form method="POST" action="{{ url_for('franchise_income_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin:0;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="kind" value="weekly">
-        <input type="hidden" name="vehicle_id" value="{{ vehicle.id if vehicle else '' }}">
+        <input type="hidden" name="vehicle_id" value="{{ vehicle.id }}">
         <input type="hidden" name="period" value="{{ period }}">
         <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required style="font-size:12px;">
         <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload"></i> Import</button>
@@ -91,6 +125,26 @@
     </div>
   </div>
 </div>
+{% else %}
+<div class="card mb-24" style="padding:10px 14px;">
+  <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
+    <div class="form-hint" style="margin:0;">Import many vehicles at once from one flat CSV/Excel file — columns Date (any date in the week), Vehicle (number plate), Income (plus optional expense/deposit columns). One row per vehicle per week; each plate must already be registered under Franchise Vehicles.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+      <a href="{{ url_for('franchise_weekly_income_export', period=period) }}" class="btn btn-xs btn-outline">
+        <i data-feather="download"></i> Export CSV
+      </a>
+      <form method="POST" action="{{ url_for('franchise_income_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin:0;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="kind" value="weekly">
+        <input type="hidden" name="vehicle_id" value="">
+        <input type="hidden" name="period" value="{{ period }}">
+        <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required style="font-size:12px;">
+        <button type="submit" class="btn btn-xs btn-outline"><i data-feather="upload"></i> Import All Vehicles</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 <div class="card mb-24" style="padding:10px 14px;">
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
@@ -105,6 +159,7 @@
   </div>
 </div>
 
+{% if vehicle %}
 <div class="card mb-24">
   <div class="card-header"><h3>Record Income — {{ vehicle.number_plate }} ({{ vehicle.franchisee_name }})</h3></div>
   <div class="card-body">
@@ -122,8 +177,8 @@
         <div class="form-group">
           <label>Income (USD)</label>
           <input type="number" name="income" step="0.01" min="0" placeholder="0.00"
-                 value="{{ vehicle.weekly_fee if vehicle and vehicle.weekly_fee is not none else '' }}">
-          {% if vehicle and vehicle.weekly_fee is not none %}
+                 value="{{ vehicle.weekly_fee if vehicle.weekly_fee is not none else '' }}">
+          {% if vehicle.weekly_fee is not none %}
           <div class="form-hint">Defaults to this vehicle's agreed Weekly Fee ({{ vehicle.weekly_fee|currency }}) — edit if this week's collection differs.</div>
           {% endif %}
         </div>
@@ -186,11 +241,34 @@
   <div class="empty-state"><p>No weekly income entries for {{ vehicle.number_plate }} in this period.</p></div>
   {% endif %}
 </div>
+{% else %}
+<div class="card mb-24">
+  <div class="card-body">
+    <p class="form-hint" style="margin:0;">Whole Franchise selected — use the import card above to load many vehicles' income at once, or pick a specific vehicle above to record a single entry.</p>
+  </div>
+</div>
+{% endif %}
 
 {% else %}
 <div class="card mb-24">
-  <div class="empty-state">
-    <p>No franchise vehicles registered yet. <a href="{{ url_for('franchise_vehicles') }}">Register a vehicle</a> before recording weekly income.</p>
+  <div class="card-body">
+    <p class="mb-16">No franchise vehicles registered yet. Register one below, or go to <a href="{{ url_for('franchise_vehicles') }}">Franchise Vehicles</a> for the full form.</p>
+    <form method="POST" action="{{ url_for('franchise_vehicle_quick_add') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="kind" value="weekly">
+      <input type="hidden" name="period" value="{{ period }}">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+        <div class="form-group" style="max-width:200px;">
+          <label>Number Plate<span class="req">*</span></label>
+          <input type="text" name="number_plate" required>
+        </div>
+        <div class="form-group" style="max-width:240px;">
+          <label>Franchisee Name<span class="req">*</span></label>
+          <input type="text" name="franchisee_name" required>
+        </div>
+        <button type="submit" class="btn btn-primary btn-xs">Register</button>
+      </div>
+    </form>
   </div>
 </div>
 {% endif %}

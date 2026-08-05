@@ -52,6 +52,13 @@
               {% if u.role != 'admin' %}
               <a href="{{ url_for('user_permissions', uid=u.id) }}" class="btn btn-outline btn-xs">Permissions</a>
               {% endif %}
+              {% if u.id != current_user.id %}
+              <form method="POST" action="{{ url_for('user_set_role', uid=u.id) }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="role" value="{{ 'manager' if u.role == 'admin' else 'admin' }}">
+                <button class="btn btn-outline btn-xs">{{ 'Demote to Manager' if u.role == 'admin' else 'Promote to Admin' }}</button>
+              </form>
+              {% endif %}
               <a href="{{ url_for('user_whatsapp', uid=u.id) }}" class="btn btn-outline btn-xs">WhatsApp</a>
               {% if u.id != current_user.id %}
               <form method="POST" action="{{ url_for('user_toggle', uid=u.id) }}">
@@ -60,6 +67,13 @@
               </form>
               {% endif %}
               <button class="btn btn-outline btn-xs" onclick="document.getElementById('pw-{{ u.id }}').classList.toggle('open-row')">Reset PW</button>
+              {% if u.id != current_user.id %}
+              <form method="POST" action="{{ url_for('user_delete', uid=u.id) }}"
+                    onsubmit="return confirm('Permanently delete the account \'{{ u.username }}\'? This can\'t be undone.');">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-outline btn-xs btn-danger">Delete</button>
+              </form>
+              {% endif %}
             </div>
           </td>
         </tr>

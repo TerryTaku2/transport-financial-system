@@ -1009,6 +1009,12 @@ class FranchiseVehicle(db.Model):
     # doesn't model (which days were actually due).
     amount_owed = db.Column(db.Float, nullable=False, default=0)
     notes = db.Column(db.Text)
+    # True when this row was created via the quick "+ New Vehicle" inline
+    # add on the Daily/Weekly Income pages rather than the full Franchise
+    # Vehicles form — that path only collects plate + franchisee name, so
+    # fees/status/notes are still unset and an admin should follow up.
+    # Cleared by the "Mark Reviewed" action (franchise_vehicle_review).
+    pending_review = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     sync_uuid = db.Column(db.String(36), unique=True, index=True)
@@ -7032,10 +7038,14 @@ def franchise_daily_income_list():
     all_vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.number_plate).all()
     vehicle_id = request.args.get('vehicle_id', type=int)
     vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
-    if not vehicle and not vehicle_id and all_vehicles:
-        # Income is always recorded against a specific vehicle now (expenditure
-        # is the shared, vehicle-less side) — default to the first vehicle tab
-        # rather than landing on an empty "no vehicle selected" income panel.
+    # A first-ever visit (no vehicle_id in the URL at all) defaults to the
+    # first vehicle tab rather than landing on an empty income panel. But
+    # 'vehicle_id' present-and-blank is a deliberate, explicit choice — the
+    # "Whole Franchise" option in the vehicle picker (see the template) —
+    # and must stay that way rather than being silently forced back onto a
+    # vehicle: that's the only reachable path to the bulk many-vehicles-at-
+    # once CSV importer (see franchise_income_import_preview).
+    if not vehicle and 'vehicle_id' not in request.args and all_vehicles:
         vehicle = all_vehicles[0]
 
     income_entries = _franchise_income_period_rows(FranchiseDailyIncome, 'entry_date', vehicle, df, dt) if vehicle else []
@@ -7230,7 +7240,10 @@ def franchise_weekly_income_list():
     all_vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.number_plate).all()
     vehicle_id = request.args.get('vehicle_id', type=int)
     vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
-    if not vehicle and not vehicle_id and all_vehicles:
+    # See franchise_daily_income_list — 'vehicle_id' present-and-blank
+    # (the "Whole Franchise" picker option) is a deliberate choice, not
+    # the same as it being absent entirely.
+    if not vehicle and 'vehicle_id' not in request.args and all_vehicles:
         vehicle = all_vehicles[0]
 
     income_entries = _franchise_income_period_rows(FranchiseWeeklyIncome, 'week_start', vehicle, df, dt) if vehicle else []
@@ -7715,6 +7728,64 @@ def franchise_vehicle_add():
     return render_template('franchise/vehicle_form.html', vehicle=None, action='Add')
 
 
+@app.route('/franchise/vehicles/quick-add', methods=['POST'])
+@login_required
+@permission_required('franchise')
+@handle_form_errors
+def franchise_vehicle_quick_add():
+    """Inline "+ New Vehicle" registration from the Daily/Weekly Income
+    pages — plate + franchisee name only, no fees/status/notes, so a
+    manager can register a new franchisee on the spot without leaving the
+    income form. Flagged pending_review so an admin follows up with the
+    full details (see franchise_vehicle_review) and alerted via the
+    Vehicles nav badge, WhatsApp (if linked), and the audit log."""
+    number_plate = request.form.get('number_plate', '').strip().upper()
+    franchisee_name = request.form.get('franchisee_name', '').strip()
+    kind = request.form.get('kind') if request.form.get('kind') in ('daily', 'weekly') else 'daily'
+    period = request.form.get('period', 'month')
+    if not number_plate:
+        raise ValueError('Number plate is required.')
+    if not franchisee_name:
+        raise ValueError('Franchisee name is required.')
+    check_unique(FranchiseVehicle, 'number_plate', number_plate, label='Number plate')
+
+    vehicle = FranchiseVehicle(number_plate=number_plate, franchisee_name=franchisee_name,
+                               pending_review=True)
+    db.session.add(vehicle)
+    db.session.flush()
+    log_audit('CREATE', 'franchise_vehicles', vehicle.id,
+              f'Quick-registered franchise vehicle {vehicle.number_plate} ({vehicle.franchisee_name}) '
+              f'from {kind} income — pending admin review')
+    touch_sync_fields(vehicle)
+    db.session.commit()
+
+    notify_admins_whatsapp(
+        f'New franchise vehicle registered by {current_user.username}: '
+        f'{vehicle.number_plate} ({vehicle.franchisee_name}). '
+        f'No fees/status set yet — review under Franchise > Vehicles.'
+    )
+
+    flash(f'Vehicle {vehicle.number_plate} registered — an admin will review and complete its details.', 'success')
+    endpoint = 'franchise_weekly_income_list' if kind == 'weekly' else 'franchise_daily_income_list'
+    return redirect(url_for(endpoint, vehicle_id=vehicle.id, period=period))
+
+
+@app.route('/franchise/vehicles/<int:vid>/review', methods=['POST'])
+@login_required
+@admin_required
+def franchise_vehicle_review(vid):
+    """Clears pending_review once an admin has checked/completed a
+    quick-registered vehicle's details — the counterpart to
+    franchise_vehicle_quick_add."""
+    vehicle = FranchiseVehicle.query.filter_by(id=vid).first_or_404()
+    vehicle.pending_review = False
+    log_audit('UPDATE', 'franchise_vehicles', vehicle.id, f'Marked {vehicle.number_plate} as reviewed')
+    touch_sync_fields(vehicle)
+    db.session.commit()
+    flash(f'{vehicle.number_plate} marked as reviewed.', 'success')
+    return redirect(url_for('franchise_vehicles'))
+
+
 @app.route('/franchise/vehicles/<int:vid>/edit', methods=['GET', 'POST'])
 @login_required
 @permission_required('franchise')
@@ -8102,6 +8173,61 @@ def user_toggle(uid):
     return redirect(url_for('users'))
 
 
+@app.route('/users/<int:uid>/role', methods=['POST'])
+@login_required
+@admin_required
+def user_set_role(uid):
+    """Promote/demote between 'admin' (full system access, see
+    User.has_permission) and 'manager' (access limited to whatever's
+    granted on the Permissions page). This is the only way an existing
+    user gains admin — role can't be changed after creation any other
+    way, so a manager with every individual permission checked still
+    can't reach admin-only tooling (Users, Audit Log, Sync Sites,
+    Import History) until promoted here."""
+    u = User.query.get_or_404(uid)
+    new_role = request.form.get('role')
+    if new_role not in ('admin', 'manager'):
+        flash('Invalid role.', 'danger')
+        return redirect(url_for('users'))
+    if u.role == 'admin' and new_role != 'admin':
+        if u.id == current_user.id:
+            flash('Cannot remove your own admin access.', 'danger')
+            return redirect(url_for('users'))
+        if User.query.filter(User.role == 'admin', User.id != u.id).count() == 0:
+            flash('Cannot remove the last admin account.', 'danger')
+            return redirect(url_for('users'))
+    u.role = new_role
+    log_audit('UPDATE', 'users', uid, f'Set role for {u.username}: {new_role}')
+    db.session.commit()
+    flash(f'{u.username} is now {"an Admin" if new_role == "admin" else "a Manager"}.', 'success')
+    return redirect(url_for('users'))
+
+
+@app.route('/users/<int:uid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def user_delete(uid):
+    """Hard-delete a login account that's no longer in use. Records this
+    user created (expenses, logs, etc.) aren't touched — their created_by/
+    user_id columns just point at an id that no longer resolves, same as
+    disabling already leaves behind, so history/attribution stays intact.
+    Use Disable instead of this if the account might come back — deletion
+    also frees up its username/email/WhatsApp number for reuse."""
+    u = User.query.get_or_404(uid)
+    if u.id == current_user.id:
+        flash('Cannot delete your own account.', 'danger')
+        return redirect(url_for('users'))
+    if u.role == 'admin' and User.query.filter(User.role == 'admin', User.id != u.id).count() == 0:
+        flash('Cannot delete the last admin account.', 'danger')
+        return redirect(url_for('users'))
+    username = u.username
+    log_audit('DELETE', 'users', uid, f'Deleted user {username}')
+    db.session.delete(u)
+    db.session.commit()
+    flash(f'User "{username}" deleted.', 'info')
+    return redirect(url_for('users'))
+
+
 @app.route('/users/<int:uid>/permissions', methods=['GET', 'POST'])
 @login_required
 @admin_required
@@ -8436,6 +8562,17 @@ def inject_unresolved_sync_conflicts_count():
     act on a conflict, so the query only runs for them."""
     if current_user.is_authenticated and current_user.role == 'admin':
         return {'unresolved_sync_conflicts_count': SyncConflict.query.filter_by(resolved=False).count()}
+    return {}
+
+
+@app.context_processor
+def inject_pending_franchise_vehicles_count():
+    """Powers the "Vehicles" sidebar badge under Franchise — counts
+    quick-registered vehicles (see franchise_vehicle_quick_add) still
+    awaiting an admin's review. Admin-only, same reasoning as the sync
+    conflicts badge above."""
+    if current_user.is_authenticated and current_user.role == 'admin':
+        return {'pending_franchise_vehicles_count': FranchiseVehicle.query.filter_by(pending_review=True).count()}
     return {}
 
 
@@ -9619,6 +9756,19 @@ def send_whatsapp_message(to, body):
         app.logger.exception('WhatsApp send request failed')
 
 
+def notify_admins_whatsapp(body):
+    """Push a WhatsApp alert to every active admin who has a number linked
+    (see User.whatsapp_phone / users/whatsapp.html) — used for events an
+    admin should know about right away (e.g. a quick-registered franchise
+    vehicle awaiting review), on top of the in-app badge and audit log
+    that already cover anyone without WhatsApp set up. Best-effort: a
+    send failure to one admin (logged inside send_whatsapp_message) never
+    blocks the others or the caller's own request."""
+    admins = User.query.filter_by(role='admin', is_active=True).filter(User.whatsapp_phone.isnot(None)).all()
+    for admin in admins:
+        send_whatsapp_message(admin.whatsapp_phone, body)
+
+
 def _whatsapp_signature_valid(raw_body):
     """Verify Meta's X-Hub-Signature-256 header against WHATSAPP_APP_SECRET
     so the webhook only acts on requests actually from Meta. Passes
@@ -9978,6 +10128,8 @@ def migrate_db():
                 conn.execute(text("ALTER TABLE franchise_vehicles ADD COLUMN daily_fee FLOAT"))
             if 'weekly_fee' not in vehicle_cols:
                 conn.execute(text("ALTER TABLE franchise_vehicles ADD COLUMN weekly_fee FLOAT"))
+            if 'pending_review' not in vehicle_cols:
+                conn.execute(text("ALTER TABLE franchise_vehicles ADD COLUMN pending_review BOOLEAN NOT NULL DEFAULT 0"))
 
         # Multi-site sync columns (see touch_sync_fields()) — added to every
         # syncable table. sync_uuid/deleted_at go in nullable (SQLite can't

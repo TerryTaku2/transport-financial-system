@@ -1,0 +1,24 @@
+found ACZ 5709 at index 9676
+    
+
+    <!-- Content -->
+    <main class="content">
+      
+<div class="page-header">
+  <div>
+    <h1>Confirm Column Mapping</h1>
+    <div class="subtitle">franchise_daily_income_2026-08-01.csv ? 55 row(s) detected for Whole Franchise, Daily Income</div>
+  </div>
+  <a href="/franchise/daily-income?period=month" class="btn btn-outline"><i data-feather="arrow-left"></i> Cancel</a>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Match Your Columns</h3></div>
+  <div class="card-body">
+    <form method="POST" action="/franchise/income/import/preview">
+      <input type="hidden" name="csrf_token" value="IjFiOGNiMTFjNDc3YmNkNWE2ZWIyOTNkNTJmYjZkMjU1ODg0Nzg3Zjgi.anNSsQ.Jkynr4J2tJ9IU-0QcxzXgW2V91M">
+      <input type="hidden" name="kind" value="daily">
+      <input type="hidden" name="vehicle_id" value="">
+      <input type="hidden" name="period" value="month">
+      <input type="hidden" name="filename" value="franchise_daily_income_2026-08-01.csv">
+      <input type="hidden" name="raw_data" value="{&#34;headers&#34;: [&#34;date&#34;, &#34;vehicle&#34;, &#34;income&#34;], &#34;rows&#34;: [{&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;ACZ 5709&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;ADC 7740&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;ADC 8628&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;ADC 9018&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;ADZ 7354&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;AEU 3890&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;AEU 5516&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;AEZ 5147&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;AGB 331&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;AGJ 0170&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;AGJ 0223&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;AGJ 3318&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;AGJ 5636&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#34;, &#34;vehicle&#34;: &#34;AGJ 6144&#34;, &#34;income&#34;: &#34;10&#34;}, {&#34;date&#34;: &#34;2026-08-01&#

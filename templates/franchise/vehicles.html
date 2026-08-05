@@ -42,7 +42,7 @@
       <tbody>
         {% for v in vehicles %}
         <tr>
-          <td>{{ v.number_plate }}</td>
+          <td>{{ v.number_plate }} {% if v.pending_review %}<span class="badge badge-amber" title="Quick-registered — details not yet reviewed">Needs Review</span>{% endif %}</td>
           <td>{{ v.franchisee_name }}</td>
           <td><span class="badge {% if v.status == 'active' %}badge-green{% else %}badge-gray{% endif %}">{{ v.status|capitalize }}</span></td>
           <td class="text-right">{{ v.daily_fee|currency if v.daily_fee is not none else '—' }}</td>
@@ -53,6 +53,12 @@
           <td class="btn-group">
             <a href="{{ url_for('franchise_vehicle_edit', vid=v.id) }}" class="btn btn-outline btn-xs">Edit</a>
             <a href="{{ url_for('franchise_daily_income_list', vehicle_id=v.id) }}" class="btn btn-outline btn-xs">Income</a>
+            {% if v.pending_review and current_user.role == 'admin' %}
+            <form method="POST" action="{{ url_for('franchise_vehicle_review', vid=v.id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-outline btn-xs">Mark Reviewed</button>
+            </form>
+            {% endif %}
             {% if current_user.role == 'admin' %}
             <form method="POST" action="{{ url_for('franchise_vehicle_delete', vid=v.id) }}" data-confirm="Delete franchise vehicle {{ v.number_plate }}?">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
