@@ -318,6 +318,7 @@ tbody tr:hover td { background: #f8fafc; }
   text-decoration: none;
 }
 .btn svg { width: 14px; height: 14px; }
+.btn:disabled { opacity: .45; cursor: not-allowed; pointer-events: none; }
 
 .btn-primary { background: var(--primary); color: #fff; border-color: var(--primary); }
 .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: #fff; }

@@ -1,0 +1,111 @@
+{% extends 'base.html' %}
+{% block title %}Danger Zone{% endblock %}
+{% block page_title %}Admin — Danger Zone{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Danger Zone</h1>
+    <div class="subtitle">Clear specific data types, or select all for a full module wipe. Admin only.</div>
+  </div>
+</div>
+
+<div class="alert alert-danger mb-24">
+  <strong>This cannot be undone from the UI.</strong> Clearing a data type soft-deletes every record in it —
+  the rows are removed from every list, report, and total, and the deletion syncs to every connected site.
+  A full per-record entry (plus a summary per data type) is written to the
+  <a href="{{ url_for('audit_log') }}">Audit Log</a> first, so what was cleared, by whom, and when stays
+  fully traceable — but the records themselves won't come back from this screen.
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fill, minmax(340px, 1fr));gap:16px;">
+  {% for m in modules %}
+  <div class="card">
+    <div class="card-header"><h3>{{ m.label }}</h3></div>
+    <div class="card-body">
+      {% if m.total %}
+      <form method="POST" action="{{ url_for('danger_zone_clear', module_key=m.key) }}"
+            class="danger-zone-form" data-module-key="{{ m.key }}"
+            data-confirm="Clear the selected {{ m.label }} record(s)? This cannot be undone from here.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+
+        <div style="display:flex;gap:10px;margin-bottom:8px;">
+          <button type="button" class="btn btn-outline btn-xs danger-zone-select-all">Select all</button>
+          <button type="button" class="btn btn-outline btn-xs danger-zone-select-none">Clear selection</button>
+        </div>
+
+        <ul style="list-style:none;margin:0 0 14px;padding:0;font-size:13px;">
+          {% for table_key, table_label, count in m.table_counts %}
+          <li style="display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);">
+            <label style="display:flex;gap:8px;align-items:center;font-weight:normal;text-transform:none;margin:0;{% if not count %}opacity:.5;{% endif %}">
+              <input type="checkbox" name="tables" value="{{ table_key }}" data-count="{{ count }}"
+                     class="danger-zone-table-check" style="width:auto;" {% if not count %}disabled{% endif %}>
+              {{ table_label }}
+            </label>
+            <strong>{{ count }}</strong>
+          </li>
+          {% endfor %}
+        </ul>
+
+        <p class="form-hint mb-16" style="margin:0 0 16px;">
+          <span class="danger-zone-selected-total">0</span> of {{ m.total }} record(s) selected.
+        </p>
+
+        <div class="form-group" style="margin-bottom:10px;">
+          <label>Confirm by typing this word</label>
+          <div class="mb-8"><span class="badge badge-red" style="font-size:13px;letter-spacing:1px;">{{ m.key|upper }}</span></div>
+          <input type="text" name="confirm_text" class="danger-zone-confirm-input" autocomplete="off"
+                 placeholder="Type here…">
+        </div>
+        <button type="submit" class="btn btn-danger danger-zone-submit" disabled>
+          <i data-feather="trash-2"></i> Clear Selected Data
+        </button>
+      </form>
+      {% else %}
+      <p class="form-hint" style="margin:0;">No data in this module — nothing to clear.</p>
+      {% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<script>
+(function () {
+  document.querySelectorAll('.danger-zone-form').forEach(function (form) {
+    var key = form.getAttribute('data-module-key').toUpperCase();
+    var checks = form.querySelectorAll('.danger-zone-table-check');
+    var input = form.querySelector('.danger-zone-confirm-input');
+    var button = form.querySelector('.danger-zone-submit');
+    var totalEl = form.querySelector('.danger-zone-selected-total');
+
+    function selectedTotal() {
+      var total = 0;
+      checks.forEach(function (c) { if (c.checked) total += parseInt(c.getAttribute('data-count'), 10) || 0; });
+      return total;
+    }
+
+    function refresh() {
+      var total = selectedTotal();
+      totalEl.textContent = total;
+      var anyChecked = Array.prototype.some.call(checks, function (c) { return c.checked; });
+      button.disabled = !anyChecked || input.value.trim().toUpperCase() !== key;
+      form.setAttribute('data-confirm', 'Clear ' + total + ' selected record(s) from ' + key + '? This cannot be undone from here.');
+    }
+
+    checks.forEach(function (c) { c.addEventListener('change', refresh); });
+    input.addEventListener('input', refresh);
+
+    form.querySelector('.danger-zone-select-all').addEventListener('click', function () {
+      checks.forEach(function (c) { if (!c.disabled) c.checked = true; });
+      refresh();
+    });
+    form.querySelector('.danger-zone-select-none').addEventListener('click', function () {
+      checks.forEach(function (c) { c.checked = false; });
+      refresh();
+    });
+
+    refresh();
+  });
+})();
+</script>
+{% endblock %}

@@ -231,6 +231,9 @@
       <a href="{{ url_for('spoke_releases') }}" class="nav-item {% if 'spoke_release' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="package"></i> Spoke Releases
       </a>
+      <a href="{{ url_for('danger_zone') }}" class="nav-item {% if request.endpoint == 'danger_zone' %}active{% endif %}" style="color:var(--danger);">
+        <i data-feather="alert-triangle"></i> Danger Zone
+      </a>
     </div>
     {% endif %}
 

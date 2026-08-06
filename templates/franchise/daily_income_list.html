@@ -80,7 +80,7 @@
         {% if by_date_missing %}
         <div class="form-group" style="margin:0;max-width:160px;">
           <label>Income (USD)</label>
-          <input type="number" name="amount" step="0.01" min="0" value="10.00" required>
+          <input type="number" id="bulk-fill-amount" name="amount" step="0.01" min="0" value="10.00" required>
         </div>
         {% endif %}
         <button type="button" class="btn btn-outline btn-xs" id="bulk-select-all">Select all</button>
@@ -99,13 +99,15 @@
       </div>
       <div class="form-hint mt-8">
         Vehicles without an entry for {{ on_date }} are checked below — uncheck any that were absent or
-        didn't pay that day before filling. A vehicle with its own agreed Daily Fee gets that fee instead
-        of the amount above.
+        didn't pay that day before filling many at once, or click a single vehicle's own Confirm button
+        to record just that one. A vehicle with its own agreed Daily Fee gets that fee instead of the
+        amount above either way.
         {% if current_user.role == 'admin' %}
         To undo a wrong entry (e.g. a vehicle that was actually absent), check its row instead and use Delete.
         {% endif %}
       </div>
     </div>
+  </form>
   {% endif %}
   <div class="table-wrap">
     <table>
@@ -124,9 +126,22 @@
           {% if show_checkboxes %}
           <td>
             {% if not r.entries %}
-            <input type="checkbox" class="bulk-check" name="vehicle_ids" value="{{ r.vehicle.id }}" checked>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input type="checkbox" class="bulk-check" name="vehicle_ids" value="{{ r.vehicle.id }}"
+                     form="bulk-fill-form" checked title="Include in bulk Fill/Delete above">
+              <form method="POST" action="{{ url_for('franchise_daily_income_bulk_fill') }}" style="margin:0;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="on_date" value="{{ on_date }}">
+                <input type="hidden" name="period" value="{{ period }}">
+                <input type="hidden" name="vehicle_ids" value="{{ r.vehicle.id }}">
+                <input type="hidden" name="amount" class="row-confirm-amount" value="10.00">
+                <button type="submit" class="btn btn-primary btn-xs" title="Record this vehicle's payment now">
+                  <i data-feather="check"></i> Confirm
+                </button>
+              </form>
+            </div>
             {% elif current_user.role == 'admin' %}
-            <input type="checkbox" class="bulk-check" name="vehicle_ids" value="{{ r.vehicle.id }}">
+            <input type="checkbox" class="bulk-check" name="vehicle_ids" value="{{ r.vehicle.id }}" form="bulk-fill-form">
             {% endif %}
           </td>
           {% endif %}
@@ -147,12 +162,16 @@
     </table>
   </div>
   {% if show_checkboxes %}
-  </form>
   <script>
   (function () {
     var form = document.getElementById('bulk-fill-form');
     if (!form) return;
-    var boxes = form.querySelectorAll('.bulk-check');
+    // Checkboxes live in table rows outside this form element now (a table
+    // row also holds its own standalone per-vehicle Confirm form, and forms
+    // can't nest) — linked back via each checkbox's form="bulk-fill-form"
+    // attribute instead, so they're queried globally rather than as
+    // descendants of the form.
+    var boxes = document.querySelectorAll('.bulk-check');
     document.getElementById('bulk-select-all').addEventListener('click', function () {
       boxes.forEach(function (b) { b.checked = true; });
     });
@@ -167,6 +186,19 @@
     if (delBtn) delBtn.addEventListener('click', function () {
       form.setAttribute('data-confirm', 'Delete the daily income entry for the checked vehicle(s) on {{ on_date }}? This cannot be undone from here.');
     });
+
+    // Keep every row's own Confirm button in sync with the shared default
+    // amount above, since a vehicle without its own agreed Daily Fee falls
+    // back to whatever's typed there (see franchise_daily_income_bulk_fill).
+    var amountInput = document.getElementById('bulk-fill-amount');
+    var rowAmounts = document.querySelectorAll('.row-confirm-amount');
+    if (amountInput) {
+      var syncRowAmounts = function () {
+        rowAmounts.forEach(function (el) { el.value = amountInput.value; });
+      };
+      amountInput.addEventListener('input', syncRowAmounts);
+      syncRowAmounts();
+    }
   })();
   </script>
   {% endif %}

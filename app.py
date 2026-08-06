@@ -36,7 +36,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, PageBreak, SimpleDocTemplate, Spacer, Table, TableStyle
 from dotenv import load_dotenv
 from flask import (Flask, render_template, request, redirect, url_for,
-                   flash, jsonify, make_response, session, send_from_directory, send_file)
+                   flash, jsonify, make_response, session, send_from_directory, send_file, abort)
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (LoginManager, UserMixin, login_user, logout_user,
                          login_required, current_user)
@@ -8525,6 +8525,68 @@ def audit_log():
 
 
 # ─────────────────────────────────────────────────────────────
+# Danger Zone — admin-only bulk clear per module (see DANGER_ZONE_MODULES).
+# ─────────────────────────────────────────────────────────────
+@app.route('/admin/danger-zone')
+@login_required
+@admin_required
+def danger_zone():
+    modules = []
+    for key, label, tables in DANGER_ZONE_MODULES:
+        table_counts = [(t, _danger_zone_table_label(t), SYNC_MODELS[t][0].query.count()) for t in tables]
+        modules.append(dict(key=key, label=label, table_counts=table_counts,
+                            total=sum(c for _, _, c in table_counts)))
+    return render_template('admin/danger_zone.html', modules=modules)
+
+
+@app.route('/admin/danger-zone/clear/<module_key>', methods=['POST'])
+@login_required
+@admin_required
+def danger_zone_clear(module_key):
+    if module_key not in DANGER_ZONE_MODULES_BY_KEY:
+        abort(404)
+    label, module_tables = DANGER_ZONE_MODULES_BY_KEY[module_key]
+
+    # Only tables actually belonging to this module can be cleared — the
+    # checkboxes already restrict this client-side, but the module boundary
+    # (Franchise can't reach into Finance data) has to hold up server-side
+    # even if the posted table list is tampered with.
+    selected_tables = [t for t in request.form.getlist('tables') if t in module_tables]
+    if not selected_tables:
+        flash('Select at least one data type to clear.', 'danger')
+        return redirect(url_for('danger_zone'))
+
+    confirm_text = request.form.get('confirm_text', '').strip().upper()
+    if confirm_text != module_key.upper():
+        flash(f'Confirmation text did not match — nothing was cleared. Type {module_key.upper()} exactly to confirm.', 'danger')
+        return redirect(url_for('danger_zone'))
+
+    now = datetime.now(timezone.utc)
+    table_totals = {}
+    for table_key in selected_tables:
+        model = SYNC_MODELS[table_key][0]
+        rows = model.query.all()
+        for row in rows:
+            log_audit('DELETE', table_key, row.id,
+                      f'Danger Zone clear ({label}): {_danger_zone_record_label(table_key, row)}')
+            row.deleted_at = now
+            touch_sync_fields(row)
+        table_totals[table_key] = len(rows)
+        if rows:
+            log_audit('DANGER_ZONE_CLEAR', table_key, None,
+                      f'{label} — cleared {len(rows)} {table_key} record(s)')
+
+    db.session.commit()
+    grand_total = sum(table_totals.values())
+    if grand_total:
+        summary = ', '.join(f'{count} {_danger_zone_table_label(t)}' for t, count in table_totals.items() if count)
+        flash(f'Cleared {grand_total} {label} record(s): {summary}.', 'warning')
+    else:
+        flash('Selected data type(s) had no records to clear.', 'success')
+    return redirect(url_for('danger_zone'))
+
+
+# ─────────────────────────────────────────────────────────────
 # Multi-site sync — conflict review. Every last-write-wins resolution
 # apply_incoming_record() makes gets logged here with both full payloads
 # (see SyncConflict, app.py near the sync API), so an unresolved conflict
@@ -9167,6 +9229,81 @@ SYNC_TABLE_ORDER = [
     'loan_payments', 'commission_payments',
     'daily_logs', 'fuel_logs', 'maintenance_logs', 'store_sales',
 ]
+
+# ─────────────────────────────────────────────────────────────
+# Danger Zone — admin-only bulk clear, grouped to match the sidebar's own
+# module boundaries so "clear Franchise" can't reach into Finance data and
+# vice versa. Every table listed here must already be a SYNC_MODELS entry:
+# the clear itself reuses the same soft-delete (deleted_at) + touch_sync_fields
+# path as every individual delete route, rather than a raw DELETE, so a
+# module clear tombstones and propagates through multi-site sync exactly
+# like any other deletion instead of looking like the rows never existed to
+# a spoke that hasn't synced yet.
+DANGER_ZONE_MODULES = [
+    ('franchise', 'Franchise', ['franchise_daily_income', 'franchise_weekly_income', 'franchise_collections', 'franchise_vehicles']),
+    ('fleet', 'Fleet & Compliance', ['vehicles', 'drivers', 'routes', 'vehicle_documents', 'maintenance_schedules']),
+    ('ledger', 'Daily Transactions (Crew Ledger)', ['daily_logs']),
+    ('operations', 'Operations (Fuel & Maintenance Logs)', ['fuel_logs', 'maintenance_logs']),
+    ('finance', 'Finance Ledger', ['loans', 'loan_payments', 'payables', 'receivables', 'capital_contributions', 'owner_drawings', 'budgets', 'expenses', 'expense_categories', 'commission_payments']),
+    ('store', 'Spares Store', ['spare_parts', 'store_purchases', 'store_sales']),
+]
+DANGER_ZONE_MODULES_BY_KEY = {key: (label, tables) for key, label, tables in DANGER_ZONE_MODULES}
+
+# Display name for each table's checkbox in the Danger Zone UI — falls back
+# to a title-cased version of the raw table name for anything not listed.
+DANGER_ZONE_TABLE_LABELS = {
+    'franchise_daily_income': 'Daily Income', 'franchise_weekly_income': 'Weekly Income',
+    'franchise_collections': 'Collections (legacy)', 'franchise_vehicles': 'Franchise Vehicles',
+    'vehicles': 'Vehicles', 'drivers': 'Drivers', 'routes': 'Routes',
+    'vehicle_documents': 'Vehicle Documents', 'maintenance_schedules': 'Maintenance Schedules',
+    'daily_logs': 'Daily Logs', 'fuel_logs': 'Fuel Logs', 'maintenance_logs': 'Maintenance Logs',
+    'loans': 'Loans', 'loan_payments': 'Loan Payments', 'payables': 'Payables',
+    'receivables': 'Receivables', 'capital_contributions': 'Capital Contributions',
+    'owner_drawings': 'Owner Drawings', 'budgets': 'Budgets', 'expenses': 'Expenses',
+    'expense_categories': 'Expense Categories', 'commission_payments': 'Commission Payments',
+    'spare_parts': 'Spare Parts', 'store_purchases': 'Store Purchases', 'store_sales': 'Store Sales',
+}
+
+
+def _danger_zone_table_label(table_key):
+    return DANGER_ZONE_TABLE_LABELS.get(table_key, table_key.replace('_', ' ').title())
+
+# Which columns identify a row in its audit-log description — just enough
+# to recognize the record later without re-deriving it from every model's
+# full column list.
+_DANGER_ZONE_LABEL_FIELDS = {
+    'vehicles': ('registration',), 'routes': ('name',), 'spare_parts': ('name',),
+    'expense_categories': ('name',), 'drivers': ('name',),
+    'expenses': ('expense_date', 'description', 'amount'),
+    'store_purchases': ('purchase_date', 'supplier', 'total_cost'),
+    'daily_logs': ('log_date', 'gross_revenue'),
+    'fuel_logs': ('log_date', 'total_cost'),
+    'maintenance_logs': ('log_date', 'total_cost'),
+    'store_sales': ('sale_date', 'customer_name', 'total_amount'),
+    'franchise_vehicles': ('number_plate', 'franchisee_name'),
+    'vehicle_documents': ('doc_type', 'reference_number'),
+    'maintenance_schedules': ('description',),
+    'franchise_daily_income': ('entry_date', 'income'),
+    'franchise_weekly_income': ('week_start', 'income'),
+    'franchise_collections': ('entry_date', 'frequency', 'amount'),
+    'loans': ('lender', 'principal'),
+    'payables': ('supplier_name', 'amount'),
+    'receivables': ('client_name', 'amount'),
+    'capital_contributions': ('contributor', 'amount'),
+    'owner_drawings': ('drawing_date', 'amount'),
+    'budgets': ('category', 'month', 'amount'),
+    'loan_payments': ('payment_date', 'amount'),
+    'commission_payments': ('payment_date', 'amount'),
+}
+
+
+def _danger_zone_record_label(table_key, row):
+    parts = [f'id={row.id}']
+    for field in _DANGER_ZONE_LABEL_FIELDS.get(table_key, ()):
+        value = getattr(row, field, None)
+        if value is not None:
+            parts.append(f'{field}={value}')
+    return ' '.join(parts)
 
 # ─────────────────────────────────────────────────────────────
 # Phase 7 — soft-delete / tombstone sync. Deleting a record now sets
