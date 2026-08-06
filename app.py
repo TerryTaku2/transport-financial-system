@@ -1302,6 +1302,7 @@ PRECACHE_PAGES = [
     ('franchise', 'franchise_weekly_income_list'),
     ('franchise', 'franchise_vehicles'),
     ('franchise', 'report_franchise_reconciliation'),
+    ('franchise', 'report_franchise_dual_frequency'),
     ('franchise', 'report_franchise_weekly'),
     ('franchise', 'report_franchise_consolidated'),
     ('store', 'store_parts'),
@@ -8165,6 +8166,65 @@ def report_franchise_reconciliation():
                            weekly_rows=weekly_rows, weekly_totals=weekly_totals,
                            combined_totals=combined_totals,
                            day_by_day_rows=day_by_day_rows, day_by_day_totals=day_by_day_totals,
+                           date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
+
+
+@app.route('/reports/franchise/dual-frequency')
+@login_required
+@permission_required('franchise')
+def report_franchise_dual_frequency():
+    """Vehicles that paid franchise fees through BOTH income streams — Daily
+    and Weekly — within the selected date range. A franchise vehicle can owe
+    a daily fee, a weekly fee, or both (FranchiseVehicle.daily_fee /
+    weekly_fee), so this cross-references the two independent income
+    entities to surface vehicles active on both schedules at once, rather
+    than requiring a separate lookup on each of the Daily/Weekly Income
+    list pages."""
+    df, dt = query_date_range()
+
+    daily_vehicle_ids = {vid for (vid,) in db.session.query(FranchiseDailyIncome.vehicle_id)
+        .filter(FranchiseDailyIncome.entry_date.between(df, dt), FranchiseDailyIncome.vehicle_id.isnot(None))
+        .distinct()}
+    weekly_vehicle_ids = {vid for (vid,) in db.session.query(FranchiseWeeklyIncome.vehicle_id)
+        .filter(FranchiseWeeklyIncome.week_start.between(df, dt), FranchiseWeeklyIncome.vehicle_id.isnot(None))
+        .distinct()}
+    common_ids = daily_vehicle_ids & weekly_vehicle_ids
+
+    daily_by_vehicle, weekly_by_vehicle, vehicles = {}, {}, {}
+    if common_ids:
+        for e in FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt),
+                FranchiseDailyIncome.vehicle_id.in_(common_ids)).all():
+            daily_by_vehicle.setdefault(e.vehicle_id, []).append(e)
+        for e in FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt),
+                FranchiseWeeklyIncome.vehicle_id.in_(common_ids)).all():
+            weekly_by_vehicle.setdefault(e.vehicle_id, []).append(e)
+        vehicles = {v.id: v for v in FranchiseVehicle.query.filter(FranchiseVehicle.id.in_(common_ids)).all()}
+
+    rows = []
+    for vid in common_ids:
+        d_entries = daily_by_vehicle.get(vid, [])
+        w_entries = weekly_by_vehicle.get(vid, [])
+        d_totals = _income_entry_totals(d_entries)
+        w_totals = _income_entry_totals(w_entries)
+        rows.append(dict(
+            vehicle=vehicles.get(vid),
+            daily_count=len(d_entries), daily_income=d_totals['income'],
+            weekly_count=len(w_entries), weekly_income=w_totals['income'],
+            total_income=d_totals['income'] + w_totals['income'],
+            last_daily=max(e.entry_date for e in d_entries),
+            last_weekly=max(e.week_start for e in w_entries),
+        ))
+    rows.sort(key=lambda r: r['vehicle'].number_plate if r['vehicle'] else '')
+
+    totals = dict(
+        daily_income=sum(r['daily_income'] for r in rows),
+        weekly_income=sum(r['weekly_income'] for r in rows),
+        total_income=sum(r['total_income'] for r in rows),
+    )
+
+    return render_template('franchise/dual_frequency.html',
+                           title='Vehicles Paying Both Daily & Weekly Franchise Fees',
+                           rows=rows, totals=totals,
                            date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
 
 

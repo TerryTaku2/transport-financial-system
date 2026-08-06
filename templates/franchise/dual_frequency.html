@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}Franchise — Daily &amp; Weekly Payers{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ title }}</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; vehicles with at least one Daily Income entry and at least one Weekly Income entry in this range</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('franchise_daily_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Daily Entries</a>
+    <a href="{{ url_for('franchise_weekly_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Weekly Entries</a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid mb-24">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Vehicles Paying Both</div>
+    <div class="kpi-value">{{ rows|length }}</div>
+  </div>
+  <div class="kpi-card kpi-teal">
+    <div class="kpi-label">Daily Income (these vehicles)</div>
+    <div class="kpi-value">{{ totals.daily_income|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Weekly Income (these vehicles)</div>
+    <div class="kpi-value">{{ totals.weekly_income|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Combined Income</div>
+    <div class="kpi-value">{{ totals.total_income|currency }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Vehicles</h3></div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Number Plate</th>
+          <th>Franchisee</th>
+          <th class="text-right">Daily Entries</th>
+          <th class="text-right">Daily Income</th>
+          <th>Last Daily Entry</th>
+          <th class="text-right">Weekly Entries</th>
+          <th class="text-right">Weekly Income</th>
+          <th>Last Weekly Entry</th>
+          <th class="text-right">Total Income</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>
+            {% if r.vehicle %}
+            <a href="{{ url_for('franchise_vehicle_edit', vid=r.vehicle.id) }}">{{ r.vehicle.number_plate }}</a>
+            {% else %}
+            <span class="text-muted">&mdash;</span>
+            {% endif %}
+          </td>
+          <td>{{ r.vehicle.franchisee_name if r.vehicle else '' }}</td>
+          <td class="text-right">{{ r.daily_count }}</td>
+          <td class="text-right">{{ r.daily_income|currency }}</td>
+          <td>{{ r.last_daily }}</td>
+          <td class="text-right">{{ r.weekly_count }}</td>
+          <td class="text-right">{{ r.weekly_income|currency }}</td>
+          <td>{{ r.last_weekly }}</td>
+          <td class="text-right">{{ r.total_income|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="summary-row">
+          <td colspan="3">TOTAL</td>
+          <td class="text-right">{{ totals.daily_income|currency }}</td>
+          <td></td>
+          <td></td>
+          <td class="text-right">{{ totals.weekly_income|currency }}</td>
+          <td></td>
+          <td class="text-right">{{ totals.total_income|currency }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No vehicle has both a Daily and a Weekly franchise income entry in the selected period.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

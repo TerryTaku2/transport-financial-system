@@ -164,6 +164,9 @@
       <a href="{{ url_for('report_franchise_reconciliation') }}" class="nav-item {% if request.endpoint == 'report_franchise_reconciliation' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Reconciliation Schedule
       </a>
+      <a href="{{ url_for('report_franchise_dual_frequency') }}" class="nav-item {% if request.endpoint == 'report_franchise_dual_frequency' %}active{% endif %}">
+        <i data-feather="check-circle"></i> Daily &amp; Weekly Payers
+      </a>
       <a href="{{ url_for('report_franchise_weekly') }}" class="nav-item {% if request.endpoint == 'report_franchise_weekly' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Weekly Analysis
       </a>
