@@ -1386,6 +1386,21 @@ def parse_date(s):
         raise ValueError(f'"{s}" is not a valid date (expected YYYY-MM-DD).')
 
 
+def csv_export_response(filename, header, rows):
+    """Build a CSV download response — shared by every /export route so each
+    one only supplies its header row and data rows, not its own copy of the
+    io.StringIO/csv.writer/Content-Disposition boilerplate."""
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(header)
+    w.writerows(rows)
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'text/csv'
+    resp.headers['Content-Disposition'] = f'attachment; filename={filename}'
+    return resp
+
+
 def _detect_dayfirst(values):
     """Infer whether an uploaded file's slash/dash-separated dates are
     day-first (DD/MM/YYYY) or month-first (MM/DD/YYYY), by scanning for any
@@ -3724,6 +3739,24 @@ def fuel_logs():
                            vehicle_id=vehicle_id)
 
 
+@app.route('/logs/fuel/export')
+@login_required
+@permission_required('fuel_logs')
+def fuel_logs_export():
+    vehicle_id = request.args.get('vehicle_id', '')
+    q = FuelLog.query
+    if vehicle_id:
+        q = q.filter(FuelLog.vehicle_id == vehicle_id)
+    logs = q.order_by(FuelLog.log_date.desc()).all()
+    rows = [[l.log_date, l.vehicle.registration, l.liters,
+             f'{l.cost_per_liter:.2f}' if l.cost_per_liter is not None else '',
+             f'{l.total_cost:.2f}' if l.total_cost is not None else '',
+             l.odometer if l.odometer is not None else '', l.supplier or '', l.notes or '']
+            for l in logs]
+    return csv_export_response(f'fuel_logs_{date.today()}.csv',
+        ['Date', 'Vehicle', 'Liters', 'Cost/Liter', 'Total Cost', 'Odometer', 'Supplier', 'Notes'], rows)
+
+
 @app.route('/logs/fuel/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('fuel_logs')
@@ -3814,6 +3847,22 @@ def maintenance_logs():
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     return render_template('logs/maintenance/index.html', logs=logs, vehicles=all_vehicles,
                            vehicle_id=vehicle_id)
+
+
+@app.route('/logs/maintenance/export')
+@login_required
+@permission_required('maintenance')
+def maintenance_logs_export():
+    vehicle_id = request.args.get('vehicle_id', '')
+    q = MaintenanceLog.query
+    if vehicle_id:
+        q = q.filter(MaintenanceLog.vehicle_id == vehicle_id)
+    logs = q.order_by(MaintenanceLog.log_date.desc()).all()
+    rows = [[l.log_date, l.vehicle.registration, l.description, f'{l.parts_cost:.2f}',
+             f'{l.labor_cost:.2f}', f'{l.total_cost:.2f}', l.mechanic or '', l.notes or '']
+            for l in logs]
+    return csv_export_response(f'maintenance_logs_{date.today()}.csv',
+        ['Date', 'Vehicle', 'Description', 'Parts Cost', 'Labor Cost', 'Total Cost', 'Mechanic', 'Notes'], rows)
 
 
 @app.route('/logs/maintenance/add', methods=['GET', 'POST'])
@@ -4140,6 +4189,21 @@ def store_purchases():
                            part_id=part_id)
 
 
+@app.route('/store/purchases/export')
+@login_required
+@permission_required('store')
+def store_purchases_export():
+    part_id = request.args.get('part_id', '')
+    q = StorePurchase.query
+    if part_id:
+        q = q.filter(StorePurchase.part_id == part_id)
+    purchases = q.order_by(StorePurchase.purchase_date.desc()).all()
+    rows = [[p.purchase_date, p.part.name, p.quantity, f'{p.unit_cost:.2f}',
+             f'{p.total_cost:.2f}', p.supplier or '', p.notes or ''] for p in purchases]
+    return csv_export_response(f'store_purchases_{date.today()}.csv',
+        ['Date', 'Part', 'Quantity', 'Unit Cost', 'Total Cost', 'Supplier', 'Notes'], rows)
+
+
 @app.route('/store/purchases/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('store')
@@ -4357,6 +4421,22 @@ def store_sales():
     return render_template('store/sales.html', sales=sales, parts=all_parts, part_id=part_id)
 
 
+@app.route('/store/sales/export')
+@login_required
+@permission_required('store')
+def store_sales_export():
+    part_id = request.args.get('part_id', '')
+    q = StoreSale.query
+    if part_id:
+        q = q.filter(StoreSale.part_id == part_id)
+    sales = q.order_by(StoreSale.sale_date.desc()).all()
+    rows = [[s.sale_date, s.part.name, s.quantity, f'{s.unit_cost:.2f}', f'{s.unit_price:.2f}',
+             f'{s.total_amount:.2f}', s.vehicle.registration if s.vehicle else '',
+             s.customer_name or '', s.notes or ''] for s in sales]
+    return csv_export_response(f'store_sales_{date.today()}.csv',
+        ['Date', 'Part', 'Quantity', 'Unit Cost', 'Unit Price', 'Total Amount', 'Sold To Vehicle', 'Customer', 'Notes'], rows)
+
+
 @app.route('/store/sales/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('store')
@@ -4535,6 +4615,28 @@ def store_trading_account():
         purchases_total=purchases_total, closing_stock_value=closing_stock_value,
         part_breakdown=part_breakdown,
         date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/store/trading-account/export')
+@login_required
+@permission_required('store')
+def store_trading_account_export():
+    df, dt = query_date_range()
+    sales = StoreSale.query.filter(StoreSale.sale_date.between(df, dt)).all()
+    by_part = {}
+    for s in sales:
+        row = by_part.setdefault(s.part_id, {'part': s.part, 'quantity': 0, 'sales': 0.0, 'cost_of_sales': 0.0})
+        row['quantity'] += s.quantity
+        row['sales'] += s.total_amount
+        row['cost_of_sales'] += s.unit_cost * s.quantity
+    rows = []
+    for row in sorted(by_part.values(), key=lambda r: r['sales'] - r['cost_of_sales'], reverse=True):
+        gross_profit = row['sales'] - row['cost_of_sales']
+        margin = (gross_profit / row['sales'] * 100) if row['sales'] else 0
+        rows.append([row['part'].name, row['quantity'], f"{row['sales']:.2f}",
+                     f"{row['cost_of_sales']:.2f}", f"{gross_profit:.2f}", f"{margin:.1f}"])
+    return csv_export_response(f'store_trading_account_{df}_to_{dt}.csv',
+        ['Part', 'Quantity Sold', 'Sales', 'Cost of Sales', 'Gross Profit', 'Margin %'], rows)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -5790,18 +5892,13 @@ def export_full_report_pack():
     return resp
 
 
-@app.route('/reports/shortfalls')
-@login_required
-@permission_required('reports')
-def report_shortfalls():
+def _compute_shortfall_rows(df, dt):
     """Flags every vehicle/day where actual fare fell below that vehicle's
     admin-set daily_target — vehicles with no target set are skipped
     entirely. Each flagged day shows how much garnish (if any) has already
     been applied against the shortfall, so the admin can see at a glance
-    what's still unresolved and act on it inline."""
-    df, dt = query_date_range()
-    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
-
+    what's still unresolved and act on it inline. Shared by the report page
+    and its CSV export so both stay in sync with one computation."""
     rows = []
     targeted_vehicles = Vehicle.query.filter(
         Vehicle.daily_target.isnot(None), Vehicle.daily_target > 0
@@ -5827,8 +5924,18 @@ def report_shortfalls():
                 'garnish': garnish, 'remaining': shortfall - garnish,
                 'reason_for_shortfall': reasons,
             })
-
     rows.sort(key=lambda r: r['date'], reverse=True)
+    return rows
+
+
+@app.route('/reports/shortfalls')
+@login_required
+@permission_required('reports')
+def report_shortfalls():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    rows = _compute_shortfall_rows(df, dt)
     total_shortfall = sum(r['shortfall'] for r in rows)
     total_garnish = sum(r['garnish'] for r in rows)
     total_remaining = sum(max(r['remaining'], 0) for r in rows)
@@ -5838,6 +5945,20 @@ def report_shortfalls():
         total_shortfall=total_shortfall, total_garnish=total_garnish,
         total_remaining=total_remaining, pending_count=pending_count,
         date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/reports/shortfalls/export')
+@login_required
+@permission_required('reports')
+def report_shortfalls_export():
+    df, dt = query_date_range()
+    rows = _compute_shortfall_rows(df, dt)
+    out_rows = [[r['date'], r['vehicle'].registration, ', '.join(d.name for d in r['drivers']),
+                 f"{r['target']:.2f}", f"{r['fare']:.2f}", f"{r['shortfall']:.2f}",
+                 f"{r['garnish']:.2f}", f"{max(r['remaining'], 0):.2f}", r['reason_for_shortfall'] or '']
+                for r in rows]
+    return csv_export_response(f'revenue_shortfalls_{df}_to_{dt}.csv',
+        ['Date', 'Vehicle', 'Driver(s)', 'Target', 'Fare', 'Shortfall', 'Garnish Applied', 'Remaining', 'Reason'], out_rows)
 
 
 @app.route('/finance/commission-payments')
@@ -5978,24 +6099,53 @@ def report_cash_flow():
         date_from=date_from_str, date_to=date_to_str, **cf)
 
 
-@app.route('/reports/budget')
+@app.route('/reports/cash-flow/export')
 @login_required
 @permission_required('reports')
-def report_budget():
+def report_cash_flow_export():
+    df, dt = query_date_range()
+    cf = compute_cash_flow(df, dt)
+    rows = [
+        ['Operating — Fare/Trip Revenue', f"{cf['operating_in']:.2f}"],
+        ['Operating — Receivables Collected', f"{cf['receivables_in']:.2f}"],
+        ['Operating — Maintenance', f"-{cf['maint_out']:.2f}"],
+        ['Operating — Expenses', f"-{cf['expenses_out']:.2f}"],
+        ['Operating — Commission Paid', f"-{cf['commission_out']:.2f}"],
+        ['Operating — Payables Paid', f"-{cf['payables_out']:.2f}"],
+        ['Net Cash from Operating Activities', f"{cf['net_operating']:.2f}"],
+        ['Investing — Vehicles Acquired', f"-{cf['investing_out']:.2f}"],
+        ['Net Cash from Investing Activities', f"{cf['net_investing']:.2f}"],
+        ['Financing — Loan Proceeds', f"{cf['loan_proceeds_in']:.2f}"],
+        ['Financing — Loan Repayments', f"-{cf['loan_repay_out']:.2f}"],
+        ['Financing — Capital Contributed', f"{cf['capital_in']:.2f}"],
+        ['Financing — Owner Drawings', f"-{cf['drawings_out']:.2f}"],
+        ['Net Cash from Financing Activities', f"{cf['net_financing']:.2f}"],
+        ['Net Change in Cash', f"{cf['net_change']:.2f}"],
+        ['Opening Cash', f"{cf['opening_cash']:.2f}"],
+        ['Closing Cash', f"{cf['closing_cash']:.2f}"],
+    ]
+    return csv_export_response(f'cash_flow_{df}_to_{dt}.csv', ['Line Item', 'Amount'], rows)
+
+
+def _resolve_budget_month(month_str):
     today = date.today()
-    month_str = request.args.get('month', today.strftime('%Y-%m'))
+    month_str = month_str or today.strftime('%Y-%m')
     try:
         month_start = datetime.strptime(month_str, '%Y-%m').date().replace(day=1)
     except ValueError:
         flash(f'"{month_str}" is not a valid month — showing {today.strftime("%Y-%m")} instead.', 'warning')
         month_start = today.replace(day=1)
         month_str = month_start.strftime('%Y-%m')
-    month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
+    return month_start, month_str
 
-    # Expense category labels are prefixed to avoid colliding with the
-    # fixed Revenue/Maintenance keys below — an admin could otherwise
-    # name a heading "Maintenance" (as in the worked example) and silently
-    # shadow the MaintenanceLog-derived figure.
+
+def _compute_budget_rows(month_start):
+    """Budget vs. Actual for one calendar month — shared by the report page
+    and its CSV export. Expense category labels are prefixed to avoid
+    colliding with the fixed Revenue/Maintenance keys below — an admin
+    could otherwise name a heading "Maintenance" (as in the worked example)
+    and silently shadow the MaintenanceLog-derived figure."""
+    month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
     actuals = {
         'Revenue': db.session.query(func.sum(DailyLog.gross_revenue)).filter(
             DailyLog.log_date.between(month_start, month_end)).scalar() or 0,
@@ -6015,11 +6165,30 @@ def report_budget():
         actual_amt = actuals.get(cat, 0)
         rows.append({'category': cat, 'budget': budget_amt, 'actual': actual_amt,
                      'variance': actual_amt - budget_amt})
+    return rows
 
+
+@app.route('/reports/budget')
+@login_required
+@permission_required('reports')
+def report_budget():
+    month_start, month_str = _resolve_budget_month(request.args.get('month', ''))
+    rows = _compute_budget_rows(month_start)
     categories_available = ['Revenue', 'Maintenance'] + \
         [f'Expense: {c.display_name}' for c in ExpenseCategory.query.all()]
     return render_template('reports/budget.html', rows=rows, month=month_str,
         month_label=month_start.strftime('%B %Y'), categories=categories_available)
+
+
+@app.route('/reports/budget/export')
+@login_required
+@permission_required('reports')
+def report_budget_export():
+    month_start, month_str = _resolve_budget_month(request.args.get('month', ''))
+    rows = _compute_budget_rows(month_start)
+    out_rows = [[r['category'], f"{r['budget']:.2f}", f"{r['actual']:.2f}", f"{r['variance']:.2f}"] for r in rows]
+    return csv_export_response(f'budget_vs_actual_{month_str}.csv',
+        ['Category', 'Budget', 'Actual', 'Variance'], out_rows)
 
 
 @app.route('/reports/budget/set', methods=['POST'])
@@ -6047,13 +6216,7 @@ def budget_set():
     return redirect(url_for('report_budget', month=month_str))
 
 
-@app.route('/reports/fuel-efficiency')
-@login_required
-@permission_required('reports')
-def report_fuel_efficiency():
-    df, dt = query_date_range()
-    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
-
+def _compute_fuel_efficiency_rows(df, dt):
     rows = []
     for v in Vehicle.query.order_by(Vehicle.registration).all():
         logs = FuelLog.query.filter(
@@ -6089,6 +6252,16 @@ def report_fuel_efficiency():
                      'avg_l_per_100km': overall_l_per_100km,
                      'total_distance': total_distance, 'total_liters': total_liters,
                      'km_per_liter': km_per_liter})
+    return rows
+
+
+@app.route('/reports/fuel-efficiency')
+@login_required
+@permission_required('reports')
+def report_fuel_efficiency():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    rows = _compute_fuel_efficiency_rows(df, dt)
 
     # Fleet-wide figures aggregated across all measured distance/fuel.
     fleet_distance = sum(r['total_distance'] for r in rows)
@@ -6097,6 +6270,18 @@ def report_fuel_efficiency():
     return render_template('reports/fuel_efficiency.html', rows=rows, fleet_avg=fleet_avg,
         fleet_distance=fleet_distance, fleet_liters=fleet_liters,
         date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/reports/fuel-efficiency/export')
+@login_required
+@permission_required('reports')
+def report_fuel_efficiency_export():
+    df, dt = query_date_range()
+    rows = _compute_fuel_efficiency_rows(df, dt)
+    out_rows = [[r['vehicle'].registration, f"{r['total_distance']:.1f}", f"{r['total_liters']:.2f}",
+                 f"{r['avg_l_per_100km']:.2f}", f"{r['km_per_liter']:.2f}"] for r in rows]
+    return csv_export_response(f'fuel_efficiency_{df}_to_{dt}.csv',
+        ['Vehicle', 'Total Distance (km)', 'Total Liters', 'Avg L/100km', 'Km/Liter'], out_rows)
 
 
 @app.route('/reports/distance-travelled')
@@ -6141,7 +6326,25 @@ def report_distance_travelled():
 def report_route_profitability():
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    rows, total_revenue, total_costs = _compute_route_profitability(df, dt)
+    return render_template('reports/route_profitability.html', rows=rows,
+        total_revenue=total_revenue, total_costs=total_costs,
+        date_from=date_from_str, date_to=date_to_str)
 
+
+@app.route('/reports/route-profitability/export')
+@login_required
+@permission_required('reports')
+def report_route_profitability_export():
+    df, dt = query_date_range()
+    rows, _, _ = _compute_route_profitability(df, dt)
+    out_rows = [[r['route'].name if r['route'] else 'Unrouted', f"{r['revenue']:.2f}", r['trips'],
+                 r['log_days'], f"{r['allocated_cost']:.2f}", f"{r['net_profit']:.2f}"] for r in rows]
+    return csv_export_response(f'route_profitability_{df}_to_{dt}.csv',
+        ['Route', 'Revenue', 'Trips', 'Log Days', 'Allocated Cost', 'Net Profit'], out_rows)
+
+
+def _compute_route_profitability(df, dt):
     total_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
         DailyLog.log_date.between(df, dt)).scalar() or 0
     total_maintenance = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
@@ -6183,10 +6386,7 @@ def report_route_profitability():
         })
 
     rows.sort(key=lambda x: x['net_profit'], reverse=True)
-
-    return render_template('reports/route_profitability.html', rows=rows,
-        total_revenue=total_revenue, total_costs=total_costs,
-        date_from=date_from_str, date_to=date_to_str)
+    return rows, total_revenue, total_costs
 
 
 @app.route('/reports/financial-position')
@@ -6204,7 +6404,7 @@ def report_financial_position():
 # ─────────────────────────────────────────────────────────────
 @app.route('/reports/export/daily-logs')
 @login_required
-@permission_required('reports')
+@permission_required_any('daily_logs', 'crew_portal')
 def export_daily_logs():
     df = request.args.get('date_from', '')
     dt = request.args.get('date_to', '')
@@ -6441,6 +6641,17 @@ def loans_list():
     return render_template('finance/loans.html', loans=all_loans, today=date.today().strftime('%Y-%m-%d'))
 
 
+@app.route('/finance/loans/export')
+@login_required
+@permission_required('finance')
+def loans_export():
+    all_loans = Loan.query.order_by(Loan.start_date.desc()).all()
+    rows = [[l.lender, f'{l.principal:.2f}', l.interest_rate, l.start_date, l.term_months or '',
+             l.status, f'{sum(p.amount for p in l.payments):.2f}', l.notes or ''] for l in all_loans]
+    return csv_export_response(f'loans_{date.today()}.csv',
+        ['Lender', 'Principal', 'Interest Rate %', 'Start Date', 'Term (months)', 'Status', 'Repaid to Date', 'Notes'], rows)
+
+
 @app.route('/finance/loans/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('finance')
@@ -6570,6 +6781,17 @@ def payables_list():
     return render_template('finance/payables.html', payables=all_payables)
 
 
+@app.route('/finance/payables/export')
+@login_required
+@permission_required('finance')
+def payables_export():
+    all_payables = Payable.query.order_by(Payable.invoice_date.desc()).all()
+    rows = [[p.supplier_name, p.description or '', f'{p.amount:.2f}', p.invoice_date,
+             p.due_date or '', p.status, p.paid_date or ''] for p in all_payables]
+    return csv_export_response(f'payables_{date.today()}.csv',
+        ['Supplier', 'Description', 'Amount', 'Invoice Date', 'Due Date', 'Status', 'Paid Date'], rows)
+
+
 @app.route('/finance/payables/add', methods=['GET', 'POST'])
 @login_required
 @permission_required('finance')
@@ -6650,6 +6872,17 @@ def payable_delete(pid):
 def receivables_list():
     all_receivables = Receivable.query.order_by(Receivable.invoice_date.desc()).all()
     return render_template('finance/receivables.html', receivables=all_receivables)
+
+
+@app.route('/finance/receivables/export')
+@login_required
+@permission_required('finance')
+def receivables_export():
+    all_receivables = Receivable.query.order_by(Receivable.invoice_date.desc()).all()
+    rows = [[r.client_name, r.description or '', f'{r.amount:.2f}', r.invoice_date,
+             r.due_date or '', r.status, r.collected_date or ''] for r in all_receivables]
+    return csv_export_response(f'receivables_{date.today()}.csv',
+        ['Client', 'Description', 'Amount', 'Invoice Date', 'Due Date', 'Status', 'Collected Date'], rows)
 
 
 @app.route('/finance/receivables/add', methods=['GET', 'POST'])
@@ -6733,6 +6966,19 @@ def capital_list():
     contributions = CapitalContribution.query.order_by(CapitalContribution.contribution_date.desc()).all()
     drawings = OwnerDrawing.query.order_by(OwnerDrawing.drawing_date.desc()).all()
     return render_template('finance/capital.html', contributions=contributions, drawings=drawings)
+
+
+@app.route('/finance/capital/export')
+@login_required
+@permission_required('finance')
+def capital_export():
+    contributions = CapitalContribution.query.order_by(CapitalContribution.contribution_date.desc()).all()
+    drawings = OwnerDrawing.query.order_by(OwnerDrawing.drawing_date.desc()).all()
+    rows = [['Contribution', c.contribution_date, c.contributor, f'{c.amount:.2f}', c.notes or ''] for c in contributions]
+    rows += [['Drawing', d.drawing_date, '', f'{d.amount:.2f}', d.notes or ''] for d in drawings]
+    rows.sort(key=lambda r: r[1], reverse=True)
+    return csv_export_response(f'capital_drawings_{date.today()}.csv',
+        ['Type', 'Date', 'Contributor', 'Amount', 'Notes'], rows)
 
 
 @app.route('/finance/capital/contributions/add', methods=['GET', 'POST'])
@@ -6856,6 +7102,17 @@ def expenses_list():
     expenses = Expense.query.order_by(Expense.expense_date.desc()).paginate(page=page, per_page=20)
     headings = ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all()
     return render_template('finance/expenses.html', expenses=expenses, headings=headings)
+
+
+@app.route('/finance/expenses/export')
+@login_required
+@permission_required('finance')
+def expenses_export():
+    all_expenses = Expense.query.order_by(Expense.expense_date.desc()).all()
+    rows = [[e.expense_date, e.category.display_name, e.vehicle.registration if e.vehicle else '',
+             e.description or '', f'{e.amount:.2f}'] for e in all_expenses]
+    return csv_export_response(f'expenses_{date.today()}.csv',
+        ['Date', 'Category', 'Vehicle', 'Description', 'Amount'], rows)
 
 
 @app.route('/finance/expenses/add', methods=['GET', 'POST'])
@@ -8169,6 +8426,24 @@ def report_franchise_reconciliation():
                            date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
 
 
+@app.route('/reports/franchise/reconciliation/export')
+@login_required
+@permission_required('franchise')
+def report_franchise_reconciliation_export():
+    df, dt = query_date_range()
+    daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
+    weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
+    days = {}
+    for e in daily_entries:
+        days.setdefault(e.entry_date, {'daily': 0.0, 'weekly': 0.0})['daily'] += e.income
+    for e in weekly_entries:
+        days.setdefault(e.week_start, {'daily': 0.0, 'weekly': 0.0})['weekly'] += e.income
+    rows = [[d, d.strftime('%A'), f"{b['daily']:.2f}", f"{b['weekly']:.2f}", f"{b['daily'] + b['weekly']:.2f}"]
+            for d, b in sorted(days.items())]
+    return csv_export_response(f'franchise_reconciliation_{df}_to_{dt}.csv',
+        ['Date', 'Day', 'Daily Income', 'Weekly Income', 'Total Income'], rows)
+
+
 @app.route('/reports/franchise/dual-frequency')
 @login_required
 @permission_required('franchise')
@@ -8228,6 +8503,155 @@ def report_franchise_dual_frequency():
                            date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
 
 
+@app.route('/reports/franchise/dual-frequency/export')
+@login_required
+@permission_required('franchise')
+def report_franchise_dual_frequency_export():
+    df, dt = query_date_range()
+    only_both = request.args.get('only_both') == '1'
+
+    daily_by_vehicle, weekly_by_vehicle = {}, {}
+    for e in FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt),
+            FranchiseDailyIncome.vehicle_id.isnot(None)).all():
+        daily_by_vehicle.setdefault(e.vehicle_id, []).append(e)
+    for e in FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt),
+            FranchiseWeeklyIncome.vehicle_id.isnot(None)).all():
+        weekly_by_vehicle.setdefault(e.vehicle_id, []).append(e)
+
+    all_ids = set(daily_by_vehicle) | set(weekly_by_vehicle)
+    vehicles = {v.id: v for v in FranchiseVehicle.query.filter(FranchiseVehicle.id.in_(all_ids)).all()} if all_ids else {}
+
+    rows = []
+    for vid in all_ids:
+        d_entries = daily_by_vehicle.get(vid, [])
+        w_entries = weekly_by_vehicle.get(vid, [])
+        both = bool(d_entries) and bool(w_entries)
+        if only_both and not both:
+            continue
+        vehicle = vehicles.get(vid)
+        d_totals = _income_entry_totals(d_entries)
+        w_totals = _income_entry_totals(w_entries)
+        rows.append([vehicle.number_plate if vehicle else '', vehicle.franchisee_name if vehicle else '',
+                     'Both' if both else ('Daily only' if d_entries else 'Weekly only'),
+                     len(d_entries), f"{d_totals['income']:.2f}", len(w_entries), f"{w_totals['income']:.2f}",
+                     f"{d_totals['income'] + w_totals['income']:.2f}"])
+    rows.sort(key=lambda r: r[0])
+    return csv_export_response(f'franchise_dual_frequency_{df}_to_{dt}.csv',
+        ['Number Plate', 'Franchisee', 'Paid Via', 'Daily Entries', 'Daily Income',
+         'Weekly Entries', 'Weekly Income', 'Total Income'], rows)
+
+
+@app.route('/reports/franchise/daily-defaulters')
+@login_required
+@permission_required('franchise')
+def report_franchise_daily_defaulters():
+    """Which franchise vehicles have NOT paid their daily fee across a date
+    range — the Daily Income page's "By Date" tab is a single-date
+    recording workflow (fill/confirm/delete), not a scannable report over a
+    period, so this is the read-only "who's behind" view instead: one row
+    per vehicle with at least one missed day in range, sorted worst-first.
+
+    Eligibility deliberately matches _franchise_income_by_vehicle_on (every
+    active vehicle, not just ones with FranchiseVehicle.daily_fee set) —
+    that field is informational/optional in practice (many real vehicles
+    have it unset), and the rest of the app already treats "no entry for
+    this vehicle on this date" as owing regardless of it, via the same
+    By Date bulk-fill workflow. Gating this report on it too would just
+    make it silently show nothing for a fleet that hasn't populated fees."""
+    df, dt = query_date_range()
+    show_all = request.args.get('show_all') == '1'
+    total_days = (dt - df).days + 1
+
+    vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.number_plate).all()
+
+    income_by_vehicle_date = {}
+    for e in FranchiseDailyIncome.query.filter(
+            FranchiseDailyIncome.entry_date.between(df, dt),
+            FranchiseDailyIncome.vehicle_id.isnot(None)).all():
+        key = (e.vehicle_id, e.entry_date)
+        income_by_vehicle_date[key] = income_by_vehicle_date.get(key, 0) + e.income
+
+    rows = []
+    for v in vehicles:
+        fee = v.daily_fee or 0
+        missed_dates, collected = [], 0.0
+        d = df
+        while d <= dt:
+            amount = income_by_vehicle_date.get((v.id, d), 0)
+            if amount > 0:
+                collected += amount
+            else:
+                missed_dates.append(d)
+            d += timedelta(days=1)
+        days_missed = len(missed_dates)
+        if days_missed == 0 and not show_all:
+            continue
+        rows.append(dict(
+            vehicle=v, days_due=total_days, days_missed=days_missed,
+            days_paid=total_days - days_missed,
+            expected=fee * total_days, collected=collected,
+            shortfall=(fee * total_days) - collected,
+            last_missed=max(missed_dates) if missed_dates else None,
+        ))
+    rows.sort(key=lambda r: (-r['days_missed'], r['vehicle'].number_plate))
+
+    totals = dict(
+        vehicles_shown=len(rows),
+        days_missed=sum(r['days_missed'] for r in rows),
+        expected=sum(r['expected'] for r in rows),
+        collected=sum(r['collected'] for r in rows),
+        shortfall=sum(r['shortfall'] for r in rows),
+    )
+
+    return render_template('franchise/daily_defaulters.html',
+                           title='Franchise Daily Fee Defaulters',
+                           rows=rows, totals=totals, show_all=show_all, total_days=total_days,
+                           date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
+
+
+@app.route('/reports/franchise/daily-defaulters/export')
+@login_required
+@permission_required('franchise')
+def report_franchise_daily_defaulters_export():
+    df, dt = query_date_range()
+    show_all = request.args.get('show_all') == '1'
+    total_days = (dt - df).days + 1
+
+    vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.number_plate).all()
+
+    income_by_vehicle_date = {}
+    for e in FranchiseDailyIncome.query.filter(
+            FranchiseDailyIncome.entry_date.between(df, dt),
+            FranchiseDailyIncome.vehicle_id.isnot(None)).all():
+        key = (e.vehicle_id, e.entry_date)
+        income_by_vehicle_date[key] = income_by_vehicle_date.get(key, 0) + e.income
+
+    rows = []
+    for v in vehicles:
+        fee = v.daily_fee or 0
+        missed_dates, collected = [], 0.0
+        d = df
+        while d <= dt:
+            amount = income_by_vehicle_date.get((v.id, d), 0)
+            if amount > 0:
+                collected += amount
+            else:
+                missed_dates.append(d)
+            d += timedelta(days=1)
+        days_missed = len(missed_dates)
+        if days_missed == 0 and not show_all:
+            continue
+        rows.append([v.number_plate, v.franchisee_name, f'{fee:.2f}', total_days,
+                     total_days - days_missed, days_missed, f'{fee * total_days:.2f}',
+                     f'{collected:.2f}', f'{(fee * total_days) - collected:.2f}',
+                     max(missed_dates) if missed_dates else ''])
+    rows.sort(key=lambda r: (-r[5], r[0]))
+
+    return csv_export_response(f'franchise_daily_defaulters_{df}_to_{dt}.csv',
+        ['Number Plate', 'Franchisee', 'Daily Fee', 'Days Due', 'Days Paid', 'Days Missed',
+         'Expected', 'Collected', 'Shortfall', 'Last Missed Date'], rows)
+
+
 @app.route('/reports/franchise/weekly')
 @login_required
 @permission_required('franchise')
@@ -8282,6 +8706,34 @@ def report_franchise_weekly():
                            date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
 
 
+@app.route('/reports/franchise/weekly/export')
+@login_required
+@permission_required('franchise')
+def report_franchise_weekly_export():
+    df, dt = query_date_range()
+    daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
+    weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
+    weekly_by_week = {}
+    for e in weekly_entries:
+        weekly_by_week.setdefault(e.week_start, []).append(e)
+    daily_by_week = {}
+    for e in daily_entries:
+        week_start = e.entry_date - timedelta(days=e.entry_date.weekday())
+        daily_by_week.setdefault(week_start, []).append(e)
+
+    week_starts = sorted(set(daily_by_week.keys()) | set(weekly_by_week.keys()))
+    rows = []
+    for start in week_starts:
+        daily_totals = _income_entry_totals(daily_by_week.get(start, []))
+        weekly_totals = _income_entry_totals(weekly_by_week.get(start, []))
+        rows.append([start, start + timedelta(days=6), f"{daily_totals['income']:.2f}",
+                     f"{weekly_totals['income']:.2f}", f"{daily_totals['income'] + weekly_totals['income']:.2f}",
+                     f"{daily_totals['total_expenditure'] + weekly_totals['total_expenditure']:.2f}",
+                     f"{(daily_totals['income'] + weekly_totals['income']) - (daily_totals['total_expenditure'] + weekly_totals['total_expenditure']):.2f}"])
+    return csv_export_response(f'franchise_weekly_analysis_{df}_to_{dt}.csv',
+        ['Week Start', 'Week End', 'Daily Income', 'Weekly Income', 'Total Income', 'Total Expenditure', 'Net Profit'], rows)
+
+
 @app.route('/reports/franchise/consolidated')
 @login_required
 @permission_required('franchise')
@@ -8304,6 +8756,33 @@ def report_franchise_consolidated():
     return render_template('franchise/consolidated.html', title='Consolidated Franchise P&L Statement',
                            totals=totals, entry_count=len(daily_entries) + len(weekly_entries),
                            date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
+
+
+@app.route('/reports/franchise/consolidated/export')
+@login_required
+@permission_required('franchise')
+def report_franchise_consolidated_export():
+    df, dt = query_date_range()
+    daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
+    weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
+    daily_totals = _income_entry_totals(daily_entries)
+    weekly_totals = _income_entry_totals(weekly_entries)
+    totals = {k: daily_totals[k] + weekly_totals[k] for k in daily_totals}
+    rows = [
+        ['Daily Income', f"{daily_totals['income']:.2f}"],
+        ['Weekly Income', f"{weekly_totals['income']:.2f}"],
+        ['Total Income', f"{totals['income']:.2f}"],
+        ['Traffic Fines', f"{totals['exp_traffic_fines']:.2f}"],
+        ['Facilitation Fees', f"{totals['exp_facilitation_fees']:.2f}"],
+        ['Workshop', f"{totals['exp_workshop']:.2f}"],
+        ['Wages', f"{totals['exp_wages']:.2f}"],
+        ['Other Expenditure', f"{totals['other_expenditure']:.2f}"],
+        ['Total Expenditure', f"{totals['total_expenditure']:.2f}"],
+        ['Net Profit', f"{totals['income'] - totals['total_expenditure']:.2f}"],
+        ['Cash Deposited', f"{totals['deposited']:.2f}"],
+        ['Variance', f"{totals['variance']:.2f}"],
+    ]
+    return csv_export_response(f'franchise_consolidated_pl_{df}_to_{dt}.csv', ['Line Item', 'Amount'], rows)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -8343,6 +8822,36 @@ def compliance():
 
     return render_template('compliance/index.html',
         expired=expired, expiring=expiring, valid=valid, today=today)
+
+
+@app.route('/compliance/export')
+@login_required
+@permission_required('compliance')
+def compliance_export():
+    today = date.today()
+    threshold = today + timedelta(days=30)
+    docs = VehicleDocument.query.order_by(VehicleDocument.expiry_date).all()
+    # Insurance is a Vehicle field, not a VehicleDocument row (see compliance()
+    # above) — duck-typed into the same dict shape here too so both kinds of
+    # entry export as one flat list instead of two separate files.
+    entries = [{'vehicle': d.vehicle, 'doc_type': d.doc_type, 'reference_number': d.reference_number,
+                'issue_date': d.issue_date, 'expiry_date': d.expiry_date} for d in docs]
+    for v in Vehicle.query.filter(Vehicle.insurance_expiry.isnot(None)).all():
+        entries.append({'vehicle': v, 'doc_type': 'Insurance', 'reference_number': v.insurance_policy_number,
+                        'issue_date': None, 'expiry_date': v.insurance_expiry})
+    entries.sort(key=lambda e: e['expiry_date'])
+
+    def status(expiry):
+        if expiry < today:
+            return 'Expired'
+        if expiry <= threshold:
+            return 'Expiring Soon'
+        return 'Valid'
+
+    rows = [[e['vehicle'].registration, e['doc_type'], e['reference_number'] or '',
+             e['issue_date'] or '', e['expiry_date'], status(e['expiry_date'])] for e in entries]
+    return csv_export_response(f'compliance_documents_{today}.csv',
+        ['Vehicle', 'Document Type', 'Reference Number', 'Issue Date', 'Expiry Date', 'Status'], rows)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -8522,6 +9031,18 @@ def audit_log():
     page = request.args.get('page', 1, type=int)
     logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).paginate(page=page, per_page=30)
     return render_template('audit/index.html', logs=logs)
+
+
+@app.route('/audit/export')
+@login_required
+@admin_required
+def audit_log_export():
+    logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).all()
+    rows = [[l.timestamp.strftime('%Y-%m-%d %H:%M:%S'), l.user.username if l.user else 'System',
+             l.action, l.table_name or '', l.record_id or '', l.description or '', l.ip_address or '']
+            for l in logs]
+    return csv_export_response(f'audit_log_{date.today()}.csv',
+        ['Timestamp', 'User', 'Action', 'Table', 'Record ID', 'Description', 'IP'], rows)
 
 
 # ─────────────────────────────────────────────────────────────

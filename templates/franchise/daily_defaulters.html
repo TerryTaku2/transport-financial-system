@@ -1,0 +1,111 @@
+{% extends 'base.html' %}
+{% block title %}{{ title }}{% endblock %}
+{% block page_title %}Franchise — Daily Fee Defaulters{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ title }}</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} ({{ total_days }} day{{ 's' if total_days != 1 }}) &mdash; active franchise vehicles that missed at least one day's Daily Income entry in this range</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('franchise_daily_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Daily Entries</a>
+    <a href="{{ url_for('report_franchise_daily_defaulters_export', date_from=date_from, date_to=date_to, show_all='1' if show_all else '') }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <div class="form-group">
+    <label style="display:flex;gap:6px;align-items:center;font-weight:normal;text-transform:none;">
+      <input type="checkbox" name="show_all" value="1" style="width:auto;" {% if show_all %}checked{% endif %}> Show fully-paid vehicles too
+    </label>
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid mb-24">
+  <div class="kpi-card kpi-red">
+    <div class="kpi-label">Vehicles Shown</div>
+    <div class="kpi-value">{{ totals.vehicles_shown }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Total Days Missed</div>
+    <div class="kpi-value">{{ totals.days_missed }}</div>
+  </div>
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Expected</div>
+    <div class="kpi-value">{{ totals.expected|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Collected</div>
+    <div class="kpi-value">{{ totals.collected|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-red">
+    <div class="kpi-label">Shortfall</div>
+    <div class="kpi-value">{{ totals.shortfall|currency }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Vehicles</h3></div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Number Plate</th>
+          <th>Franchisee</th>
+          <th class="text-right">Daily Fee</th>
+          <th class="text-right">Days Paid</th>
+          <th class="text-right">Days Missed</th>
+          <th class="text-right">Expected</th>
+          <th class="text-right">Collected</th>
+          <th class="text-right">Shortfall</th>
+          <th>Last Missed</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td><a href="{{ url_for('franchise_vehicle_edit', vid=r.vehicle.id) }}">{{ r.vehicle.number_plate }}</a></td>
+          <td>{{ r.vehicle.franchisee_name }}</td>
+          <td class="text-right">{% if r.vehicle.daily_fee %}{{ r.vehicle.daily_fee|currency }}{% else %}<span class="form-hint">not set</span>{% endif %}</td>
+          <td class="text-right">{{ r.days_paid }}</td>
+          <td class="text-right">
+            {% if r.days_missed > 0 %}<span class="badge badge-red">{{ r.days_missed }}</span>
+            {% else %}0{% endif %}
+          </td>
+          <td class="text-right">{{ r.expected|currency }}</td>
+          <td class="text-right">{{ r.collected|currency }}</td>
+          <td class="text-right">{{ r.shortfall|currency }}</td>
+          <td>{{ r.last_missed or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th colspan="4">Total</th>
+          <th class="text-right">{{ totals.days_missed }}</th>
+          <th class="text-right">{{ totals.expected|currency }}</th>
+          <th class="text-right">{{ totals.collected|currency }}</th>
+          <th class="text-right">{{ totals.shortfall|currency }}</th>
+          <th></th>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body">
+    <div class="empty-state"><p>No defaulters in this range{% if not show_all %} — every vehicle with a Daily Fee paid on every day{% endif %}.</p></div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

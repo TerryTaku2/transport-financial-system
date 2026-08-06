@@ -161,6 +161,9 @@
         {% set pending_fv_count = pending_franchise_vehicles_count|default(0) %}
         {% if pending_fv_count > 0 %}<span class="nav-badge">{{ pending_fv_count }}</span>{% endif %}
       </a>
+      <a href="{{ url_for('report_franchise_daily_defaulters') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('report_franchise_daily_defaulters') %}active{% endif %}">
+        <i data-feather="alert-triangle"></i> Daily Fee Defaulters
+      </a>
       <a href="{{ url_for('report_franchise_reconciliation') }}" class="nav-item {% if request.endpoint == 'report_franchise_reconciliation' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Reconciliation Schedule
       </a>
