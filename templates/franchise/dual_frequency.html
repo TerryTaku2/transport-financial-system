@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1>{{ title }}</h1>
-    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; vehicles with at least one Daily Income entry and at least one Weekly Income entry in this range</div>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; every vehicle with a Daily and/or Weekly franchise income entry in this range, flagged where it paid via both</div>
   </div>
   <div class="btn-group">
     <a href="{{ url_for('franchise_daily_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Daily Entries</a>
@@ -23,23 +23,32 @@
     <label>To</label>
     <input type="date" name="date_to" value="{{ date_to }}">
   </div>
+  <div class="form-group">
+    <label style="display:flex;gap:6px;align-items:center;font-weight:normal;text-transform:none;">
+      <input type="checkbox" name="only_both" value="1" style="width:auto;" {% if only_both %}checked{% endif %}> Only vehicles paying both
+    </label>
+  </div>
   <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
 </form>
 
 <div class="kpi-grid mb-24">
   <div class="kpi-card kpi-blue">
-    <div class="kpi-label">Vehicles Paying Both</div>
+    <div class="kpi-label">Vehicles Shown</div>
     <div class="kpi-value">{{ rows|length }}</div>
   </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Paying Both Daily &amp; Weekly</div>
+    <div class="kpi-value">{{ totals.both_count }}</div>
+  </div>
   <div class="kpi-card kpi-teal">
-    <div class="kpi-label">Daily Income (these vehicles)</div>
+    <div class="kpi-label">Daily Income</div>
     <div class="kpi-value">{{ totals.daily_income|currency }}</div>
   </div>
   <div class="kpi-card kpi-amber">
-    <div class="kpi-label">Weekly Income (these vehicles)</div>
+    <div class="kpi-label">Weekly Income</div>
     <div class="kpi-value">{{ totals.weekly_income|currency }}</div>
   </div>
-  <div class="kpi-card kpi-green">
+  <div class="kpi-card kpi-blue">
     <div class="kpi-label">Combined Income</div>
     <div class="kpi-value">{{ totals.total_income|currency }}</div>
   </div>
@@ -54,6 +63,7 @@
         <tr>
           <th>Number Plate</th>
           <th>Franchisee</th>
+          <th>Paid Via</th>
           <th class="text-right">Daily Entries</th>
           <th class="text-right">Daily Income</th>
           <th>Last Daily Entry</th>
@@ -74,19 +84,28 @@
             {% endif %}
           </td>
           <td>{{ r.vehicle.franchisee_name if r.vehicle else '' }}</td>
+          <td>
+            {% if r.both %}
+            <span class="badge badge-green">Both</span>
+            {% elif r.daily_count %}
+            <span class="badge badge-gray">Daily only</span>
+            {% else %}
+            <span class="badge badge-gray">Weekly only</span>
+            {% endif %}
+          </td>
           <td class="text-right">{{ r.daily_count }}</td>
           <td class="text-right">{{ r.daily_income|currency }}</td>
-          <td>{{ r.last_daily }}</td>
+          <td>{{ r.last_daily or '' }}</td>
           <td class="text-right">{{ r.weekly_count }}</td>
           <td class="text-right">{{ r.weekly_income|currency }}</td>
-          <td>{{ r.last_weekly }}</td>
+          <td>{{ r.last_weekly or '' }}</td>
           <td class="text-right">{{ r.total_income|currency }}</td>
         </tr>
         {% endfor %}
       </tbody>
       <tfoot>
         <tr class="summary-row">
-          <td colspan="3">TOTAL</td>
+          <td colspan="4">TOTAL</td>
           <td class="text-right">{{ totals.daily_income|currency }}</td>
           <td></td>
           <td></td>
@@ -98,7 +117,9 @@
     </table>
   </div>
   {% else %}
-  <div class="empty-state"><p>No vehicle has both a Daily and a Weekly franchise income entry in the selected period.</p></div>
+  <div class="empty-state">
+    <p>{% if only_both %}No vehicle paid via both Daily and Weekly franchise income in the selected period.{% else %}No franchise income recorded for the selected period.{% endif %}</p>
+  </div>
   {% endif %}
 </div>
 {% endblock %}
