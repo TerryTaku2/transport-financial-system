@@ -56,7 +56,7 @@
 {% if view == 'date' %}
 <h2 class="mb-8">Income — all vehicles, by date</h2>
 <div class="card mb-24">
-  <div class="card-header">
+  <div class="card-header" style="flex-wrap:wrap;gap:10px;">
     <form method="GET" style="display:flex;gap:10px;align-items:flex-end;margin:0;">
       <input type="hidden" name="period" value="{{ period }}">
       <input type="hidden" name="view" value="date">
@@ -66,6 +66,7 @@
       </div>
       <button type="submit" class="btn btn-outline btn-xs">Go</button>
     </form>
+    <input type="text" id="by-date-search" placeholder="Search vehicle or franchisee…" style="max-width:240px;">
   </div>
   {% set show_checkboxes = by_date_missing or current_user.role == 'admin' %}
   {% if by_date_rows %}
@@ -119,7 +120,7 @@
       </thead>
       <tbody>
         {% for r in by_date_rows %}
-        <tr>
+        <tr data-vehicle-label="{{ (r.vehicle.number_plate ~ ' ' ~ r.vehicle.franchisee_name)|lower }}">
           {% if show_checkboxes %}
           <td>
             {% if not r.entries %}
@@ -173,6 +174,19 @@
   <div class="empty-state"><p>No franchise vehicles registered yet.</p></div>
   {% endif %}
 </div>
+<script>
+(function () {
+  var filter = document.getElementById('by-date-search');
+  if (!filter) return;
+  var rows = document.querySelectorAll('tr[data-vehicle-label]');
+  filter.addEventListener('input', function () {
+    var q = filter.value.trim().toLowerCase();
+    rows.forEach(function (row) {
+      row.style.display = !q || row.getAttribute('data-vehicle-label').indexOf(q) !== -1 ? '' : 'none';
+    });
+  });
+})();
+</script>
 {% else %}
 
 <h2 class="mb-8">Income — by vehicle</h2>
