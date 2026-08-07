@@ -8,10 +8,10 @@
 
 :root {
   --sidebar-w: 260px;
-  --sidebar-bg: #0f2644;
+  --sidebar-bg: #16181a;
   --sidebar-text: #94a3b8;
-  --sidebar-active-bg: rgba(59,130,246,0.15);
-  --sidebar-active-text: #60a5fa;
+  --sidebar-active-bg: rgba(207,38,39,0.18);
+  --sidebar-active-text: #f87171;
   --sidebar-hover: rgba(255,255,255,0.05);
   --topbar-h: 64px;
   --page-bg: #f1f5f9;
@@ -19,8 +19,14 @@
   --border: #e2e8f0;
   --text: #1e293b;
   --text-muted: #64748b;
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
+  /* Brand red/black — deep maroon rather than the logo's brighter icon
+     red (#cf2627) for --primary specifically, so btn-primary stays
+     visually distinct from --danger (#dc2626) instead of sitting right
+     on top of it; the brighter red is used deliberately elsewhere
+     (sidebar active state, charts) where there's no danger button nearby
+     to collide with. */
+  --primary: #5f1015;
+  --primary-hover: #3d0a0d;
   --success: #16a34a;
   --warning: #d97706;
   --danger: #dc2626;
@@ -167,7 +173,7 @@ a:hover { color: var(--primary-hover); }
   color: var(--text-muted);
 }
 .btn-logout.install-btn svg { width: 13px; height: 13px; }
-.btn-logout.install-btn:hover { color: var(--primary); border-color: var(--primary); background: #eff6ff; }
+.btn-logout.install-btn:hover { color: var(--primary); border-color: var(--primary); background: #fdf0f0; }
 
 /* ── "Add to Home Screen" banner (iOS fallback — see base.html) ── */
 .ios-install-banner {
@@ -394,7 +400,7 @@ tbody tr:hover td { background: #f8fafc; }
   color: var(--text);
   border-color: var(--border);
 }
-.btn-outline:hover { border-color: var(--primary); color: var(--primary); background: #eff6ff; }
+.btn-outline:hover { border-color: var(--primary); color: var(--primary); background: #fdf0f0; }
 
 .btn-sm { padding: 5px 10px; font-size: 12px; }
 .btn-xs { padding: 3px 8px; font-size: 11px; }
@@ -504,7 +510,7 @@ textarea { resize: vertical; min-height: 90px; }
   cursor: pointer;
 }
 .searchable-select-option:hover,
-.searchable-select-option.active { background: #eff6ff; color: var(--primary); }
+.searchable-select-option.active { background: #fdf0f0; color: var(--primary); }
 .searchable-select-empty {
   padding: 8px 12px;
   font-size: 13px;
@@ -527,7 +533,7 @@ textarea { resize: vertical; min-height: 90px; }
   font-weight: 500;
   color: var(--text);
 }
-.pagination a:hover { border-color: var(--primary); color: var(--primary); background: #eff6ff; }
+.pagination a:hover { border-color: var(--primary); color: var(--primary); background: #fdf0f0; }
 .pagination .active { background: var(--primary); border-color: var(--primary); color: #fff; }
 
 /* ── Login page ── */
@@ -536,7 +542,7 @@ textarea { resize: vertical; min-height: 90px; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #0f2644 0%, #1e3a5f 50%, #0f2644 100%);
+  background: linear-gradient(135deg, #16181a 0%, #3d0a0d 50%, #16181a 100%);
   padding: 24px;
 }
 .login-card {

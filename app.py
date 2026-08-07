@@ -972,12 +972,14 @@ class FranchiseDailyIncome(db.Model):
 
 
 class FranchiseWeeklyIncome(db.Model):
-    """Same shape as FranchiseDailyIncome, but one record per week
-    (week_start = that week's Monday) per franchise vehicle for the
-    separate weekly franchise fee — kept as its own entity rather than
-    extra columns on the same date row, since a vehicle's daily and weekly
-    dues are independent obligations, not two figures on one entry.
-    vehicle_id may be null for a whole-franchise entry, same as above.
+    """Same shape as FranchiseDailyIncome, but for the separate weekly
+    franchise fee — kept as its own entity rather than extra columns on the
+    same date row, since a vehicle's daily and weekly dues are independent
+    obligations, not two figures on one entry. week_start holds the actual
+    date the entry was recorded against (not normalized to that week's
+    Monday) — reports that need to bucket entries by calendar week floor it
+    to Monday themselves at read time instead. vehicle_id may be null for a
+    whole-franchise entry, same as above.
 
     Unlike FranchiseDailyIncome, there is no (week_start, vehicle_id)
     uniqueness — a vehicle can log more than one entry for the same week
@@ -5255,7 +5257,7 @@ def export_payroll_pdf():
 
     table = Table(data, repeatRows=1)
     table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5f1015')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, -1), 8),
@@ -5415,7 +5417,7 @@ def export_consolidated_pdf():
 
     table = Table(data, repeatRows=1)
     table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5f1015')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, -1), 9),
@@ -5460,7 +5462,7 @@ def _pdf_table(data, bold_last_row=True, col_widths=None):
     treated as a bold, shaded TOTAL row."""
     table = Table(data, repeatRows=1, colWidths=col_widths)
     style = [
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2563eb')),
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5f1015')),
         ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
         ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
         ('FONTSIZE', (0, 0), (-1, -1), 8.5),
@@ -5861,7 +5863,8 @@ def _franchise_weekly_analysis_pdf(df, dt):
         FranchiseWeeklyIncome.week_start.between(df, dt)).order_by(FranchiseWeeklyIncome.week_start.asc()).all()
     weekly_by_week = {}
     for e in weekly_entries:
-        weekly_by_week.setdefault(e.week_start, []).append(e)
+        week_start = e.week_start - timedelta(days=e.week_start.weekday())
+        weekly_by_week.setdefault(week_start, []).append(e)
     daily_by_week = {}
     for e in daily_entries:
         week_start = e.entry_date - timedelta(days=e.entry_date.weekday())
@@ -7436,16 +7439,23 @@ def _franchise_fleet_income_total(model_cls, date_field, df, dt):
     return sum(e.income for e in q.all())
 
 
-def _franchise_income_by_vehicle_on(model_cls, date_field, target_date, vehicles):
+def _franchise_income_by_vehicle_on(model_cls, date_field, target_date, vehicles, end_date=None):
     """The other cut of the same data as _franchise_income_period_rows: one
     row per vehicle for a single date/week, instead of one row per date/week
     for a single vehicle — so all vehicles can be scanned side by side for a
     given day/week (see the "By Date"/"By Week" view on the Daily/Weekly
     Income pages). A vehicle can have more than one entry on the same
     week_start (partial payments — see FranchiseWeeklyIncome), so entries
-    are summed per vehicle rather than assumed unique."""
+    are summed per vehicle rather than assumed unique.
+
+    end_date, when passed, widens the match to a range [target_date,
+    end_date] instead of an exact date — used for the Weekly Income "By
+    Week" view, since week_start now holds each entry's own date rather
+    than being normalized to that week's Monday, so a week's entries can
+    fall on any day within it."""
     col = getattr(model_cls, date_field)
-    entries = model_cls.query.filter(col == target_date, model_cls.vehicle_id.isnot(None)).all()
+    cond = col == target_date if end_date is None else col.between(target_date, end_date)
+    entries = model_cls.query.filter(cond, model_cls.vehicle_id.isnot(None)).all()
     by_vehicle = {}
     for e in entries:
         by_vehicle.setdefault(e.vehicle_id, []).append(e)
@@ -7824,8 +7834,8 @@ def franchise_weekly_income_list():
     view = request.args.get('view', 'vehicle')
     on_week_raw = parse_date(request.args.get('on_week')) or today
     on_week = on_week_raw - timedelta(days=on_week_raw.weekday())
-    by_date_rows = _franchise_income_by_vehicle_on(FranchiseWeeklyIncome, 'week_start', on_week, all_vehicles) \
-        if view == 'date' else None
+    by_date_rows = _franchise_income_by_vehicle_on(FranchiseWeeklyIncome, 'week_start', on_week, all_vehicles,
+        end_date=on_week + timedelta(days=6)) if view == 'date' else None
     by_date_total = sum(r['income'] for r in by_date_rows) if by_date_rows is not None else 0
 
     return render_template('franchise/weekly_income_list.html', vehicles=all_vehicles, vehicle=vehicle,
@@ -7852,8 +7862,7 @@ def franchise_weekly_income_add():
         if vehicle_id and not vehicle:
             raise ValueError('Select a valid franchise vehicle.')
         label = vehicle.number_plate if vehicle else 'the franchise\'s shared expenditure'
-        raw_date = parse_date(request.form['week_start'])
-        week_start = raw_date - timedelta(days=raw_date.weekday())  # normalize to that week's Monday
+        week_start = parse_date(request.form['week_start'])  # the entry's own date, not normalized to Monday
 
         # Unlike franchise_daily_income_add, this always inserts a fresh row
         # rather than looking for one to restore/reuse at the same
@@ -7920,8 +7929,7 @@ def franchise_weekly_income_edit(eid):
     """Full edit of an existing entry — see franchise_daily_income_edit."""
     entry = FranchiseWeeklyIncome.query.filter_by(id=eid).first_or_404()
     if request.method == 'POST':
-        raw_date = parse_date(request.form['week_start'])
-        entry.week_start = raw_date - timedelta(days=raw_date.weekday())
+        entry.week_start = parse_date(request.form['week_start'])
         if entry.vehicle_id:
             entry.income = form_float(request.form, 'income', required=False, default=0)
         else:
@@ -7936,7 +7944,7 @@ def franchise_weekly_income_edit(eid):
         flash('Entry updated.', 'success')
         return redirect(url_for('franchise_weekly_income_list', vehicle_id=entry.vehicle_id))
     return render_template('franchise/income_entry_edit.html', entry=entry, date_field='week_start',
-                           date_value=entry.week_start, date_label='Week Of (any date in the week)',
+                           date_value=entry.week_start, date_label='Date',
                            list_endpoint='franchise_weekly_income_list', edit_endpoint='franchise_weekly_income_edit')
 
 
@@ -8901,10 +8909,14 @@ def report_franchise_weekly():
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)) \
         .order_by(FranchiseWeeklyIncome.week_start.asc()).all()
     # A week can have several weekly entries — one per franchisee — so group
-    # into lists rather than assuming a single entry per week_start.
+    # into lists rather than assuming a single entry per week_start. Each
+    # entry's week_start is its own recorded date (not normalized to
+    # Monday), so it's floored to that week's Monday here to bucket it with
+    # the same calendar week's daily entries.
     weekly_by_week = {}
     for e in weekly_entries:
-        weekly_by_week.setdefault(e.week_start, []).append(e)
+        week_start = e.week_start - timedelta(days=e.week_start.weekday())
+        weekly_by_week.setdefault(week_start, []).append(e)
 
     daily_by_week = {}
     for e in daily_entries:
@@ -8950,7 +8962,8 @@ def report_franchise_weekly_export():
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
     weekly_by_week = {}
     for e in weekly_entries:
-        weekly_by_week.setdefault(e.week_start, []).append(e)
+        week_start = e.week_start - timedelta(days=e.week_start.weekday())
+        weekly_by_week.setdefault(week_start, []).append(e)
     daily_by_week = {}
     for e in daily_entries:
         week_start = e.entry_date - timedelta(days=e.entry_date.weekday())

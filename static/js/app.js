@@ -374,10 +374,10 @@ function initDashboardCharts() {
         datasets: [{
           label: 'Revenue (USD)',
           data: data.map(d => d.revenue),
-          borderColor: '#2563eb',
-          backgroundColor: 'rgba(37,99,235,0.08)',
+          borderColor: '#16181a',
+          backgroundColor: 'rgba(22,24,26,0.08)',
           borderWidth: 2.5,
-          pointBackgroundColor: '#2563eb',
+          pointBackgroundColor: '#16181a',
           pointRadius: 4,
           fill: true,
           tension: 0.3,
@@ -419,7 +419,7 @@ function initDashboardCharts() {
               {
                 label: 'Revenue',
                 data: data.map(d => d.revenue),
-                backgroundColor: 'rgba(37,99,235,0.8)',
+                backgroundColor: 'rgba(22,24,26,0.85)',
                 borderRadius: 4,
               },
               {
