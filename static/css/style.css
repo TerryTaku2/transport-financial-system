@@ -158,6 +158,36 @@ a:hover { color: var(--primary-hover); }
   transition: all .15s;
 }
 .btn-logout:hover { color: var(--danger); border-color: var(--danger); background: #fef2f2; }
+.btn-logout.install-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  font: inherit;
+  color: var(--text-muted);
+}
+.btn-logout.install-btn svg { width: 13px; height: 13px; }
+.btn-logout.install-btn:hover { color: var(--primary); border-color: var(--primary); background: #eff6ff; }
+
+/* ── "Add to Home Screen" banner (iOS fallback — see base.html) ── */
+.ios-install-banner {
+  position: fixed;
+  left: 12px; right: 12px; bottom: 12px;
+  max-width: 420px;
+  margin: 0 auto;
+  background: var(--text);
+  color: #fff;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+  z-index: 200;
+  padding: 12px 14px;
+}
+.ios-install-banner-body { display: flex; align-items: center; gap: 12px; font-size: 13px; line-height: 1.4; }
+.ios-install-banner-body button {
+  background: none; border: none; color: #fff;
+  font-size: 20px; line-height: 1; cursor: pointer;
+  margin-left: auto; flex-shrink: 0; padding: 0;
+}
 
 .menu-toggle {
   display: none;
@@ -264,7 +294,34 @@ body.sidebar-locked { overflow: hidden; }
 .chart-wrap { position: relative; height: 240px; }
 
 /* ── Tables ── */
-.table-wrap { overflow-x: auto; }
+/* -webkit-overflow-scrolling gives momentum ("flick") scrolling on older
+   iOS Safari; the fade edges (toggled via .is-scrollable/.at-start/.at-end,
+   set by initTableScrollHints in app.js) signal there's more to swipe to,
+   since a wide table with no visible cut-off column otherwise looks
+   complete rather than scrollable on a narrow screen. */
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; position: relative; }
+.table-wrap.is-scrollable::before,
+.table-wrap.is-scrollable::after {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0;
+  width: 28px;
+  pointer-events: none;
+  transition: opacity .15s;
+  z-index: 1;
+}
+.table-wrap.is-scrollable::before {
+  left: 0;
+  background: linear-gradient(to right, rgba(255,255,255,.95), rgba(255,255,255,0));
+  opacity: 0;
+}
+.table-wrap.is-scrollable::after {
+  right: 0;
+  background: linear-gradient(to left, rgba(255,255,255,.95), rgba(255,255,255,0));
+  opacity: 0;
+}
+.table-wrap.is-scrollable:not(.at-start)::before { opacity: 1; }
+.table-wrap.is-scrollable:not(.at-end)::after { opacity: 1; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 thead th {
   padding: 11px 14px;
@@ -606,6 +663,8 @@ textarea { resize: vertical; min-height: 90px; }
   .page-header { align-items: flex-start; }
   .topbar-change-pw { display: none; }
   .sidebar-footer-mobile { display: block; }
+  .install-btn-label { display: none; }
+  .ios-install-banner { left: 8px; right: 8px; bottom: 8px; }
 }
 
 /* ── Print ── */

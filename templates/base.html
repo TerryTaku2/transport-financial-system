@@ -273,6 +273,9 @@
         <span class="badge badge-blue topbar-role">{{ current_user.role }}</span>
         <span id="connectivity-badge" class="badge badge-gray">Offline</span>
         <span id="offline-sync-badge" class="badge" style="display:none;"></span>
+        <button type="button" id="installAppBtn" class="btn-logout install-btn" style="display:none;" title="Install this app on your phone">
+          <i data-feather="download"></i> <span class="install-btn-label">Install App</span>
+        </button>
         <a href="{{ url_for('change_password') }}" class="btn-logout topbar-change-pw" style="margin-right:4px;">Change Password</a>
         <a href="{{ url_for('logout') }}" class="btn-logout">Sign out</a>
       </div>
@@ -299,6 +302,17 @@
 
   </div><!-- /main -->
 </div><!-- /app-layout -->
+
+<!-- iOS can't be scripted into an install prompt (no beforeinstallprompt
+     support) — this banner is the fallback the Install App button shows on
+     iPhone/iPad instead, walking through the manual Share > Add to Home
+     Screen steps. -->
+<div id="iosInstallBanner" class="ios-install-banner" style="display:none;">
+  <div class="ios-install-banner-body">
+    <span>To install: tap <strong>Share</strong> <span aria-hidden="true">&#x2191;</span>, then <strong>"Add to Home Screen"</strong>.</span>
+    <button type="button" id="iosInstallBannerClose" aria-label="Dismiss">&times;</button>
+  </div>
+</div>
 
 <script src="{{ url_for('static', filename='js/vendor/chart.umd.min.js') }}"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}?v={{ asset_v('js/app.js') }}"></script>

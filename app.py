@@ -9537,8 +9537,11 @@ def sync_health():
                           'last_seen': last_seen, 'status': status})
 
     peer_state = None
+    update_state = None
     if app.config['SYNC_ENABLED']:
         peer_state = SyncPeerState.query.filter_by(peer_url=app.config['SYNC_HUB_URL']).first()
+        if FROZEN:
+            update_state = _get_update_state()
 
     unresolved_conflicts = SyncConflict.query.filter_by(resolved=False).count()
     conflicts_by_table = dict(
@@ -9558,7 +9561,32 @@ def sync_health():
                            unresolved_conflicts=unresolved_conflicts,
                            table_counts=table_counts,
                            site_id=app.config['SITE_ID'], sync_enabled=app.config['SYNC_ENABLED'],
-                           sync_hub_url=app.config['SYNC_HUB_URL'])
+                           sync_hub_url=app.config['SYNC_HUB_URL'],
+                           update_state=update_state, app_version=APP_VERSION, frozen=FROZEN)
+
+
+@app.route('/sync/check-update', methods=['POST'])
+@login_required
+@admin_required
+def sync_check_update():
+    """"Check for Update Now" on Sync Health — bypasses the usual
+    SPOKE_UPDATE_CHECK_SECONDS throttle (default 6h) so publishing a
+    release on the hub doesn't leave whoever's waiting on this spoke
+    with nothing to do but sit on their hands. Only meaningful on a
+    spoke's own packaged .exe (see check_for_spoke_update); a no-op
+    redirect anywhere else, since the button itself is only ever shown
+    there (see sync/health.html)."""
+    if not (FROZEN and app.config['SYNC_ENABLED']):
+        return redirect(url_for('sync_health'))
+    check_for_spoke_update(force=True)
+    state = _get_update_state()
+    if state.last_error:
+        flash(f'Update check failed: {state.last_error}', 'danger')
+    elif state.staged_version:
+        flash(f'Version {state.staged_version} downloaded and staged — it applies the next time this spoke restarts.', 'success')
+    else:
+        flash(f'Checked — already on the latest published version ({APP_VERSION}).', 'info')
+    return redirect(url_for('sync_health'))
 
 
 @app.route('/sync/sites')
@@ -10713,7 +10741,7 @@ def _get_update_state():
     return state
 
 
-def check_for_spoke_update():
+def check_for_spoke_update(force=False):
     """Ask the hub whether a newer spoke build is published and, if so,
     download and unpack it into a staging folder next to this install —
     never applied here. This process cannot safely overwrite its own
@@ -10722,16 +10750,41 @@ def check_for_spoke_update():
     time this spoke actually restarts (see launcher.ps1 and
     SPOKE_SETUP.md). Throttled well below SYNC_INTERVAL_SECONDS — see
     SPOKE_UPDATE_CHECK_SECONDS — since this is a one-shot metadata check,
-    not per-record sync, and an update is never urgent by design."""
-    state = _get_update_state()
-    now = datetime.now(timezone.utc)
-    if state.last_checked_at:
-        elapsed = (now - state.last_checked_at.replace(tzinfo=timezone.utc)).total_seconds()
-        if elapsed < app.config['SPOKE_UPDATE_CHECK_SECONDS']:
-            return
-    state.last_checked_at = now
+    not per-record sync, and an update is never urgent by design.
 
+    force=True skips that throttle — used by the "Check for Update Now"
+    button on Sync Health (sync_check_update) so an admin who just
+    published a release isn't stuck waiting out the full interval
+    (6h by default) before this spoke even looks for it.
+
+    Everything here — including fetching/updating SpokeUpdateState itself,
+    not just the network calls — lives inside one try/except: this used to
+    fetch that state before the try started, so a bare exception there
+    (e.g. a transient SQLite lock, since this can now also run on the
+    request thread via sync_check_update while the background sync thread
+    is mid-cycle on the same local DB) would escape uncaught. From a
+    background cycle that silently kills the sync loop for good (see
+    run_sync_cycle); from the manual check-update route it would 500 the
+    request instead of flashing a message. Neither may happen."""
     try:
+        state = _get_update_state()
+        if state.staged_version == APP_VERSION:
+            # Whatever was staged is now the version actually running —
+            # the launcher already applied it on this restart, so it's no
+            # longer "staged, pending a restart." Checked unconditionally,
+            # ahead of the throttle below, so this clears on the very
+            # first call after a restart rather than sitting stale for up
+            # to a full SPOKE_UPDATE_CHECK_SECONDS.
+            state.staged_version = None
+            state.staged_dir = None
+            db.session.commit()
+        now = datetime.now(timezone.utc)
+        if not force and state.last_checked_at:
+            elapsed = (now - state.last_checked_at.replace(tzinfo=timezone.utc)).total_seconds()
+            if elapsed < app.config['SPOKE_UPDATE_CHECK_SECONDS']:
+                return
+        state.last_checked_at = now
+
         resp = requests.get(f"{app.config['SYNC_HUB_URL']}/api/spoke/latest-version",
                             headers=_sync_headers(), timeout=30)
         resp.raise_for_status()
@@ -10781,11 +10834,16 @@ def check_for_spoke_update():
             json.dump(marker, f)
 
         app.logger.info(f'spoke update {version} downloaded and staged — applies on next restart')
-    except Exception as e:  # noqa: BLE001 — a bad check must never kill the loop
+    except Exception as e:  # noqa: BLE001 — a bad check must never kill the loop (or any caller)
         db.session.rollback()
-        state = _get_update_state()
-        state.last_error = str(e)
-        db.session.commit()
+        try:
+            # Best-effort — if fetching/writing the state row is itself
+            # what failed above, there's nowhere left to record this.
+            state = _get_update_state()
+            state.last_error = str(e)
+            db.session.commit()
+        except Exception:  # noqa: BLE001
+            db.session.rollback()
         app.logger.warning(f'spoke update check failed: {e}')
 
 

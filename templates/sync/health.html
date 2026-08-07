@@ -28,6 +28,32 @@
     {% endif %}
   </div>
 </div>
+
+{% if frozen %}
+<div class="card mb-16">
+  <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+    <h3>Spoke self-update</h3>
+    <form method="POST" action="{{ url_for('sync_check_update') }}" style="margin:0;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-outline btn-xs"><i data-feather="refresh-cw"></i> Check for Update Now</button>
+    </form>
+  </div>
+  <div class="card-body">
+    <div class="form-grid">
+      <div><strong>Running version</strong><div>{{ app_version }}</div></div>
+      <div><strong>Last checked</strong><div>{{ update_state.last_checked_at.strftime('%d %b %Y %H:%M:%S') if update_state and update_state.last_checked_at else 'never' }}</div></div>
+      <div><strong>Staged, applies on next restart</strong><div>{{ update_state.staged_version if update_state and update_state.staged_version else '—' }}</div></div>
+      <div><strong>Last error</strong><div>{{ update_state.last_error if update_state and update_state.last_error else '—' }}</div></div>
+    </div>
+    <div class="form-hint mt-8">
+      Normally checks automatically every few hours (SPOKE_UPDATE_CHECK_SECONDS) and only applies a
+      staged update the next time this spoke restarts (see launcher.bat/launcher.ps1) — never while
+      it's running. Use the button above right after publishing a release on the hub instead of
+      waiting for the next automatic check.
+    </div>
+  </div>
+</div>
+{% endif %}
 {% else %}
 <div class="card mb-16">
   <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">

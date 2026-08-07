@@ -148,6 +148,63 @@ document.addEventListener('DOMContentLoaded', function () {
 
   // ── Searchable driver/vehicle selects ──
   enhanceSearchableSelects();
+
+  // ── Table scroll hints: fade the edge of any wide table that has more
+  // columns off-screen, so a swipeable table doesn't look "complete" on a
+  // narrow phone. Re-checked on scroll/resize since which edges are faded
+  // depends on scroll position. ──
+  document.querySelectorAll('.table-wrap').forEach(function (wrap) {
+    function update() {
+      wrap.classList.toggle('is-scrollable', wrap.scrollWidth > wrap.clientWidth + 1);
+      wrap.classList.toggle('at-start', wrap.scrollLeft <= 1);
+      wrap.classList.toggle('at-end', wrap.scrollLeft + wrap.clientWidth >= wrap.scrollWidth - 1);
+    }
+    update();
+    wrap.addEventListener('scroll', update, { passive: true });
+    window.addEventListener('resize', update);
+  });
+
+  // ── Install App (PWA) ──
+  var installBtn = document.getElementById('installAppBtn');
+  var iosBanner = document.getElementById('iosInstallBanner');
+  var iosBannerClose = document.getElementById('iosInstallBannerClose');
+  var isStandalone = window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+  // iPadOS Safari reports as desktop Safari (no "iPad" in the UA) — the
+  // touch-point check below is the standard way to still catch it.
+  var isIOS = /iphone|ipad|ipod/i.test(window.navigator.userAgent) ||
+    (window.navigator.platform === 'MacIntel' && window.navigator.maxTouchPoints > 1);
+  var deferredInstallPrompt = null;
+
+  if (!isStandalone && installBtn) {
+    // Chrome/Edge/Android fire this when the site qualifies as installable;
+    // capturing it lets the button trigger the native prompt on demand
+    // instead of the browser's own (easy to miss) address-bar icon.
+    window.addEventListener('beforeinstallprompt', function (e) {
+      e.preventDefault();
+      deferredInstallPrompt = e;
+      installBtn.style.display = '';
+    });
+    // Safari never fires beforeinstallprompt, so the button is shown
+    // unconditionally on iOS and falls back to the instructions banner.
+    if (isIOS) installBtn.style.display = '';
+
+    window.addEventListener('appinstalled', function () {
+      installBtn.style.display = 'none';
+      deferredInstallPrompt = null;
+    });
+
+    installBtn.addEventListener('click', function () {
+      if (deferredInstallPrompt) {
+        deferredInstallPrompt.prompt();
+        deferredInstallPrompt.userChoice.finally(function () { deferredInstallPrompt = null; });
+      } else if (isIOS && iosBanner) {
+        iosBanner.style.display = 'block';
+      }
+    });
+  }
+  if (iosBannerClose && iosBanner) {
+    iosBannerClose.addEventListener('click', function () { iosBanner.style.display = 'none'; });
+  }
 });
 
 // Turns every plain <select data-refdata="drivers|vehicles|franchise_vehicles">
