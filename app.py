@@ -8553,18 +8553,74 @@ def report_franchise_reconciliation():
 @login_required
 @permission_required('franchise')
 def report_franchise_reconciliation_export():
+    """Mirrors report_franchise_reconciliation's three sections exactly
+    (Day by Day, Daily Reconciliation Schedule, Weekly Reconciliation
+    Schedule) — the old version only ever exported the Day by Day summary,
+    leaving out the two actual reconciliation schedules the page is named
+    for."""
     df, dt = query_date_range()
     daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
+
+    daily_rows = _group_income_by_period(daily_entries, 'entry_date')
+    weekly_rows = _group_income_by_period(weekly_entries, 'week_start')
+    daily_totals = _income_entry_totals(daily_entries)
+    weekly_totals = _income_entry_totals(weekly_entries)
+
     days = {}
     for e in daily_entries:
         days.setdefault(e.entry_date, {'daily': 0.0, 'weekly': 0.0})['daily'] += e.income
     for e in weekly_entries:
         days.setdefault(e.week_start, {'daily': 0.0, 'weekly': 0.0})['weekly'] += e.income
-    rows = [[d, d.strftime('%A'), f"{b['daily']:.2f}", f"{b['weekly']:.2f}", f"{b['daily'] + b['weekly']:.2f}"]
-            for d, b in sorted(days.items())]
-    return csv_export_response(f'franchise_reconciliation_{df}_to_{dt}.csv',
-        ['Date', 'Day', 'Daily Income', 'Weekly Income', 'Total Income'], rows)
+    day_by_day_rows = [[d, d.strftime('%A'), f"{b['daily']:.2f}", f"{b['weekly']:.2f}", f"{b['daily'] + b['weekly']:.2f}"]
+                       for d, b in sorted(days.items())]
+    day_totals = dict(daily=sum(b['daily'] for b in days.values()), weekly=sum(b['weekly'] for b in days.values()))
+
+    schedule_header = ['Period', 'Income', 'Traffic Fines', 'Facilitation Fee', 'Workshop', 'Wages',
+                       'Other', 'Net Income', 'Cash Deposited', 'Variance']
+
+    def schedule_row(r):
+        return [r['period'], f"{r['income']:.2f}", f"{r['exp_traffic_fines']:.2f}", f"{r['exp_facilitation_fees']:.2f}",
+                f"{r['exp_workshop']:.2f}", f"{r['exp_wages']:.2f}", f"{r['other_expenditure']:.2f}",
+                f"{r['cash_in_hand']:.2f}", f"{r['deposited']:.2f}", f"{r['variance']:.2f}"]
+
+    def schedule_total_row(t):
+        return ['TOTAL', f"{t['income']:.2f}", f"{t['exp_traffic_fines']:.2f}", f"{t['exp_facilitation_fees']:.2f}",
+                f"{t['exp_workshop']:.2f}", f"{t['exp_wages']:.2f}", f"{t['other_expenditure']:.2f}",
+                f"{t['cash_in_hand']:.2f}", f"{t['deposited']:.2f}", f"{t['variance']:.2f}"]
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(['FRANCHISE COLLECTION RECONCILIATION SCHEDULE'])
+    w.writerow([f'Period: {df} to {dt}'])
+    w.writerow([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
+    w.writerow([])
+
+    w.writerow(['DAY BY DAY'])
+    w.writerow(['Date', 'Day', 'Daily Income', 'Weekly Income', 'Total Income'])
+    w.writerows(day_by_day_rows)
+    w.writerow(['TOTAL', '', f"{day_totals['daily']:.2f}", f"{day_totals['weekly']:.2f}",
+                f"{day_totals['daily'] + day_totals['weekly']:.2f}"])
+    w.writerow([])
+
+    w.writerow(['DAILY RECONCILIATION SCHEDULE'])
+    w.writerow(schedule_header)
+    for r in daily_rows:
+        w.writerow(schedule_row(r))
+    w.writerow(schedule_total_row(daily_totals))
+    w.writerow([])
+
+    w.writerow(['WEEKLY RECONCILIATION SCHEDULE'])
+    w.writerow(schedule_header)
+    for r in weekly_rows:
+        w.writerow(schedule_row(r))
+    w.writerow(schedule_total_row(weekly_totals))
+
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'text/csv'
+    resp.headers['Content-Disposition'] = f'attachment; filename=franchise_reconciliation_{df}_to_{dt}.csv'
+    return resp
 
 
 @app.route('/reports/franchise/dual-frequency')
