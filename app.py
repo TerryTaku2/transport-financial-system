@@ -853,6 +853,12 @@ class Expense(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     category_id = db.Column(db.Integer, db.ForeignKey('expense_categories.id'), nullable=False)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=True)
+    # Attributes the expense to a driver — typically a road/trip expense
+    # incurred while away from base. Optional: most expenses (insurance,
+    # rent, etc.) aren't tied to any one driver. This is also what the
+    # fleet reconciliation reports (report_fleet_reconciliation/
+    # report_fleet_consolidated) sum as "expenses incurred while away".
+    driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=True)
     expense_date = db.Column(db.Date, nullable=False, default=date.today)
     description = db.Column(db.Text)
     amount = db.Column(db.Float, nullable=False)
@@ -868,6 +874,7 @@ class Expense(db.Model):
 
     category = db.relationship('ExpenseCategory', backref='expenses')
     vehicle = db.relationship('Vehicle')
+    driver = db.relationship('Driver')
 
 
 class Budget(db.Model):
@@ -885,6 +892,34 @@ class Budget(db.Model):
     deleted_at = db.Column(db.DateTime, nullable=True)
     last_synced_updated_at = db.Column(db.DateTime, nullable=True)
     server_touched_at = db.Column(db.DateTime, nullable=True)
+
+
+class DriverDeposit(db.Model):
+    """Cash a driver banks for a given date, for reconciliation against the
+    fleet's own net income (DailyLog.gross_revenue minus driver-attributed
+    Expense rows — see report_fleet_reconciliation/report_fleet_consolidated).
+    vehicle_id is optional and only used to attribute the deposit to a
+    vehicle for the consolidated-by-vehicle view; a driver who drove more
+    than one vehicle that day can leave it blank."""
+    __tablename__ = 'driver_deposits'
+    id = db.Column(db.Integer, primary_key=True)
+    driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=False)
+    vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=True)
+    deposit_date = db.Column(db.Date, nullable=False, default=date.today)
+    amount = db.Column(db.Float, nullable=False)
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
+
+    driver = db.relationship('Driver', backref='deposits')
+    vehicle = db.relationship('Vehicle')
 
 
 class FranchiseDailyIncome(db.Model):
@@ -3501,6 +3536,91 @@ def driver_ledger_export():
     safe_reg = vehicle.registration.replace(' ', '_')
     resp.headers['Content-Disposition'] = f'attachment; filename={safe_reg}_ledger_{period}_{date.today()}.csv'
     return resp
+
+
+# ─────────────────────────────────────────────────────────────
+# Driver Deposits — cash a driver banks for a date, reconciled against the
+# fleet's own net income (DailyLog.gross_revenue minus driver-attributed
+# Expense rows) on the Fleet Reconciliation reports below.
+# ─────────────────────────────────────────────────────────────
+@app.route('/logs/deposits')
+@login_required
+@permission_required('daily_logs')
+def driver_deposits_list():
+    page = request.args.get('page', 1, type=int)
+    driver_id = request.args.get('driver_id', type=int)
+    df, dt = query_date_range()
+
+    query = DriverDeposit.query.filter(DriverDeposit.deposit_date.between(df, dt))
+    if driver_id:
+        query = query.filter_by(driver_id=driver_id)
+    deposits = query.order_by(DriverDeposit.deposit_date.desc(), DriverDeposit.id.desc()).paginate(page=page, per_page=20)
+    total = query.with_entities(func.sum(DriverDeposit.amount)).scalar() or 0
+
+    all_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
+    all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
+    return render_template('fleet/deposits.html', deposits=deposits, drivers=all_drivers, vehicles=all_vehicles,
+                           driver_id=driver_id, date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'),
+                           total=total, today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/logs/deposits/add', methods=['POST'])
+@login_required
+@permission_required('daily_logs')
+def driver_deposit_add():
+    # POST-only, no GET counterpart at this URL (see driver_ledger_add) —
+    # errors are handled locally here and always redirect to the GET list page.
+    client_id = request.form.get('_client_id')
+    if already_synced(client_id):
+        flash('Already recorded.', 'info')
+        return redirect(url_for('driver_deposits_list'))
+    try:
+        driver_id = form_int(request.form, 'driver_id')
+        driver = Driver.query.filter_by(id=driver_id).first()
+        if not driver:
+            raise ValueError('Select a valid driver.')
+        # Falls back to the driver's normally assigned vehicle when the form
+        # leaves it blank — keeps the vehicle-consolidated report accurate
+        # without forcing every entry to pick a vehicle explicitly.
+        vehicle_id = form_int(request.form, 'vehicle_id', required=False) or driver.assigned_vehicle_id
+
+        deposit = DriverDeposit(
+            driver_id=driver.id,
+            vehicle_id=vehicle_id,
+            deposit_date=parse_date(request.form['deposit_date']),
+            amount=form_float(request.form, 'amount', min_value=0),
+            notes=request.form.get('notes', '').strip(),
+            created_by=current_user.id,
+        )
+        db.session.add(deposit)
+        db.session.flush()
+        log_audit('CREATE', 'driver_deposits', deposit.id,
+                  f'Deposit of {deposit.amount} for {driver.name} on {deposit.deposit_date}')
+        record_offline_sync(client_id, 'driver_deposit_add')
+        touch_sync_fields(deposit)
+        db.session.commit()
+        flash('Deposit recorded.', 'success')
+    except KeyError as e:
+        db.session.rollback()
+        flash(f'Missing required field: {e}', 'danger')
+    except ValueError as e:
+        db.session.rollback()
+        flash(str(e), 'danger')
+
+    return redirect(url_for('driver_deposits_list'))
+
+
+@app.route('/logs/deposits/<int:did>/delete', methods=['POST'])
+@login_required
+@admin_required
+def driver_deposit_delete(did):
+    deposit = DriverDeposit.query.filter_by(id=did).first_or_404()
+    log_audit('DELETE', 'driver_deposits', did, f'Deleted deposit of {deposit.amount} for {deposit.driver.name}')
+    deposit.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(deposit)
+    db.session.commit()
+    flash('Deposit deleted.', 'warning')
+    return redirect(url_for('driver_deposits_list'))
 
 
 def _resolve_ledger_import_vehicle():
@@ -7110,9 +7230,9 @@ def expenses_list():
 def expenses_export():
     all_expenses = Expense.query.order_by(Expense.expense_date.desc()).all()
     rows = [[e.expense_date, e.category.display_name, e.vehicle.registration if e.vehicle else '',
-             e.description or '', f'{e.amount:.2f}'] for e in all_expenses]
+             e.driver.name if e.driver else '', e.description or '', f'{e.amount:.2f}'] for e in all_expenses]
     return csv_export_response(f'expenses_{date.today()}.csv',
-        ['Date', 'Category', 'Vehicle', 'Description', 'Amount'], rows)
+        ['Date', 'Category', 'Vehicle', 'Driver', 'Description', 'Amount'], rows)
 
 
 @app.route('/finance/expenses/add', methods=['GET', 'POST'])
@@ -7128,6 +7248,7 @@ def expense_add():
         e = Expense(
             category_id=form_int(request.form, 'category_id'),
             vehicle_id=form_int(request.form, 'vehicle_id', required=False),
+            driver_id=form_int(request.form, 'driver_id', required=False),
             expense_date=parse_date(request.form['expense_date']),
             description=request.form.get('description', '').strip(),
             amount=form_float(request.form, 'amount', min_value=0),
@@ -7143,8 +7264,10 @@ def expense_add():
         return redirect(url_for('expenses_list'))
     headings = ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all()
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    all_drivers = Driver.query.filter_by(status='active').order_by(Driver.name).all()
     selected_category_id = request.args.get('new_category_id', '')
     return render_template('finance/expense_form.html', headings=headings, vehicles=all_vehicles,
+                           drivers=all_drivers,
                            selected_category_id=selected_category_id,
                            today=date.today().strftime('%Y-%m-%d'))
 
@@ -8786,6 +8909,135 @@ def report_franchise_consolidated_export():
 
 
 # ─────────────────────────────────────────────────────────────
+# Fleet Reconciliation — the company's own fleet (Vehicle/Driver/DailyLog,
+# distinct from the Franchise module above): net income (DailyLog.gross_revenue
+# minus driver-attributed Expense rows, i.e. costs a driver incurs while away)
+# reconciled against cash each driver deposits (DriverDeposit) — by driver,
+# and consolidated by vehicle.
+# ─────────────────────────────────────────────────────────────
+def _fleet_driver_totals(df, dt):
+    """Per active driver: income (DailyLog.gross_revenue), expenses (Expense
+    rows attributed to that driver), net_income and variance against
+    DriverDeposit. Every active driver appears even with zero activity, so a
+    driver with income but no deposit shows up as a variance rather than
+    being silently omitted. Returns (rows, totals) — totals has the same
+    shape as one row, summed."""
+    drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
+
+    income_by_driver = dict(
+        db.session.query(DailyLog.driver_id, func.sum(DailyLog.gross_revenue))
+        .filter(DailyLog.log_date.between(df, dt), DailyLog.driver_id.isnot(None))
+        .group_by(DailyLog.driver_id).all())
+    expense_by_driver = dict(
+        db.session.query(Expense.driver_id, func.sum(Expense.amount))
+        .filter(Expense.expense_date.between(df, dt), Expense.driver_id.isnot(None))
+        .group_by(Expense.driver_id).all())
+    deposited_by_driver = dict(
+        db.session.query(DriverDeposit.driver_id, func.sum(DriverDeposit.amount))
+        .filter(DriverDeposit.deposit_date.between(df, dt))
+        .group_by(DriverDeposit.driver_id).all())
+
+    rows = []
+    for d in drivers:
+        income = income_by_driver.get(d.id) or 0.0
+        expenses = expense_by_driver.get(d.id) or 0.0
+        deposited = deposited_by_driver.get(d.id) or 0.0
+        net_income = income - expenses
+        rows.append(dict(driver=d, income=income, expenses=expenses,
+                          net_income=net_income, deposited=deposited, variance=deposited - net_income))
+
+    totals = dict(
+        income=sum(r['income'] for r in rows), expenses=sum(r['expenses'] for r in rows),
+        net_income=sum(r['net_income'] for r in rows), deposited=sum(r['deposited'] for r in rows),
+        variance=sum(r['variance'] for r in rows))
+    return rows, totals
+
+
+def _fleet_vehicle_totals(df, dt):
+    """Same shape as _fleet_driver_totals, consolidated per active vehicle
+    instead of per driver. Expenses only count rows attributed to a driver
+    (Expense.driver_id set) so the "expenses incurred while away" definition
+    stays consistent between the by-driver and by-vehicle views."""
+    vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
+
+    income_by_vehicle = dict(
+        db.session.query(DailyLog.vehicle_id, func.sum(DailyLog.gross_revenue))
+        .filter(DailyLog.log_date.between(df, dt))
+        .group_by(DailyLog.vehicle_id).all())
+    expense_by_vehicle = dict(
+        db.session.query(Expense.vehicle_id, func.sum(Expense.amount))
+        .filter(Expense.expense_date.between(df, dt), Expense.driver_id.isnot(None), Expense.vehicle_id.isnot(None))
+        .group_by(Expense.vehicle_id).all())
+    deposited_by_vehicle = dict(
+        db.session.query(DriverDeposit.vehicle_id, func.sum(DriverDeposit.amount))
+        .filter(DriverDeposit.deposit_date.between(df, dt), DriverDeposit.vehicle_id.isnot(None))
+        .group_by(DriverDeposit.vehicle_id).all())
+
+    rows = []
+    for v in vehicles:
+        income = income_by_vehicle.get(v.id) or 0.0
+        expenses = expense_by_vehicle.get(v.id) or 0.0
+        deposited = deposited_by_vehicle.get(v.id) or 0.0
+        net_income = income - expenses
+        rows.append(dict(vehicle=v, income=income, expenses=expenses,
+                          net_income=net_income, deposited=deposited, variance=deposited - net_income))
+
+    totals = dict(
+        income=sum(r['income'] for r in rows), expenses=sum(r['expenses'] for r in rows),
+        net_income=sum(r['net_income'] for r in rows), deposited=sum(r['deposited'] for r in rows),
+        variance=sum(r['variance'] for r in rows))
+    return rows, totals
+
+
+@app.route('/reports/fleet/reconciliation')
+@login_required
+@permission_required('reports')
+def report_fleet_reconciliation():
+    df, dt = query_date_range()
+    rows, totals = _fleet_driver_totals(df, dt)
+    return render_template('fleet/reconciliation.html', rows=rows, totals=totals,
+                           date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
+
+
+@app.route('/reports/fleet/reconciliation/export')
+@login_required
+@permission_required('reports')
+def report_fleet_reconciliation_export():
+    df, dt = query_date_range()
+    rows, totals = _fleet_driver_totals(df, dt)
+    out_rows = [[r['driver'].name, f"{r['income']:.2f}", f"{r['expenses']:.2f}", f"{r['net_income']:.2f}",
+                 f"{r['deposited']:.2f}", f"{r['variance']:.2f}"] for r in rows]
+    out_rows.append(['TOTAL', f"{totals['income']:.2f}", f"{totals['expenses']:.2f}", f"{totals['net_income']:.2f}",
+                      f"{totals['deposited']:.2f}", f"{totals['variance']:.2f}"])
+    return csv_export_response(f'fleet_reconciliation_{df}_to_{dt}.csv',
+        ['Driver', 'Income', 'Expenses', 'Net Income', 'Cash Deposited', 'Variance'], out_rows)
+
+
+@app.route('/reports/fleet/consolidated')
+@login_required
+@permission_required('reports')
+def report_fleet_consolidated():
+    df, dt = query_date_range()
+    rows, totals = _fleet_vehicle_totals(df, dt)
+    return render_template('fleet/consolidated.html', rows=rows, totals=totals,
+                           date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
+
+
+@app.route('/reports/fleet/consolidated/export')
+@login_required
+@permission_required('reports')
+def report_fleet_consolidated_export():
+    df, dt = query_date_range()
+    rows, totals = _fleet_vehicle_totals(df, dt)
+    out_rows = [[r['vehicle'].registration, f"{r['income']:.2f}", f"{r['expenses']:.2f}", f"{r['net_income']:.2f}",
+                 f"{r['deposited']:.2f}", f"{r['variance']:.2f}"] for r in rows]
+    out_rows.append(['TOTAL', f"{totals['income']:.2f}", f"{totals['expenses']:.2f}", f"{totals['net_income']:.2f}",
+                      f"{totals['deposited']:.2f}", f"{totals['variance']:.2f}"])
+    return csv_export_response(f'fleet_consolidated_{df}_to_{dt}.csv',
+        ['Vehicle', 'Income', 'Expenses', 'Net Income', 'Cash Deposited', 'Variance'], out_rows)
+
+
+# ─────────────────────────────────────────────────────────────
 # Compliance
 # ─────────────────────────────────────────────────────────────
 @app.route('/compliance')
@@ -9763,7 +10015,7 @@ SYNC_TABLE_ORDER = [
 DANGER_ZONE_MODULES = [
     ('franchise', 'Franchise', ['franchise_daily_income', 'franchise_weekly_income', 'franchise_collections', 'franchise_vehicles']),
     ('fleet', 'Fleet & Compliance', ['vehicles', 'drivers', 'routes', 'vehicle_documents', 'maintenance_schedules']),
-    ('ledger', 'Daily Transactions (Crew Ledger)', ['daily_logs']),
+    ('ledger', 'Daily Transactions (Crew Ledger)', ['daily_logs', 'driver_deposits']),
     ('operations', 'Operations (Fuel & Maintenance Logs)', ['fuel_logs', 'maintenance_logs']),
     ('finance', 'Finance Ledger', ['loans', 'loan_payments', 'payables', 'receivables', 'capital_contributions', 'owner_drawings', 'budgets', 'expenses', 'expense_categories', 'commission_payments']),
     ('store', 'Spares Store', ['spare_parts', 'store_purchases', 'store_sales']),
@@ -11016,6 +11268,14 @@ def migrate_db():
             if 'pending_review' not in vehicle_cols:
                 conn.execute(text("ALTER TABLE franchise_vehicles ADD COLUMN pending_review BOOLEAN NOT NULL DEFAULT 0"))
 
+        # expenses gained driver_id — attributes an expense to a driver
+        # (see report_fleet_reconciliation). driver_deposits is a brand-new
+        # table, so it needs no ALTER here; db.create_all() below builds it.
+        if inspector.has_table('expenses'):
+            expense_cols = [c['name'] for c in inspector.get_columns('expenses')]
+            if 'driver_id' not in expense_cols:
+                conn.execute(text("ALTER TABLE expenses ADD COLUMN driver_id INTEGER REFERENCES drivers(id)"))
+
         # Multi-site sync columns (see touch_sync_fields()) — added to every
         # syncable table. sync_uuid/deleted_at go in nullable (SQLite can't
         # add a NOT NULL column post-hoc without a full table rebuild, same
@@ -11073,7 +11333,7 @@ def migrate_db():
     sync_models = (
         Vehicle, VehicleDocument, Driver, Route, DailyLog, FuelLog, MaintenanceLog,
         Loan, LoanPayment, Payable, Receivable, CommissionPayment, CapitalContribution,
-        OwnerDrawing, ExpenseCategory, Expense, Budget, FranchiseDailyIncome,
+        OwnerDrawing, ExpenseCategory, Expense, Budget, DriverDeposit, FranchiseDailyIncome,
         FranchiseWeeklyIncome, FranchiseVehicle, FranchiseCollection,
         MaintenanceSchedule, SparePart, StorePurchase, StoreSale,
     )

@@ -11,6 +11,7 @@
   <div class="btn-group">
     <a href="{{ url_for('store_parts') }}" class="btn btn-outline"><i data-feather="package"></i> Inventory</a>
     <a href="{{ url_for('store_sales') }}" class="btn btn-outline"><i data-feather="arrow-up-circle"></i> Sales</a>
+    <a href="{{ url_for('store_trading_account_export', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
   </div>
 </div>
 

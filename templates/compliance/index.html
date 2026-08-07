@@ -8,6 +8,7 @@
     <h1>Compliance Dashboard</h1>
     <div class="subtitle">Fitness certificates, route permits & insurance — as of {{ today.strftime('%d %B %Y') }}</div>
   </div>
+  <a href="{{ url_for('compliance_export') }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
 </div>
 
 <div class="kpi-grid">

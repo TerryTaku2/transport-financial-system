@@ -54,6 +54,9 @@
       <a href="{{ url_for('driver_ledger_export', vehicle_id=vehicle.id, period=period) }}" class="btn btn-xs btn-outline">
         <i data-feather="download"></i> Export CSV
       </a>
+      <a href="{{ url_for('export_daily_logs') }}" class="btn btn-xs btn-outline">
+        <i data-feather="download-cloud"></i> Export All Vehicles
+      </a>
       <form method="POST" action="{{ url_for('driver_ledger_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin:0;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="vehicle_id" value="{{ vehicle.id }}">

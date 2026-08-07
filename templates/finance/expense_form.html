@@ -73,6 +73,16 @@
             {% endfor %}
           </select>
         </div>
+        <div class="form-group">
+          <label>Driver (optional)</label>
+          <select name="driver_id" data-refdata="drivers">
+            <option value="">Not driver-specific</option>
+            {% for d in drivers %}
+            <option value="{{ d.id }}">{{ d.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-hint">Select a driver if this expense was incurred by them while away — it feeds the Fleet Reconciliation report.</div>
+        </div>
       </div>
       <div class="form-group mb-16">
         <label>Description</label>

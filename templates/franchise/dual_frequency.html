@@ -11,6 +11,7 @@
   <div class="btn-group">
     <a href="{{ url_for('franchise_daily_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Daily Entries</a>
     <a href="{{ url_for('franchise_weekly_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Weekly Entries</a>
+    <a href="{{ url_for('report_franchise_dual_frequency_export', date_from=date_from, date_to=date_to, only_both='1' if only_both else '') }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
   </div>
 </div>
 

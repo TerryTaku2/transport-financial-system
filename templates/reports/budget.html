@@ -8,6 +8,7 @@
     <h1>Budget vs Actual</h1>
     <div class="subtitle">{{ month_label }}</div>
   </div>
+  <a href="{{ url_for('report_budget_export', month=month) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
 </div>
 
 <form method="GET" class="filter-bar">

@@ -1,0 +1,92 @@
+{% extends 'base.html' %}
+{% block title %}Fleet Reconciliation{% endblock %}
+{% block page_title %}Fleet — Reconciliation by Driver{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Fleet Reconciliation</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; net fleet income (revenue minus driver expenses) vs. cash deposited, by driver</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('driver_deposits_list') }}" class="btn btn-outline"><i data-feather="list"></i> Deposits</a>
+    <a href="{{ url_for('report_fleet_consolidated', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="truck"></i> By Vehicle</a>
+    <a href="{{ url_for('report_fleet_reconciliation_export', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid mb-24">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Total Income</div>
+    <div class="kpi-value">{{ totals.income|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Total Driver Expenses</div>
+    <div class="kpi-value">{{ totals.expenses|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Net Fleet Income</div>
+    <div class="kpi-value">{{ totals.net_income|currency }}</div>
+  </div>
+  <div class="kpi-card {% if totals.variance < 0 %}kpi-red{% else %}kpi-teal{% endif %}">
+    <div class="kpi-label">Variance (Cash Deposited vs. Net Income)</div>
+    <div class="kpi-value">{{ totals.variance|currency }}</div>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Reconciliation by Driver</h3></div>
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Driver</th>
+          <th class="text-right">Income [$]</th>
+          <th class="text-right">Driver Expenses [$]</th>
+          <th class="text-right">Net Income [$]</th>
+          <th class="text-right">Cash Deposited [$]</th>
+          <th class="text-right">Variance [$]</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr>
+          <td>{{ r.driver.name }}</td>
+          <td class="text-right">{{ r.income|currency }}</td>
+          <td class="text-right">{{ r.expenses|currency }}</td>
+          <td class="text-right">{{ r.net_income|currency }}</td>
+          <td class="text-right">{{ r.deposited|currency }}</td>
+          <td class="text-right"><span class="{% if r.variance < 0 %}text-danger{% elif r.variance > 0 %}text-warning{% endif %}">{{ r.variance|currency }}</span></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="summary-row">
+          <td>TOTAL</td>
+          <td class="text-right">{{ totals.income|currency }}</td>
+          <td class="text-right">{{ totals.expenses|currency }}</td>
+          <td class="text-right">{{ totals.net_income|currency }}</td>
+          <td class="text-right">{{ totals.deposited|currency }}</td>
+          <td class="text-right">{{ totals.variance|currency }}</td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No active drivers to reconcile.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

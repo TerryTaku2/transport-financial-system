@@ -1,0 +1,122 @@
+{% extends 'base.html' %}
+{% block title %}Driver Deposits{% endblock %}
+{% block page_title %}Fleet — Driver Deposits{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Driver Deposits</h1>
+    <div class="subtitle">Cash each driver banks — reconciled against fleet net income on the Fleet Reconciliation report</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('report_fleet_reconciliation') }}" class="btn btn-outline"><i data-feather="bar-chart-2"></i> Reconciliation</a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>Driver</label>
+    <select name="driver_id">
+      <option value="">All drivers</option>
+      {% for d in drivers %}
+      <option value="{{ d.id }}" {% if driver_id == d.id %}selected{% endif %}>{{ d.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Filter</button>
+</form>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Record a Deposit</h3></div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('driver_deposit_add') }}" data-offline-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Driver<span class="req">*</span></label>
+          <select name="driver_id" required data-refdata="drivers">
+            <option value="">Select driver</option>
+            {% for d in drivers %}
+            <option value="{{ d.id }}">{{ d.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Vehicle (optional)</label>
+          <select name="vehicle_id" data-refdata="vehicles">
+            <option value="">Use driver's assigned vehicle</option>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}">{{ v.registration }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="deposit_date" required value="{{ today }}">
+        </div>
+        <div class="form-group">
+          <label>Amount (USD)<span class="req">*</span></label>
+          <input type="number" name="amount" step="0.01" min="0" required placeholder="0.00">
+        </div>
+      </div>
+      <div class="form-group mb-16">
+        <label>Notes</label>
+        <textarea name="notes" rows="2"></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Record Deposit</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header">
+    <h3>Deposits — {{ date_from }} to {{ date_to }}</h3>
+    <span class="badge badge-blue">Total: {{ total|currency }}</span>
+  </div>
+  {% if deposits.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Driver</th><th>Vehicle</th><th class="text-right">Amount</th><th>Notes</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for d in deposits.items %}
+        <tr>
+          <td>{{ d.deposit_date }}</td>
+          <td>{{ d.driver.name }}</td>
+          <td>{{ d.vehicle.registration if d.vehicle else '—' }}</td>
+          <td class="text-right">{{ d.amount|currency }}</td>
+          <td>{{ d.notes or '—' }}</td>
+          <td>
+            {% if current_user.role == 'admin' %}
+            <form method="POST" action="{{ url_for('driver_deposit_delete', did=d.id) }}" data-confirm="Delete this deposit?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if deposits.pages > 1 %}
+  <div class="pagination">
+    {% if deposits.has_prev %}<a href="{{ url_for('driver_deposits_list', page=deposits.prev_num, driver_id=driver_id, date_from=date_from, date_to=date_to) }}">&laquo; Prev</a>{% endif %}
+    <span>Page {{ deposits.page }} of {{ deposits.pages }}</span>
+    {% if deposits.has_next %}<a href="{{ url_for('driver_deposits_list', page=deposits.next_num, driver_id=driver_id, date_from=date_from, date_to=date_to) }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="empty-state"><p>No deposits recorded for the selected period.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

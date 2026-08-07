@@ -8,7 +8,10 @@
     <h1>Loans</h1>
     <div class="subtitle">{{ loans|length }} loan(s) recorded</div>
   </div>
-  <a href="{{ url_for('loan_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Loan</a>
+  <div class="btn-group">
+    <a href="{{ url_for('loans_export') }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+    <a href="{{ url_for('loan_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Loan</a>
+  </div>
 </div>
 
 <div class="card">

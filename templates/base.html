@@ -44,7 +44,7 @@
     </div>
     {% endif %}
 
-    {% if current_user.has_permission('vehicles') or current_user.has_permission('drivers') or current_user.has_permission('routes') %}
+    {% if current_user.has_permission('vehicles') or current_user.has_permission('drivers') or current_user.has_permission('routes') or current_user.has_permission('daily_logs') %}
     <div class="nav-section">
       <div class="nav-section-label">Fleet</div>
       {% if current_user.has_permission('vehicles') %}
@@ -63,6 +63,11 @@
       {% if current_user.has_permission('routes') %}
       <a href="{{ url_for('routes_list') }}" class="nav-item {% if 'route' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="map"></i> Routes
+      </a>
+      {% endif %}
+      {% if current_user.has_permission('daily_logs') %}
+      <a href="{{ url_for('driver_deposits_list') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('driver_deposit') %}active{% endif %}">
+        <i data-feather="dollar-sign"></i> Driver Deposits
       </a>
       {% endif %}
     </div>
@@ -119,6 +124,12 @@
       </a>
       <a href="{{ url_for('report_route_profitability') }}" class="nav-item {% if request.endpoint == 'report_route_profitability' %}active{% endif %}">
         <i data-feather="map"></i> Route Profitability
+      </a>
+      <a href="{{ url_for('report_fleet_reconciliation') }}" class="nav-item {% if request.endpoint == 'report_fleet_reconciliation' %}active{% endif %}">
+        <i data-feather="check-circle"></i> Fleet Reconciliation
+      </a>
+      <a href="{{ url_for('report_fleet_consolidated') }}" class="nav-item {% if request.endpoint == 'report_fleet_consolidated' %}active{% endif %}">
+        <i data-feather="truck"></i> Fleet Reconciliation (by Vehicle)
       </a>
       <a href="{{ url_for('export_full_report_pack') }}" class="nav-item {% if request.endpoint == 'export_full_report_pack' %}active{% endif %}">
         <i data-feather="book-open"></i> Full Report Pack (PDF)
