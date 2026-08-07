@@ -4,7 +4,14 @@ services:
     env: python
     plan: starter
     buildCommand: "pip install -r requirements.txt"
-    startCommand: "gunicorn -w 1 --threads 4 -b 0.0.0.0:$PORT app:app"
+    # --timeout 300: gunicorn's 30s default only ever covers routine
+    # requests. Publishing a spoke release uploads a ~30MB zip through this
+    # same worker (see spoke_release_upload in app.py) — on anything short
+    # of a fast connection that alone can exceed 30s, and gunicorn kills
+    # the worker as unresponsive mid-upload rather than just running slow.
+    # 300s matches the timeout a spoke itself already uses to download a
+    # release (see check_for_spoke_update's requests.get timeout=300).
+    startCommand: "gunicorn -w 1 --threads 4 --timeout 300 -b 0.0.0.0:$PORT app:app"
     disk:
       name: transport-erp-data
       mountPath: /var/data
