@@ -8279,33 +8279,58 @@ def franchise_vehicle_add():
 @app.route('/franchise/vehicles/quick-add', methods=['POST'])
 @login_required
 @permission_required('franchise')
-@handle_form_errors
 def franchise_vehicle_quick_add():
     """Inline "+ New Vehicle" registration from the Daily/Weekly Income
-    pages — plate + franchisee name only, no fees/status/notes, so a
+    pages (both the By Vehicle picker and the By Date/Week all-vehicles
+    listing) — plate + franchisee name only, no fees/status/notes, so a
     manager can register a new franchisee on the spot without leaving the
     income form. Flagged pending_review so an admin follows up with the
     full details (see franchise_vehicle_review) and alerted via the
-    Vehicles nav badge, WhatsApp (if linked), and the audit log."""
-    number_plate = request.form.get('number_plate', '').strip().upper()
-    franchisee_name = request.form.get('franchisee_name', '').strip()
+    Vehicles nav badge, WhatsApp (if linked), and the audit log.
+
+    POST-only, no GET counterpart at this URL (see franchise_daily_income_
+    add) — errors are handled locally rather than via @handle_form_errors,
+    whose generic redirect(request.url) would bounce a rejected submission
+    (e.g. a plate that's already registered) back onto this same POST-only
+    path and 405 instead of showing the error, taking the duplicate-plate
+    message from check_unique with it."""
     kind = request.form.get('kind') if request.form.get('kind') in ('daily', 'weekly') else 'daily'
     period = request.form.get('period', 'month')
-    if not number_plate:
-        raise ValueError('Number plate is required.')
-    if not franchisee_name:
-        raise ValueError('Franchisee name is required.')
-    check_unique(FranchiseVehicle, 'number_plate', number_plate, label='Number plate')
+    view = request.form.get('view', '')
+    endpoint = 'franchise_weekly_income_list' if kind == 'weekly' else 'franchise_daily_income_list'
 
-    vehicle = FranchiseVehicle(number_plate=number_plate, franchisee_name=franchisee_name,
-                               pending_review=True)
-    db.session.add(vehicle)
-    db.session.flush()
-    log_audit('CREATE', 'franchise_vehicles', vehicle.id,
-              f'Quick-registered franchise vehicle {vehicle.number_plate} ({vehicle.franchisee_name}) '
-              f'from {kind} income — pending admin review')
-    touch_sync_fields(vehicle)
-    db.session.commit()
+    def back_to_list(**extra):
+        params = {'period': period, **extra}
+        if view == 'date':
+            params['view'] = 'date'
+            if kind == 'weekly':
+                params['on_week'] = request.form.get('on_week', '')
+            else:
+                params['on_date'] = request.form.get('on_date', '')
+        return redirect(url_for(endpoint, **params))
+
+    number_plate = request.form.get('number_plate', '').strip().upper()
+    franchisee_name = request.form.get('franchisee_name', '').strip()
+    try:
+        if not number_plate:
+            raise ValueError('Number plate is required.')
+        if not franchisee_name:
+            raise ValueError('Franchisee name is required.')
+        check_unique(FranchiseVehicle, 'number_plate', number_plate, label='Number plate')
+
+        vehicle = FranchiseVehicle(number_plate=number_plate, franchisee_name=franchisee_name,
+                                   pending_review=True)
+        db.session.add(vehicle)
+        db.session.flush()
+        log_audit('CREATE', 'franchise_vehicles', vehicle.id,
+                  f'Quick-registered franchise vehicle {vehicle.number_plate} ({vehicle.franchisee_name}) '
+                  f'from {kind} income — pending admin review')
+        touch_sync_fields(vehicle)
+        db.session.commit()
+    except ValueError as e:
+        db.session.rollback()
+        flash(str(e), 'danger')
+        return back_to_list()
 
     notify_admins_whatsapp(
         f'New franchise vehicle registered by {current_user.username}: '
@@ -8314,7 +8339,11 @@ def franchise_vehicle_quick_add():
     )
 
     flash(f'Vehicle {vehicle.number_plate} registered — an admin will review and complete its details.', 'success')
-    endpoint = 'franchise_weekly_income_list' if kind == 'weekly' else 'franchise_daily_income_list'
+    # From the By Date/Week listing, stay there (the new vehicle now shows
+    # up in it, ready to have today's/this week's entry filled in) rather
+    # than jumping to its own, currently-empty By Vehicle tab.
+    if view == 'date':
+        return back_to_list()
     return redirect(url_for(endpoint, vehicle_id=vehicle.id, period=period))
 
 

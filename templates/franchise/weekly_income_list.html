@@ -67,7 +67,41 @@
       </div>
       <button type="submit" class="btn btn-outline btn-xs">Go</button>
     </form>
+    <button type="button" class="btn btn-outline btn-xs" id="by-date-new-vehicle-toggle">
+      <i data-feather="plus"></i> New Vehicle
+    </button>
   </div>
+  <form method="POST" action="{{ url_for('franchise_vehicle_quick_add') }}" id="by-date-new-vehicle-form"
+        style="display:none;padding:14px;border-bottom:1px solid var(--border);">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="kind" value="weekly">
+    <input type="hidden" name="period" value="{{ period }}">
+    <input type="hidden" name="view" value="date">
+    <input type="hidden" name="on_week" value="{{ on_week }}">
+    <div class="form-hint mb-16">Registers a new franchise vehicle not yet in this list — plate and franchisee name only; an admin will be alerted to fill in the fee agreement and other details. A plate that's already registered is rejected with a message here, not silently.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <div class="form-group" style="max-width:200px;">
+        <label>Number Plate<span class="req">*</span></label>
+        <input type="text" name="number_plate" required>
+      </div>
+      <div class="form-group" style="max-width:240px;">
+        <label>Franchisee Name<span class="req">*</span></label>
+        <input type="text" name="franchisee_name" required>
+      </div>
+      <button type="submit" class="btn btn-primary btn-xs">Register</button>
+    </div>
+  </form>
+  <script>
+  (function () {
+    var toggle = document.getElementById('by-date-new-vehicle-toggle');
+    var form = document.getElementById('by-date-new-vehicle-form');
+    if (toggle && form) {
+      toggle.addEventListener('click', function () {
+        form.style.display = form.style.display === 'none' ? 'block' : 'none';
+      });
+    }
+  })();
+  </script>
   {% if by_date_rows %}
   <div class="table-wrap">
     <table>
