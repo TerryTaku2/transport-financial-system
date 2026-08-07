@@ -6342,9 +6342,17 @@ def budget_set():
 def _compute_fuel_efficiency_rows(df, dt):
     rows = []
     for v in Vehicle.query.order_by(Vehicle.registration).all():
+        # Chronological order, not odometer order: fill-ups must pair with
+        # whichever one actually came right before them in time. Sorting by
+        # odometer instead used to mean one mis-keyed reading (a misread
+        # gauge, a transposed digit — routine in a real fleet) would pair
+        # with whatever OTHER reading happened to be numerically nearby,
+        # not the true previous fill-up, producing nonsense segments (seen
+        # on real data: one vehicle came out at 109 L/100km, another at
+        # 7,400 L/100km — both physically impossible).
         logs = FuelLog.query.filter(
             FuelLog.vehicle_id == v.id, FuelLog.log_date.between(df, dt),
-            FuelLog.odometer.isnot(None)).order_by(FuelLog.odometer).all()
+            FuelLog.odometer.isnot(None)).order_by(FuelLog.log_date, FuelLog.id).all()
         if len(logs) < 2:
             continue
         segments = []
