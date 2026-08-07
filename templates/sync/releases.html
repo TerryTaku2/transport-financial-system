@@ -19,7 +19,7 @@
       (e.g. a date like <code>2026.08.05</code> or a bumped number) — every spoke compares this against its own
       VERSION file to decide whether to update.
     </div>
-    <form method="POST" action="{{ url_for('spoke_release_upload') }}" enctype="multipart/form-data">
+    <form method="POST" action="{{ url_for('spoke_release_upload') }}" enctype="multipart/form-data" id="release-upload-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid mb-16">
         <div class="form-group">
@@ -39,6 +39,35 @@
     </form>
   </div>
 </div>
+
+<script>
+// Rebuilding the .exe and zipping dist\TransportERP routinely takes longer
+// than Flask-WTF's 1h token lifetime, so the token minted at page-load is
+// often already stale by the time this form gets submitted. Mint a fresh
+// one right before handing off to the browser's native (multipart) submit,
+// same fix already used for offline.js's queued submissions.
+(function () {
+  var form = document.getElementById('release-upload-form');
+  if (!form) return;
+  form.addEventListener('submit', function (e) {
+    if (form.dataset.tokenRefreshed) return;
+    e.preventDefault();
+    var submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn) submitBtn.disabled = true;
+    fetch('/api/csrf-token', { credentials: 'same-origin' })
+      .then(function (resp) { return resp.json(); })
+      .then(function (data) {
+        form.querySelector('input[name="csrf_token"]').value = data.csrf_token;
+        form.dataset.tokenRefreshed = '1';
+        form.submit();
+      })
+      .catch(function () {
+        if (submitBtn) submitBtn.disabled = false;
+        alert('Could not reach the server to refresh the upload token. Check your connection and try again.');
+      });
+  });
+})();
+</script>
 
 <div class="card">
   {% if releases %}

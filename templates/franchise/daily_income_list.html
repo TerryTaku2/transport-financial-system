@@ -502,7 +502,7 @@
         {% if current_user.role == 'admin' %}
         <div class="form-group">
           <label>Cash Deposited (USD)</label>
-          <input type="number" name="deposited" step="0.01" min="0" placeholder="0.00">
+          <input type="number" name="deposited" step="0.01" placeholder="0.00">
           <div class="form-hint">One lump sum for this date — the total cash banked covering every vehicle's collections combined.</div>
         </div>
         {% endif %}
@@ -588,7 +588,7 @@
           <td>
             <form method="POST" action="{{ url_for('franchise_daily_income_deposit', eid=e.id) }}" style="display:flex;gap:4px;align-items:center;margin:0;">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="number" name="deposited" step="0.01" min="0" value="{{ e.deposited }}" style="width:90px;font-size:12px;padding:4px 6px;">
+              <input type="number" name="deposited" step="0.01" value="{{ e.deposited }}" style="width:90px;font-size:12px;padding:4px 6px;">
               <button class="btn btn-outline btn-xs" title="Record cash deposited">Save</button>
             </form>
           </td>

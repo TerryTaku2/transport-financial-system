@@ -7686,7 +7686,7 @@ def franchise_daily_income_deposit(eid):
     set this field, since the Record Income form doesn't offer it to
     non-admins and entries otherwise can't be edited after creation."""
     entry = FranchiseDailyIncome.query.filter_by(id=eid).first_or_404()
-    entry.deposited = form_float(request.form, 'deposited', label='Cash deposited', required=False, default=0, min_value=0)
+    entry.deposited = form_float(request.form, 'deposited', label='Cash deposited', required=False, default=0)
     log_audit('UPDATE', 'franchise_daily_income', entry.id,
               f'Cash deposited for {entry.entry_date} set to {entry.deposited}')
     touch_sync_fields(entry)
@@ -7876,7 +7876,7 @@ def franchise_weekly_income_deposit(eid):
     """Record/update Cash Deposited on an existing entry — see
     franchise_daily_income_deposit."""
     entry = FranchiseWeeklyIncome.query.filter_by(id=eid).first_or_404()
-    entry.deposited = form_float(request.form, 'deposited', label='Cash deposited', required=False, default=0, min_value=0)
+    entry.deposited = form_float(request.form, 'deposited', label='Cash deposited', required=False, default=0)
     log_audit('UPDATE', 'franchise_weekly_income', entry.id,
               f'Cash deposited for week of {entry.week_start} set to {entry.deposited}')
     touch_sync_fields(entry)
@@ -10694,7 +10694,21 @@ def run_sync_cycle():
             # Only a packaged spoke .exe can actually be replaced by the
             # launcher script — a dev machine or Render's own gunicorn
             # process has no launcher wrapping it, so skip there.
-            check_for_spoke_update()
+            #
+            # Guarded separately from the try/except above: check_for_
+            # spoke_update() fetches its own state row (_get_update_state())
+            # before its internal try starts, so a bare exception there
+            # (e.g. a transient SQLite lock from this thread and a request
+            # thread hitting the same file at once) would otherwise escape
+            # uncaught, silently killing this daemon thread for good — no
+            # traceback survives that in a windowed .exe with no console
+            # and no file logger. The whole point of this loop is that one
+            # bad cycle can never end it, so nothing here may be allowed
+            # to raise past this point either.
+            try:
+                check_for_spoke_update()
+            except Exception as e:  # noqa: BLE001 — see above, must never kill the loop
+                app.logger.warning(f'spoke update check crashed outside its own guard: {e}')
 
 
 def _sync_loop():
