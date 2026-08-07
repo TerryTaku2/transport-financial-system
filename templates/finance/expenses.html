@@ -88,10 +88,13 @@
           <td class="text-right">{{ e.amount|currency }}</td>
           <td>
             {% if current_user.role == 'admin' %}
-            <form method="POST" action="{{ url_for('expense_delete', eid=e.id) }}" data-confirm="Delete this expense?">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <button class="btn btn-danger btn-xs">Del</button>
-            </form>
+            <div class="btn-group">
+              <a href="{{ url_for('expense_edit', eid=e.id) }}" class="btn btn-outline btn-xs">Edit</a>
+              <form method="POST" action="{{ url_for('expense_delete', eid=e.id) }}" data-confirm="Delete this expense?">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+            </div>
             {% endif %}
           </td>
         </tr>

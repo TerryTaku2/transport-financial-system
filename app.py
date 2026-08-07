@@ -7272,6 +7272,33 @@ def expense_add():
                            today=date.today().strftime('%Y-%m-%d'))
 
 
+@app.route('/finance/expenses/<int:eid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def expense_edit(eid):
+    e = Expense.query.filter_by(id=eid).first_or_404()
+    if request.method == 'POST':
+        e.category_id = form_int(request.form, 'category_id')
+        e.vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+        e.driver_id = form_int(request.form, 'driver_id', required=False)
+        e.expense_date = parse_date(request.form['expense_date'])
+        e.description = request.form.get('description', '').strip()
+        e.amount = form_float(request.form, 'amount', min_value=0)
+        log_audit('UPDATE', 'expenses', e.id, f'Updated expense of {e.amount}')
+        touch_sync_fields(e)
+        db.session.commit()
+        flash('Expense updated.', 'success')
+        return redirect(url_for('expenses_list'))
+    headings = ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all()
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    all_drivers = Driver.query.filter_by(status='active').order_by(Driver.name).all()
+    return render_template('finance/expense_form.html', expense=e, headings=headings, vehicles=all_vehicles,
+                           drivers=all_drivers,
+                           selected_category_id=e.category_id,
+                           today=e.expense_date.strftime('%Y-%m-%d'))
+
+
 @app.route('/finance/expenses/<int:eid>/delete', methods=['POST'])
 @login_required
 @admin_required
