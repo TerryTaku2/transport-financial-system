@@ -31,7 +31,7 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Date</th><th>Vehicle</th><th>Liters</th><th>Odometer</th><th>Supplier</th><th></th></tr>
+        <tr><th>Date</th><th>Vehicle</th><th>Liters</th><th class="text-right">Cost</th><th>Odometer</th><th>Supplier</th><th></th></tr>
       </thead>
       <tbody>
         {% for log in logs.items %}
@@ -39,6 +39,7 @@
           <td>{{ log.log_date.strftime('%d %b %Y') }}</td>
           <td><a href="{{ url_for('vehicle_detail', vid=log.vehicle_id) }}">{{ log.vehicle.registration }}</a></td>
           <td>{{ log.liters }}L</td>
+          <td class="text-right">{{ log.total_cost|currency if log.total_cost else '—' }}</td>
           <td>{{ log.odometer or '—' }}</td>
           <td>{{ log.supplier or '—' }}</td>
           <td class="btn-group">

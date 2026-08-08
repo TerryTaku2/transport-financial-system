@@ -1,0 +1,98 @@
+{% extends 'base.html' %}
+{% block title %}Vehicle Efficiency & Profitability{% endblock %}
+{% block page_title %}Finance — Vehicle Efficiency &amp; Profitability{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Vehicle Efficiency &amp; Profitability</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; income vs. fuel, maintenance &amp; other expenses per vehicle</div>
+  </div>
+  <a href="{{ url_for('report_vehicle_efficiency_export', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card">
+    <div class="kpi-label">Fleet Revenue</div>
+    <div class="kpi-value">{{ fleet_revenue|currency }}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Fleet Costs</div>
+    <div class="kpi-value">{{ fleet_cost|currency }}</div>
+  </div>
+  <div class="kpi-card {% if fleet_profit < 0 %}kpi-red{% else %}kpi-blue{% endif %}">
+    <div class="kpi-label">Fleet Net Profit</div>
+    <div class="kpi-value">{{ fleet_profit|currency }}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Fleet Distance</div>
+    <div class="kpi-value">{{ '{:,.0f}'.format(fleet_distance) }} km</div>
+  </div>
+</div>
+
+<div class="card">
+  {% if rows %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Vehicle</th>
+          <th class="text-right">Revenue</th>
+          <th class="text-right">Fuel Cost</th>
+          <th class="text-right">Maintenance</th>
+          <th class="text-right">Other Exp.</th>
+          <th class="text-right">Total Cost</th>
+          <th class="text-right">Net Profit</th>
+          <th class="text-right">Km/Liter</th>
+          <th class="text-right">Cost/km</th>
+          <th class="text-right">Revenue/km</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr>
+          <td>
+            <a href="{{ url_for('vehicle_detail', vid=row.vehicle.id) }}">{{ row.vehicle.registration }}</a>
+            <div class="form-hint">{{ row.vehicle.make }} {{ row.vehicle.model }}</div>
+          </td>
+          <td class="text-right">{{ row.revenue|currency }}</td>
+          <td class="text-right">{{ row.fuel_cost|currency }}</td>
+          <td class="text-right">{{ row.maintenance_cost|currency }}</td>
+          <td class="text-right">{{ row.other_expenses|currency }}</td>
+          <td class="text-right text-warning">({{ row.total_cost|currency }})</td>
+          <td class="text-right {% if row.net_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ row.net_profit|currency }}</strong></td>
+          <td class="text-right">{{ '%.1f'|format(row.km_per_liter) if row.distance else '—' }}</td>
+          <td class="text-right">{{ row.cost_per_km|currency if row.cost_per_km is not none else '—' }}</td>
+          <td class="text-right">{{ row.revenue_per_km|currency if row.revenue_per_km is not none else '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="summary-row">
+          <td>TOTAL</td>
+          <td class="text-right">{{ fleet_revenue|currency }}</td>
+          <td class="text-right" colspan="3"></td>
+          <td class="text-right">({{ fleet_cost|currency }})</td>
+          <td class="text-right">{{ fleet_profit|currency }}</td>
+          <td colspan="3"></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No revenue, cost or fuel/odometer data for the selected period.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

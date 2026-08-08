@@ -431,10 +431,11 @@ class FuelLog(db.Model):
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
     log_date = db.Column(db.Date, nullable=False, default=date.today)
     liters = db.Column(db.Float, nullable=False)
-    # Fuel cost is no longer tracked by the app (liters/distance only) — these
-    # two columns stay on the model, defaulted to 0, purely so existing
-    # production databases (no migration tool in this project) don't reject
-    # new inserts on their pre-existing NOT NULL constraint.
+    # Populated automatically from FuelPrice (see fuel_price_for) at the
+    # vehicle's fuel_type — either derived from a cash amount entered in the
+    # Daily Transactions ledger (cost known, liters computed) or from liters
+    # entered directly here (liters known, cost computed). Stays 0 if no
+    # price has been configured yet, same as before this was wired up.
     cost_per_liter = db.Column(db.Float, nullable=False, default=0.0)
     total_cost = db.Column(db.Float, nullable=False, default=0.0)
     odometer = db.Column(db.Float)
@@ -451,6 +452,25 @@ class FuelLog(db.Model):
     server_touched_at = db.Column(db.DateTime, nullable=True)
 
     creator = db.relationship('User', foreign_keys=[created_by])
+
+
+class FuelPrice(db.Model):
+    """Current pump price per litre for diesel and petrol, set by an admin
+    on this site. Deliberately local/unsynced (like SpokeUpdateState) rather
+    than propagated hub-to-spoke — fuel prices are set per site/region and
+    change often, so each site's own current price is what should apply to
+    fuel logged there. Used to convert between a cash fuel spend and liters
+    (see fuel_price_for) so fuel efficiency can be computed automatically
+    without crew having to read and enter a liter figure themselves.
+    Singleton: one row (id=1), same convention as SpokeUpdateState."""
+    __tablename__ = 'fuel_prices'
+    id = db.Column(db.Integer, primary_key=True)
+    diesel_price = db.Column(db.Float, nullable=True)
+    petrol_price = db.Column(db.Float, nullable=True)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+
+    updater = db.relationship('User', foreign_keys=[updated_by])
 
 
 class MaintenanceLog(db.Model):
@@ -1330,6 +1350,7 @@ PRECACHE_PAGES = [
     ('reports', 'report_fuel_efficiency'),
     ('reports', 'report_distance_travelled'),
     ('reports', 'report_route_profitability'),
+    ('reports', 'report_vehicle_efficiency'),
     ('finance', 'loans_list'),
     ('finance', 'payables_list'),
     ('finance', 'receivables_list'),
@@ -1793,8 +1814,11 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
                 db.session.flush()
                 created_records.append(('daily_logs', log.id))
             if diesel_cost is not None:
+                price = fuel_price_for(vehicle.fuel_type)
                 fuel = FuelLog(
-                    vehicle_id=vehicle.id, log_date=log_date, liters=0,
+                    vehicle_id=vehicle.id, log_date=log_date,
+                    liters=round(diesel_cost / price, 2) if price else 0,
+                    cost_per_liter=price or 0.0,
                     total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
                 )
                 db.session.add(fuel)
@@ -2363,6 +2387,19 @@ def touch_sync_fields(obj):
     obj.server_touched_at = now
     obj.pending_push = True
     obj.last_modified_site = app.config['SITE_ID']
+
+
+def get_fuel_price_row():
+    return FuelPrice.query.get(1)
+
+
+def fuel_price_for(fuel_type):
+    """Current per-liter price for 'diesel' or 'petrol', or None if the
+    admin hasn't set one yet — callers treat that as "can't convert"."""
+    row = get_fuel_price_row()
+    if not row:
+        return None
+    return row.petrol_price if fuel_type == 'petrol' else row.diesel_price
 
 
 def check_unique(model, field_name, value, label=None, exclude_id=None):
@@ -3235,7 +3272,10 @@ def ledger_entry_edit(vehicle_id, log_date_str):
             if fuel is None:
                 fuel = FuelLog(vehicle_id=vehicle_id, log_date=log_date, liters=0, created_by=current_user.id)
                 db.session.add(fuel)
+            price = fuel_price_for(vehicle.fuel_type)
             fuel.total_cost = diesel_cost or 0
+            fuel.cost_per_liter = price or 0.0
+            fuel.liters = round(fuel.total_cost / price, 2) if price and fuel.total_cost else 0
             fuel.odometer = mileage
             touch_sync_fields(fuel)
         elif fuel is not None:
@@ -3288,9 +3328,11 @@ def ledger_entry_delete(vehicle_id, log_date_str):
 # the same DailyLog/FuelLog tables the rest of the system uses.
 # Replaces the old Crew Portal "Log Income" form. Filterable by
 # day/week/month. Diesel is captured as a USD amount, not liters — crew
-# report what they spent on fuel, not a metered liter reading, so these
-# FuelLog rows carry liters=0 and are skipped by the Fuel Efficiency
-# report (which needs liters) rather than showing a false 0 L/100km.
+# report what they spent on fuel, not a metered liter reading. Liters are
+# derived automatically from that amount using the vehicle's fuel-type
+# price (see fuel_price_for) so the Fuel Efficiency report can still use
+# these rows; if no price has been set yet, liters stays 0 and the row is
+# skipped there rather than showing a false 0 L/100km.
 # ─────────────────────────────────────────────────────────────
 def vehicle_ledger_rows(vehicle_id, df=None, dt=None, daily_target=None):
     """Merge DailyLog (fare, any driver) and FuelLog (diesel cost/mileage)
@@ -3466,8 +3508,11 @@ def driver_ledger_add():
                        (f', garnish {garnish} ({reason_for_shortfall})' if garnish else ''))
 
         if diesel_cost is not None:
+            price = fuel_price_for(vehicle.fuel_type)
             fuel = FuelLog(
-                vehicle_id=vehicle_id, log_date=log_date, liters=0,
+                vehicle_id=vehicle_id, log_date=log_date,
+                liters=round(diesel_cost / price, 2) if price else 0,
+                cost_per_liter=price or 0.0,
                 total_cost=diesel_cost, odometer=mileage, created_by=current_user.id,
             )
             db.session.add(fuel)
@@ -3844,6 +3889,36 @@ def driver_ledger_import_bulk():
 
 
 # ─────────────────────────────────────────────────────────────
+# Fuel Prices — admin-set current price per liter, used to auto-derive
+# cost/liters on every fuel log (see fuel_log_add/edit and driver_ledger_add
+# below) so fuel efficiency can be tracked without extra data entry.
+# ─────────────────────────────────────────────────────────────
+@app.route('/settings/fuel-prices', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def fuel_prices():
+    price = get_fuel_price_row()
+    if not price:
+        price = FuelPrice(id=1)
+        db.session.add(price)
+        db.session.flush()
+    if request.method == 'POST':
+        price.diesel_price = form_float(request.form, 'diesel_price', label='Diesel price',
+                                        required=False, min_value=0)
+        price.petrol_price = form_float(request.form, 'petrol_price', label='Petrol price',
+                                        required=False, min_value=0)
+        price.updated_by = current_user.id
+        price.updated_at = datetime.now(timezone.utc)
+        log_audit('UPDATE', 'fuel_prices', price.id,
+                  f'Set fuel prices: diesel {price.diesel_price}, petrol {price.petrol_price}')
+        db.session.commit()
+        flash('Fuel prices updated.', 'success')
+        return redirect(url_for('fuel_prices'))
+    return render_template('admin/fuel_prices.html', price=price)
+
+
+# ─────────────────────────────────────────────────────────────
 # Fuel Logs
 # ─────────────────────────────────────────────────────────────
 @app.route('/logs/fuel')
@@ -3890,10 +3965,17 @@ def fuel_log_add():
             flash('Already recorded.', 'info')
             return redirect(url_for('fuel_logs'))
         liters = form_float(request.form, 'liters', min_value=0)
+        vehicle_id = form_int(request.form, 'vehicle_id')
+        vehicle = Vehicle.query.filter_by(id=vehicle_id).first()
+        if not vehicle:
+            raise ValueError('Select a vehicle.')
+        price = fuel_price_for(vehicle.fuel_type) or 0.0
         log = FuelLog(
-            vehicle_id=form_int(request.form, 'vehicle_id'),
+            vehicle_id=vehicle_id,
             log_date=parse_date(request.form['log_date']),
             liters=liters,
+            cost_per_liter=price,
+            total_cost=liters * price,
             odometer=form_float(request.form, 'odometer', required=False, min_value=0),
             supplier=request.form.get('supplier', '').strip(),
             notes=request.form.get('notes', '').strip(),
@@ -3922,8 +4004,14 @@ def fuel_log_edit(lid):
     log = FuelLog.query.filter_by(id=lid).first_or_404()
     if request.method == 'POST':
         log.vehicle_id = form_int(request.form, 'vehicle_id')
+        vehicle = Vehicle.query.filter_by(id=log.vehicle_id).first()
+        if not vehicle:
+            raise ValueError('Select a vehicle.')
         log.log_date = parse_date(request.form['log_date'])
         log.liters = form_float(request.form, 'liters', min_value=0)
+        price = fuel_price_for(vehicle.fuel_type) or 0.0
+        log.cost_per_liter = price
+        log.total_cost = log.liters * price
         log.odometer = form_float(request.form, 'odometer', required=False, min_value=0)
         log.supplier = request.form.get('supplier', '').strip()
         log.notes = request.form.get('notes', '').strip()
@@ -5813,6 +5901,27 @@ def _route_profitability_pdf(df, dt):
     return _pdf_section('Route Profitability', f'Period: {df} to {dt}', [_pdf_table(data)])
 
 
+def _vehicle_efficiency_pdf(df, dt):
+    rows = _compute_vehicle_efficiency_rows(df, dt)
+    if not rows:
+        return _pdf_section('Vehicle Efficiency & Profitability', f'Period: {df} to {dt}', [],
+                            note='No revenue, cost or fuel/odometer data in this period.')
+    headers = ['Vehicle', 'Revenue', 'Fuel Cost', 'Maintenance', 'Other Exp.', 'Total Cost', 'Net Profit', 'Km/Liter']
+    data = [headers] + [[
+        r['vehicle'].registration, f"${r['revenue']:,.2f}", f"${r['fuel_cost']:,.2f}",
+        f"${r['maintenance_cost']:,.2f}", f"${r['other_expenses']:,.2f}", f"${r['total_cost']:,.2f}",
+        f"${r['net_profit']:,.2f}", f"{r['km_per_liter']:.1f}" if r['distance'] else '—',
+    ] for r in rows]
+    fleet_revenue = sum(r['revenue'] for r in rows)
+    fleet_fuel = sum(r['fuel_cost'] for r in rows)
+    fleet_maint = sum(r['maintenance_cost'] for r in rows)
+    fleet_other = sum(r['other_expenses'] for r in rows)
+    fleet_cost = sum(r['total_cost'] for r in rows)
+    data.append(['TOTAL', f"${fleet_revenue:,.2f}", f"${fleet_fuel:,.2f}", f"${fleet_maint:,.2f}",
+                 f"${fleet_other:,.2f}", f"${fleet_cost:,.2f}", f"${fleet_revenue - fleet_cost:,.2f}", ''])
+    return _pdf_section('Vehicle Efficiency & Profitability', f'Period: {df} to {dt}', [_pdf_table(data)])
+
+
 def _daily_transactions_pdf(df, dt):
     logs = DailyLog.query.filter(DailyLog.log_date.between(df, dt)).order_by(DailyLog.log_date.desc()).all()
     if not logs:
@@ -5982,6 +6091,7 @@ def export_full_report_pack():
         ('Fuel Efficiency', True, lambda: _fuel_efficiency_pdf(df, dt)),
         ('Distance Travelled', True, lambda: _distance_travelled_pdf(dt)),
         ('Route Profitability', True, lambda: _route_profitability_pdf(df, dt)),
+        ('Vehicle Efficiency & Profitability', True, lambda: _vehicle_efficiency_pdf(df, dt)),
         ('Daily Transactions', True, lambda: _daily_transactions_pdf(df, dt)),
         ('Franchise Reconciliation Schedule', current_user.has_permission('franchise'),
          lambda: _franchise_reconciliation_pdf(df, dt)),
@@ -6518,6 +6628,94 @@ def _compute_route_profitability(df, dt):
 
     rows.sort(key=lambda x: x['net_profit'], reverse=True)
     return rows, total_revenue, total_costs
+
+
+def _compute_vehicle_efficiency_rows(df, dt):
+    """Per-vehicle profitability: revenue and every tracked cost (fuel,
+    maintenance, other expenses) set against fuel efficiency and distance
+    covered, so a vehicle burning fuel faster than its earnings can cover
+    shows up here rather than only as a low km/L figure on its own. Every
+    active vehicle gets a row, even an all-zero one — this reads as a fleet
+    roster (which vehicles logged nothing this period is itself useful to
+    see), not just a list of whichever vehicles happened to have activity."""
+    efficiency_by_vehicle = {r['vehicle'].id: r for r in _compute_fuel_efficiency_rows(df, dt)}
+
+    revenue_by_vehicle = dict(
+        db.session.query(DailyLog.vehicle_id, func.sum(DailyLog.gross_revenue))
+        .filter(DailyLog.log_date.between(df, dt)).group_by(DailyLog.vehicle_id).all())
+    fuel_cost_by_vehicle = dict(
+        db.session.query(FuelLog.vehicle_id, func.sum(FuelLog.total_cost))
+        .filter(FuelLog.log_date.between(df, dt)).group_by(FuelLog.vehicle_id).all())
+    maintenance_by_vehicle = dict(
+        db.session.query(MaintenanceLog.vehicle_id, func.sum(MaintenanceLog.total_cost))
+        .filter(MaintenanceLog.log_date.between(df, dt)).group_by(MaintenanceLog.vehicle_id).all())
+    expenses_by_vehicle = dict(
+        db.session.query(Expense.vehicle_id, func.sum(Expense.amount))
+        .filter(Expense.expense_date.between(df, dt), Expense.vehicle_id.isnot(None))
+        .group_by(Expense.vehicle_id).all())
+
+    rows = []
+    for v in Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all():
+        revenue = revenue_by_vehicle.get(v.id) or 0.0
+        fuel_cost = fuel_cost_by_vehicle.get(v.id) or 0.0
+        maintenance_cost = maintenance_by_vehicle.get(v.id) or 0.0
+        other_expenses = expenses_by_vehicle.get(v.id) or 0.0
+        total_cost = fuel_cost + maintenance_cost + other_expenses
+        net_profit = revenue - total_cost
+
+        eff = efficiency_by_vehicle.get(v.id)
+        distance = eff['total_distance'] if eff else 0
+        liters = eff['total_liters'] if eff else 0
+
+        rows.append({
+            'vehicle': v, 'revenue': revenue, 'fuel_cost': fuel_cost,
+            'maintenance_cost': maintenance_cost, 'other_expenses': other_expenses,
+            'total_cost': total_cost, 'net_profit': net_profit,
+            'distance': distance, 'liters': liters,
+            'km_per_liter': eff['km_per_liter'] if eff else 0,
+            'l_per_100km': eff['avg_l_per_100km'] if eff else 0,
+            'cost_per_km': (total_cost / distance) if distance else None,
+            'revenue_per_km': (revenue / distance) if distance else None,
+            'fuel_cost_per_km': (fuel_cost / distance) if distance else None,
+            'profit_margin': (net_profit / revenue * 100) if revenue else None,
+        })
+    rows.sort(key=lambda r: r['net_profit'], reverse=True)
+    return rows
+
+
+@app.route('/reports/vehicle-efficiency')
+@login_required
+@permission_required('reports')
+def report_vehicle_efficiency():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    rows = _compute_vehicle_efficiency_rows(df, dt)
+    fleet_revenue = sum(r['revenue'] for r in rows)
+    fleet_cost = sum(r['total_cost'] for r in rows)
+    fleet_distance = sum(r['distance'] for r in rows)
+    return render_template('reports/vehicle_efficiency.html', rows=rows,
+        fleet_revenue=fleet_revenue, fleet_cost=fleet_cost,
+        fleet_profit=fleet_revenue - fleet_cost, fleet_distance=fleet_distance,
+        date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/reports/vehicle-efficiency/export')
+@login_required
+@permission_required('reports')
+def report_vehicle_efficiency_export():
+    df, dt = query_date_range()
+    rows = _compute_vehicle_efficiency_rows(df, dt)
+    out_rows = [[
+        r['vehicle'].registration, f"{r['revenue']:.2f}", f"{r['fuel_cost']:.2f}",
+        f"{r['maintenance_cost']:.2f}", f"{r['other_expenses']:.2f}", f"{r['total_cost']:.2f}",
+        f"{r['net_profit']:.2f}", f"{r['distance']:.1f}", f"{r['liters']:.2f}",
+        f"{r['km_per_liter']:.2f}",
+        f"{r['cost_per_km']:.2f}" if r['cost_per_km'] is not None else '',
+        f"{r['revenue_per_km']:.2f}" if r['revenue_per_km'] is not None else '',
+    ] for r in rows]
+    return csv_export_response(f'vehicle_efficiency_{df}_to_{dt}.csv',
+        ['Vehicle', 'Revenue', 'Fuel Cost', 'Maintenance Cost', 'Other Expenses', 'Total Cost',
+         'Net Profit', 'Distance (km)', 'Liters', 'Km/Liter', 'Cost/km', 'Revenue/km'], out_rows)
 
 
 @app.route('/reports/financial-position')
@@ -11647,7 +11845,7 @@ def create_default_admin():
     admin.set_password(admin_password)
     db.session.add(admin)
     db.session.commit()
-    print(f'Default admin created — username: admin  password: {admin_password}')
+    print(f'Default admin created username: admin  password: {admin_password}')
     print('Log in and change this password immediately.')
 
 

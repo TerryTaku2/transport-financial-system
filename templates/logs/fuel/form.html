@@ -6,7 +6,10 @@
 <div class="page-header">
   <div>
     <h1>{{ 'Edit' if log else 'Record' }} Fuel Top-Up</h1>
-    <div class="subtitle">Liters and odometer reading</div>
+    <div class="subtitle">
+      Liters and odometer reading — cost is calculated automatically from the current fuel price
+      {% if current_user.role == 'admin' %}(<a href="{{ url_for('fuel_prices') }}">set it here</a>){% endif %}
+    </div>
   </div>
   <a href="{{ url_for('fuel_logs') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
 </div>

@@ -125,6 +125,9 @@
       <a href="{{ url_for('report_route_profitability') }}" class="nav-item {% if request.endpoint == 'report_route_profitability' %}active{% endif %}">
         <i data-feather="map"></i> Route Profitability
       </a>
+      <a href="{{ url_for('report_vehicle_efficiency') }}" class="nav-item {% if request.endpoint == 'report_vehicle_efficiency' %}active{% endif %}">
+        <i data-feather="activity"></i> Vehicle Efficiency &amp; Profitability
+      </a>
       <a href="{{ url_for('report_fleet_reconciliation') }}" class="nav-item {% if request.endpoint == 'report_fleet_reconciliation' %}active{% endif %}">
         <i data-feather="check-circle"></i> Fleet Reconciliation
       </a>
@@ -244,6 +247,9 @@
       </a>
       <a href="{{ url_for('spoke_releases') }}" class="nav-item {% if 'spoke_release' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="package"></i> Spoke Releases
+      </a>
+      <a href="{{ url_for('fuel_prices') }}" class="nav-item {% if request.endpoint == 'fuel_prices' %}active{% endif %}">
+        <i data-feather="droplet"></i> Fuel Prices
       </a>
       <a href="{{ url_for('danger_zone') }}" class="nav-item {% if request.endpoint == 'danger_zone' %}active{% endif %}" style="color:var(--danger);">
         <i data-feather="alert-triangle"></i> Danger Zone

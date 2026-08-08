@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% block title %}Fuel Prices{% endblock %}
+{% block page_title %}Admin — Fuel Prices{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Fuel Prices</h1>
+    <div class="subtitle">Current price per liter, used to work out cost and liters automatically on every fuel entry</div>
+  </div>
+</div>
+
+<div class="alert alert-info mb-24">
+  Set the current pump price here and every new fuel entry uses it automatically:
+  a cash amount logged in Daily Transactions is converted into liters, and liters logged in
+  Fuel Logs are converted into a cost. This is what makes the
+  <a href="{{ url_for('report_fuel_efficiency') }}">Fuel Efficiency</a> and
+  <a href="{{ url_for('report_vehicle_efficiency') }}">Vehicle Efficiency &amp; Profitability</a>
+  reports work without any extra data entry. Prices are local to this site and are not shared with other sites.
+</div>
+
+<div class="card" style="max-width:520px;">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Diesel Price per Liter (USD)</label>
+          <input type="number" name="diesel_price" step="0.001" min="0" placeholder="e.g. 1.55"
+                 value="{{ price.diesel_price if price.diesel_price is not none else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Petrol Price per Liter (USD)</label>
+          <input type="number" name="petrol_price" step="0.001" min="0" placeholder="e.g. 1.62"
+                 value="{{ price.petrol_price if price.petrol_price is not none else '' }}">
+        </div>
+      </div>
+      {% if price.updated_at %}
+      <div class="form-hint mb-16">
+        Last updated {{ price.updated_at.strftime('%d %b %Y %H:%M') }}{% if price.updater %} by {{ price.updater.username }}{% endif %}.
+      </div>
+      {% endif %}
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Prices</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
