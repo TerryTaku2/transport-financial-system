@@ -55,16 +55,19 @@ Name: "startupicon"; Description: "Start {#MyAppName} automatically when Windows
 [Files]
 Source: "{#SourceDir}\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceDir}\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceDir}\launcher.bat"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\launcher.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\VERSION"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
+Name: "{group}\{#MyAppName}"; Filename: "{app}\launcher.bat"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
-Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: startupicon
+Name: "{userdesktop}\{#MyAppName}"; Filename: "{app}\launcher.bat"; Tasks: desktopicon
+Name: "{userstartup}\{#MyAppName}"; Filename: "{app}\launcher.bat"; Tasks: startupicon
 
 [Run]
 ; The app opens the browser itself on launch (see app.py's webbrowser.open
 ; call in FROZEN mode) — this just starts the process; "postinstall" makes
 ; it the default-checked "Launch now" box on the finish page, same as any
 ; normal installer.
-Filename: "{app}\{#MyAppExeName}"; Description: "Launch {#MyAppName} now"; Flags: postinstall nowait skipifsilent
+Filename: "{app}\launcher.bat"; Description: "Launch {#MyAppName} now"; Flags: postinstall nowait skipifsilent
