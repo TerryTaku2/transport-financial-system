@@ -6529,22 +6529,20 @@ def report_fuel_efficiency_export():
 @login_required
 @permission_required('reports')
 def report_distance_travelled():
-    d = query_single_date('date')
-    date_str = d.strftime('%Y-%m-%d')
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
 
     rows = []
     for v in Vehicle.query.order_by(Vehicle.registration).all():
-        # Odometer reading logged for this exact date (max, in case of more
-        # than one fuel/mileage entry that day) — same basis as the Vehicle
-        # Ledger and Fuel Efficiency report.
+        # Odometer reading logged for any date in the requested range
         odometer = db.session.query(func.max(FuelLog.odometer)).filter(
-            FuelLog.vehicle_id == v.id, FuelLog.log_date == d,
+            FuelLog.vehicle_id == v.id, FuelLog.log_date.between(df, dt),
             FuelLog.odometer.isnot(None)).scalar()
 
         distance = prev_odometer = prev_date = None
         if odometer is not None:
             prev = FuelLog.query.filter(
-                FuelLog.vehicle_id == v.id, FuelLog.log_date < d,
+                FuelLog.vehicle_id == v.id, FuelLog.log_date < df,
                 FuelLog.odometer.isnot(None)).order_by(FuelLog.log_date.desc()).first()
             if prev:
                 prev_odometer, prev_date = prev.odometer, prev.log_date
@@ -6556,9 +6554,12 @@ def report_distance_travelled():
 
     fleet_distance = sum(r['distance'] for r in rows if r['distance'] is not None)
     vehicles_reporting = sum(1 for r in rows if r['distance'] is not None)
+    # Fleet-wide revenue for the requested range
+    fleet_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+        DailyLog.log_date.between(df, dt)).scalar() or 0.0
     return render_template('reports/distance_travelled.html', rows=rows,
-        date_str=date_str, fleet_distance=fleet_distance,
-        vehicles_reporting=vehicles_reporting, fleet_size=len(rows))
+        date_from=date_from_str, date_to=date_to_str, fleet_distance=fleet_distance,
+        vehicles_reporting=vehicles_reporting, fleet_size=len(rows), fleet_revenue=fleet_revenue)
 
 
 @app.route('/reports/route-profitability')
@@ -6928,34 +6929,48 @@ def export_financial_position():
 @login_required
 @permission_required('reports')
 def export_distance_travelled():
-    d = query_single_date('date')
+    df, dt = query_date_range()
 
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow([f'DISTANCE TRAVELLED — {d}'])
+    w.writerow([f'DISTANCE TRAVELLED — {df} to {dt}'])
     w.writerow([])
-    w.writerow(['Vehicle', 'Previous Reading Date', 'Previous Odometer (km)',
-                'Odometer on Date (km)', 'Distance Travelled (km)'])
+    # Compute fleet revenue for the range
+    fleet_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+        DailyLog.log_date.between(df, dt)).scalar() or 0.0
+
+    total_distance = 0.0
+    rows_out = []
     for v in Vehicle.query.order_by(Vehicle.registration).all():
         odometer = db.session.query(func.max(FuelLog.odometer)).filter(
-            FuelLog.vehicle_id == v.id, FuelLog.log_date == d,
+            FuelLog.vehicle_id == v.id, FuelLog.log_date.between(df, dt),
             FuelLog.odometer.isnot(None)).scalar()
         prev_odometer = prev_date = distance = None
         if odometer is not None:
             prev = FuelLog.query.filter(
-                FuelLog.vehicle_id == v.id, FuelLog.log_date < d,
+                FuelLog.vehicle_id == v.id, FuelLog.log_date < df,
                 FuelLog.odometer.isnot(None)).order_by(FuelLog.log_date.desc()).first()
             if prev:
                 prev_odometer, prev_date = prev.odometer, prev.log_date
                 distance = odometer - prev_odometer
-        w.writerow([v.registration, prev_date or '', prev_odometer or '',
-                    odometer if odometer is not None else '',
-                    f'{distance:.0f}' if distance is not None else ''])
+                total_distance += distance or 0.0
+        rows_out.append((v.registration, prev_date or '', prev_odometer or '',
+                         odometer if odometer is not None else '',
+                         f'{distance:.0f}' if distance is not None else ''))
+
+    # Write fleet totals before the per-vehicle table
+    w.writerow(['Fleet Total Distance (km)', f'{total_distance:.0f}'])
+    w.writerow(['Fleet Total Revenue (USD)', f'{fleet_revenue:.2f}'])
+    w.writerow([])
+    w.writerow(['Vehicle', 'Previous Reading Date', 'Previous Odometer (km)',
+                'Odometer in Range (km)', 'Distance Travelled (km)'])
+    for out_row in rows_out:
+        w.writerow(out_row)
 
     out.seek(0)
     resp = make_response(out.getvalue())
     resp.headers['Content-Type'] = 'text/csv'
-    resp.headers['Content-Disposition'] = f'attachment; filename=distance_travelled_{d}.csv'
+    resp.headers['Content-Disposition'] = f'attachment; filename=distance_travelled_{df}_to_{dt}.csv'
     return resp
 
 

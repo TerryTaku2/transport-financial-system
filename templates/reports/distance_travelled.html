@@ -6,17 +6,21 @@
 <div class="page-header">
   <div>
     <h1>Distance Travelled</h1>
-    <div class="subtitle">{{ date_str }} &mdash; computed from odometer readings logged on this date vs. the last known reading before it</div>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; computed from odometer readings logged during this range vs. the last known reading before it</div>
   </div>
-  <a href="{{ url_for('export_distance_travelled', date=date_str) }}" class="btn btn-outline">
+  <a href="{{ url_for('export_distance_travelled', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
     <i data-feather="download"></i> Export CSV
   </a>
 </div>
 
 <form method="GET" class="filter-bar">
   <div class="form-group">
-    <label>Date</label>
-    <input type="date" name="date" value="{{ date_str }}">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
   </div>
   <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
 </form>
@@ -30,12 +34,16 @@
     <div class="kpi-label">Vehicles Reporting</div>
     <div class="kpi-value">{{ vehicles_reporting }} / {{ fleet_size }}</div>
   </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Fleet Revenue</div>
+    <div class="kpi-value">${{ '{:,.2f}'.format(fleet_revenue) }}</div>
+  </div>
 </div>
 
 <div class="card">
   <div class="card-header">
     <h3>Distance per Vehicle</h3>
-    <span class="subtitle">Distance since the last logged odometer reading before this date</span>
+    <span class="subtitle">Distance since the last logged odometer reading before this range</span>
   </div>
   {% if rows %}
   <div class="table-wrap">
@@ -45,7 +53,7 @@
           <th>Vehicle</th>
           <th>Previous Reading</th>
           <th class="text-right">Previous Odometer (km)</th>
-          <th class="text-right">Odometer on Date (km)</th>
+          <th class="text-right">Odometer in Range (km)</th>
           <th class="text-right">Distance (km)</th>
         </tr>
       </thead>
@@ -62,7 +70,7 @@
           <td colspan="3" style="color:var(--text-secondary,#64748b);">No prior odometer reading to compare against</td>
           <td class="text-right">{{ '{:,.0f}'.format(row.odometer) }}</td>
           {% else %}
-          <td colspan="4" style="color:var(--text-secondary,#64748b);">No odometer reading logged for this date</td>
+          <td colspan="4" style="color:var(--text-secondary,#64748b);">No odometer reading logged for this range</td>
           {% endif %}
         </tr>
         {% endfor %}
