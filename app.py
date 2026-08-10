@@ -8043,6 +8043,7 @@ def franchise_weekly_income_list():
     by_date_rows = _franchise_income_by_vehicle_on(FranchiseWeeklyIncome, 'week_start', on_week, all_vehicles,
         end_date=on_week + timedelta(days=6)) if view == 'date' else None
     by_date_total = sum(r['income'] for r in by_date_rows) if by_date_rows is not None else 0
+    by_date_missing = sum(1 for r in by_date_rows if not r['entries']) if by_date_rows is not None else 0
 
     return render_template('franchise/weekly_income_list.html', vehicles=all_vehicles, vehicle=vehicle,
         income_entries=income_entries, expenditure_entries=expenditure_entries,
@@ -8050,7 +8051,8 @@ def franchise_weekly_income_list():
         vehicle_income_total=sum(e.income for e in income_entries),
         fleet_income=fleet_income, total_expenditure=total_expenditure,
         net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_deposited - net_income,
-        view=view, on_week=on_week.strftime('%Y-%m-%d'), by_date_rows=by_date_rows, by_date_total=by_date_total)
+        view=view, on_week=on_week.strftime('%Y-%m-%d'), by_date_rows=by_date_rows, by_date_total=by_date_total,
+        by_date_missing=by_date_missing)
 
 
 @app.route('/franchise/weekly-income/add', methods=['POST'])
@@ -8109,6 +8111,103 @@ def franchise_weekly_income_add():
         flash(str(e), 'danger')
 
     return redirect(url_for('franchise_weekly_income_list', vehicle_id=vehicle_id, period=period))
+
+
+@app.route('/franchise/weekly-income/bulk-fill', methods=['POST'])
+@login_required
+@permission_required('franchise')
+def franchise_weekly_income_bulk_fill():
+    """Bulk-fill weekly income for checked vehicles that don't already
+    have an entry in the target week. Mirrors the daily bulk-fill's
+    behaviour but expands the week to [on_week, on_week+6] when checking
+    for existing entries so any entry inside the week counts as present."""
+    period = request.form.get('period', 'month')
+    try:
+        on_week = parse_date(request.form['on_week'])
+        amount = form_float(request.form, 'amount', label='Income amount', required=True, min_value=0)
+    except KeyError as e:
+        flash(f'Missing required field: {e}', 'danger')
+        return redirect(url_for('franchise_weekly_income_list', view='date', period=period))
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('franchise_weekly_income_list', view='date', period=period))
+
+    selected_ids = set(request.form.getlist('vehicle_ids', type=int))
+    if not selected_ids:
+        flash('No vehicles selected — check the vehicles to fill before submitting.', 'warning')
+        return redirect(url_for('franchise_weekly_income_list', view='date', on_week=on_week.strftime('%Y-%m-%d'), period=period))
+
+    vehicles = FranchiseVehicle.query.filter(FranchiseVehicle.id.in_(selected_ids), FranchiseVehicle.status == 'active').all()
+    # Any entry for that vehicle within the week counts as already recorded
+    week_end = on_week + timedelta(days=6)
+    already_recorded = {e.vehicle_id for e in FranchiseWeeklyIncome.query
+                         .filter(FranchiseWeeklyIncome.week_start.between(on_week, week_end))
+                         .filter(FranchiseWeeklyIncome.vehicle_id.isnot(None)).all()}
+
+    filled = 0
+    for v in vehicles:
+        if v.id in already_recorded:
+            continue
+        entry = FranchiseWeeklyIncome(week_start=on_week, vehicle_id=v.id)
+        entry.income = v.weekly_fee if v.weekly_fee is not None else amount
+        entry.created_by = current_user.id
+        touch_sync_fields(entry)
+        db.session.add(entry)
+        filled += 1
+
+    if filled:
+        db.session.flush()
+        log_audit('CREATE', 'franchise_weekly_income', None,
+                  f'Bulk-filled weekly income (default {amount}) for {filled} vehicle(s) for week of {on_week}')
+        db.session.commit()
+        flash(f'Recorded weekly income for {filled} vehicle(s) for week of {on_week}.', 'success')
+    else:
+        db.session.rollback()
+        flash(f'No entries created — the selected vehicle(s) already have a weekly income entry in that week.', 'info')
+
+    return redirect(url_for('franchise_weekly_income_list', view='date', on_week=on_week.strftime('%Y-%m-%d'), period=period))
+
+
+@app.route('/franchise/weekly-income/bulk-delete', methods=['POST'])
+@login_required
+@admin_required
+def franchise_weekly_income_bulk_delete():
+    """Bulk-delete weekly income entries for the selected vehicles in
+    the given week. Soft-deletes rows like single delete."""
+    period = request.form.get('period', 'month')
+    try:
+        on_week = parse_date(request.form['on_week'])
+    except KeyError as e:
+        flash(f'Missing required field: {e}', 'danger')
+        return redirect(url_for('franchise_weekly_income_list', view='date', period=period))
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return redirect(url_for('franchise_weekly_income_list', view='date', period=period))
+
+    selected_ids = set(request.form.getlist('vehicle_ids', type=int))
+    if not selected_ids:
+        flash('No vehicles selected — check the vehicles whose entry you want to remove.', 'warning')
+        return redirect(url_for('franchise_weekly_income_list', view='date', on_week=on_week.strftime('%Y-%m-%d'), period=period))
+
+    week_end = on_week + timedelta(days=6)
+    entries = FranchiseWeeklyIncome.query.filter(
+        FranchiseWeeklyIncome.week_start.between(on_week, week_end), FranchiseWeeklyIncome.vehicle_id.in_(selected_ids)).all()
+    deleted = 0
+    for entry in entries:
+        log_audit('DELETE', 'franchise_weekly_income', entry.id,
+                  f'Bulk-deleted weekly franchise income entry for {entry.vehicle.number_plate} in week of {entry.week_start}')
+        entry.deleted_at = datetime.now(timezone.utc)
+        touch_sync_fields(entry)
+        deleted += 1
+
+    if deleted:
+        db.session.commit()
+        flash(f'Deleted {deleted} weekly income entry(ies) for week of {on_week}.', 'warning')
+    else:
+        db.session.rollback()
+        flash(f'None of the selected vehicles had a weekly income entry in that week.', 'info')
+
+    return redirect(url_for('franchise_weekly_income_list', view='date', on_week=on_week.strftime('%Y-%m-%d'), period=period))
 
 
 @app.route('/franchise/weekly-income/<int:eid>/deposit', methods=['POST'])

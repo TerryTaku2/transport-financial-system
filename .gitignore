@@ -27,3 +27,6 @@ spoke_releases/
 # not meaningful to commit, since it just reflects whatever was built
 # locally most recently.
 VERSION
+
+# Vendored runtime/build folder created by packaging — should not be committed
+2026.08.9/
