@@ -2805,6 +2805,7 @@ def dashboard():
 
     active_vehicles = Vehicle.query.filter_by(status='active').count()
     active_drivers = Driver.query.filter_by(status='active').count()
+    active_routes = Route.query.count()
 
     expiry_threshold = today + timedelta(days=30)
     expiring_docs = VehicleDocument.query.filter(
@@ -2814,6 +2815,26 @@ def dashboard():
     expiring_docs += Vehicle.query.filter(
         Vehicle.insurance_expiry.between(today, expiry_threshold)).count()
     expired_docs += Vehicle.query.filter(Vehicle.insurance_expiry < today).count()
+
+    fuel_logs_mtd = FuelLog.query.filter(FuelLog.log_date >= month_start).count()
+    maintenance_logs_mtd = MaintenanceLog.query.filter(MaintenanceLog.log_date >= month_start).count()
+
+    unpaid_payables = Payable.query.filter(Payable.status != 'paid').count()
+    outstanding_receivables = Receivable.query.filter(Receivable.status != 'collected').count()
+    active_loans = Loan.query.filter(Loan.status == 'active').count()
+
+    store_parts = SparePart.query.count()
+    store_purchases_mtd = StorePurchase.query.filter(StorePurchase.purchase_date >= month_start).count()
+    store_sales_mtd = StoreSale.query.filter(StoreSale.sale_date >= month_start).count()
+
+    franchise_vehicles = FranchiseVehicle.query.count()
+    franchise_daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date >= month_start).count()
+    franchise_weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start >= month_start).count()
+
+    schedules_due = MaintenanceSchedule.query.filter(
+        MaintenanceSchedule.next_due_date != None,
+        MaintenanceSchedule.next_due_date <= expiry_threshold
+    ).count()
 
     recent_logs = DailyLog.query.order_by(DailyLog.log_date.desc()).limit(6).all()
 
@@ -2828,7 +2849,15 @@ def dashboard():
         today_revenue=today_revenue, month_revenue=month_revenue,
         month_expenses=month_expenses, month_profit=month_profit,
         active_vehicles=active_vehicles, active_drivers=active_drivers,
+        active_routes=active_routes,
         expiring_docs=expiring_docs, expired_docs=expired_docs,
+        fuel_logs_mtd=fuel_logs_mtd, maintenance_logs_mtd=maintenance_logs_mtd,
+        unpaid_payables=unpaid_payables, outstanding_receivables=outstanding_receivables,
+        active_loans=active_loans,
+        store_parts=store_parts, store_purchases_mtd=store_purchases_mtd, store_sales_mtd=store_sales_mtd,
+        franchise_vehicles=franchise_vehicles, franchise_daily_entries=franchise_daily_entries,
+        franchise_weekly_entries=franchise_weekly_entries,
+        schedules_due=schedules_due,
         recent_logs=recent_logs, revenue_chart=json.dumps(rev_chart),
         today=today)
 
@@ -3130,9 +3159,151 @@ def driver_roster():
         vehicles_by_driver.setdefault(log.driver_id, set()).add(log.vehicle_id)
 
     all_drivers = Driver.query.filter_by(status='active').order_by(Driver.name).all()
+    total_revenue = sum((log.gross_revenue or 0) for log in logs)
     return render_template('drivers/roster.html', logs=logs, drivers=all_drivers,
         vehicles_by_driver=vehicles_by_driver,
-        date_from=date_from_str, date_to=date_to_str, driver_id=driver_id)
+        date_from=date_from_str, date_to=date_to_str, driver_id=driver_id,
+        total_revenue=total_revenue)
+
+
+@app.route('/drivers/roster/export.xlsx')
+@login_required
+@permission_required('drivers')
+def driver_roster_export_excel():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    driver_id = request.args.get('driver_id', type=int)
+
+    q = DailyLog.query.filter(DailyLog.log_date.between(df, dt), DailyLog.driver_id.isnot(None))
+    if driver_id:
+        q = q.filter(DailyLog.driver_id == driver_id)
+    logs = q.join(Driver, DailyLog.driver_id == Driver.id).order_by(
+        Driver.name, DailyLog.log_date, DailyLog.id).all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = 'Driver Roster'
+    bold = Font(bold=True)
+    money_fmt = '#,##0.00'
+
+    ws.append(['Driver Roster'])
+    ws['A1'].font = Font(bold=True, size=14)
+    ws.append([f'Period: {date_from_str} to {date_to_str}'])
+    if driver_id:
+        driver = Driver.query.get(driver_id)
+        ws.append([f'Driver: {driver.name if driver else "Unknown"}'])
+    ws.append([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
+    ws.append([])
+
+    headers = ['Driver', 'Role', 'Date', 'Vehicle', 'Conductor', 'Route', 'Trips', 'Revenue']
+    ws.append(headers)
+    for cell in ws[ws.max_row]:
+        cell.font = bold
+
+    total_revenue = 0
+    for log in logs:
+        ws.append([
+            log.driver.name,
+            log.driver.role.title(),
+            log.log_date.strftime('%Y-%m-%d'),
+            log.vehicle.registration if log.vehicle else '',
+            log.conductor.name if log.conductor else '',
+            log.route.name if log.route else '',
+            log.trips_completed,
+            log.gross_revenue or 0,
+        ])
+        row = ws.max_row
+        ws[f'H{row}'].number_format = money_fmt
+        total_revenue += float(log.gross_revenue or 0)
+
+    ws.append([])
+    ws.append(['', '', '', '', '', 'TOTAL', '', total_revenue])
+    for cell in ws[ws.max_row]:
+        cell.font = bold
+    ws[f'H{ws.max_row}'].number_format = money_fmt
+
+    widths = [28, 12, 14, 18, 18, 18, 10, 14]
+    for i, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(i)].width = width
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    resp.headers['Content-Disposition'] = f'attachment; filename=driver_roster_{date_from_str}_to_{date_to_str}.xlsx'
+    return resp
+
+
+@app.route('/drivers/roster/export.pdf')
+@login_required
+@permission_required('drivers')
+def driver_roster_export_pdf():
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    driver_id = request.args.get('driver_id', type=int)
+
+    q = DailyLog.query.filter(DailyLog.log_date.between(df, dt), DailyLog.driver_id.isnot(None))
+    if driver_id:
+        q = q.filter(DailyLog.driver_id == driver_id)
+    logs = q.join(Driver, DailyLog.driver_id == Driver.id).order_by(
+        Driver.name, DailyLog.log_date, DailyLog.id).all()
+
+    styles = getSampleStyleSheet()
+    elements = [
+        Paragraph('Driver Roster', styles['Title']),
+        Paragraph(f'Period: {date_from_str} to {date_to_str}', styles['Normal']),
+    ]
+    if driver_id:
+        driver = Driver.query.get(driver_id)
+        elements.append(Paragraph(f'Driver: {driver.name if driver else "Unknown"}', styles['Normal']))
+    elements.append(Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}', styles['Normal']))
+    elements.append(Spacer(1, 10))
+
+    headers = ['Driver', 'Role', 'Date', 'Vehicle', 'Conductor', 'Route', 'Trips', 'Revenue']
+    data = [headers]
+    total_revenue = 0
+    for log in logs:
+        row_revenue = float(log.gross_revenue or 0)
+        data.append([
+            log.driver.name,
+            log.driver.role.title(),
+            log.log_date.strftime('%Y-%m-%d'),
+            log.vehicle.registration if log.vehicle else '',
+            log.conductor.name if log.conductor else '',
+            log.route.name if log.route else '',
+            str(log.trips_completed),
+            f'${row_revenue:,.2f}',
+        ])
+        total_revenue += row_revenue
+
+    data.append(['', '', '', '', '', 'TOTAL', '', f'${total_revenue:,.2f}'])
+    table = Table(data, repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5f1015')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
+        ('ALIGN', (6, 0), (-1, -1), 'RIGHT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f1f5f9')),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8fafc')]),
+    ]))
+    elements.append(table)
+
+    out = io.BytesIO()
+    doc = SimpleDocTemplate(out, pagesize=landscape(A4),
+                             leftMargin=14 * mm, rightMargin=14 * mm,
+                             topMargin=14 * mm, bottomMargin=14 * mm)
+    doc.build(elements)
+    out.seek(0)
+
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'application/pdf'
+    resp.headers['Content-Disposition'] = f'attachment; filename=driver_roster_{date_from_str}_to_{date_to_str}.pdf'
+    return resp
 
 
 # ─────────────────────────────────────────────────────────────

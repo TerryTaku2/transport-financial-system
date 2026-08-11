@@ -8,7 +8,11 @@
     <h1>Driver Roster</h1>
     <div class="subtitle">Which vehicle each driver drove, {{ date_from }} to {{ date_to }} &mdash; from Daily Transaction entries</div>
   </div>
-  <a href="{{ url_for('drivers') }}" class="btn btn-outline"><i data-feather="users"></i> Crew</a>
+  <div>
+    <a href="{{ url_for('drivers') }}" class="btn btn-outline"><i data-feather="users"></i> Crew</a>
+    <a href="{{ url_for('driver_roster_export_excel', date_from=date_from, date_to=date_to, driver_id=driver_id) }}" class="btn btn-outline"><i data-feather="download"></i> Export Excel</a>
+    <a href="{{ url_for('driver_roster_export_pdf', date_from=date_from, date_to=date_to, driver_id=driver_id) }}" class="btn btn-outline"><i data-feather="download"></i> Export PDF</a>
+  </div>
 </div>
 
 <form method="GET" class="filter-bar mb-16">
@@ -67,6 +71,12 @@
         </tr>
         {% endfor %}
       </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="7" class="text-right"><strong>Total Revenue</strong></td>
+          <td class="text-right"><strong>{{ total_revenue|currency }}</strong></td>
+        </tr>
+      </tfoot>
     </table>
   </div>
   {% else %}
