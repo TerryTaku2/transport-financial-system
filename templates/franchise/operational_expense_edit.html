@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}Edit Operational Expense{% endblock %}
+{% block page_title %}Edit Operational Expense{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Edit Operational Expense</h1>
+    <div class="subtitle">{{ expense.expense_date }} &mdash; {{ expense.category.name }}</div>
+  </div>
+  <a href="{{ url_for('franchise_operational_expenses_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Sub-heading<span class="req">*</span></label>
+          <select name="category_id" required>
+            {% for c in categories %}
+            <option value="{{ c.id }}" {% if expense.category_id == c.id %}selected{% endif %}>{{ c.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Amount (USD)<span class="req">*</span></label>
+          <input type="number" name="amount" step="0.01" min="0" required value="{{ expense.amount }}">
+        </div>
+        <div class="form-group">
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="expense_date" required value="{{ expense.expense_date.strftime('%Y-%m-%d') }}">
+        </div>
+      </div>
+      <div class="form-group mb-16">
+        <label>Description</label>
+        <textarea name="description" rows="2">{{ expense.description or '' }}</textarea>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save</button>
+        <a href="{{ url_for('franchise_operational_expenses_list') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

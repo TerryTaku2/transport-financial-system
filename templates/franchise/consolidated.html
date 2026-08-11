@@ -11,6 +11,7 @@
   <div class="btn-group">
     <a href="{{ url_for('franchise_daily_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Daily Entries</a>
     <a href="{{ url_for('franchise_weekly_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Weekly Entries</a>
+    <a href="{{ url_for('franchise_operational_expenses_list') }}" class="btn btn-outline"><i data-feather="list"></i> Operational Expenses</a>
     <a href="{{ url_for('report_franchise_consolidated_export', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
   </div>
 </div>
@@ -35,6 +36,10 @@
   <div class="kpi-card kpi-amber">
     <div class="kpi-label">Total Expenditure</div>
     <div class="kpi-value">{{ totals.total_expenditure|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Operational Expenses</div>
+    <div class="kpi-value">{{ totals.operational_expenses|currency }}</div>
   </div>
   <div class="kpi-card kpi-green">
     <div class="kpi-label">Net Profit</div>
@@ -74,6 +79,23 @@
     </table>
   </div>
 </div>
+
+{% if totals.operational_expenses_by_category %}
+<div class="card mb-24">
+  <div class="card-header"><h3>Operational Expenses</h3></div>
+  <div class="table-wrap">
+    <table>
+      <tbody>
+        {% for name, amount in totals.operational_expenses_by_category %}
+        <tr><td>{{ name }}</td><td class="text-right">{{ amount|currency }}</td></tr>
+        {% endfor %}
+        <tr class="summary-row"><td>TOTAL OPERATIONAL EXPENSES</td><td class="text-right">{{ totals.operational_expenses|currency }}</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="form-hint" style="padding:8px 16px;">Franchise-wide costs not tied to a vehicle's cash reconciliation — reduces Net Profit only. <a href="{{ url_for('franchise_operational_expenses_list') }}">Manage entries</a>.</div>
+</div>
+{% endif %}
 
 <div class="card">
   <div class="card-header"><h3>Cash Reconciliation</h3></div>

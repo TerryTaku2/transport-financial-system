@@ -187,6 +187,9 @@
       <a href="{{ url_for('report_franchise_weekly') }}" class="nav-item {% if request.endpoint == 'report_franchise_weekly' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Weekly Analysis
       </a>
+      <a href="{{ url_for('franchise_operational_expenses_list') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('franchise_operational_expense') %}active{% endif %}">
+        <i data-feather="briefcase"></i> Operational Expenses
+      </a>
       <a href="{{ url_for('report_franchise_consolidated') }}" class="nav-item {% if request.endpoint == 'report_franchise_consolidated' %}active{% endif %}">
         <i data-feather="pie-chart"></i> Consolidated P&amp;L
       </a>

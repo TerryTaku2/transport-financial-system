@@ -1134,6 +1134,53 @@ class FranchiseCollection(db.Model):
         return self.amount - (self.expense or 0)
 
 
+class FranchiseExpenseCategory(db.Model):
+    """Sub-heading under the Franchise module's single 'Operational Expenses'
+    main heading (see FranchiseOperationalExpense) — e.g. Rent, Admin
+    Salaries, Utilities. Flat list, no further nesting needed since there's
+    only the one heading, unlike ExpenseCategory's two-level scheme."""
+    __tablename__ = 'franchise_expense_categories'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(60), nullable=False, unique=True)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
+
+
+class FranchiseOperationalExpense(db.Model):
+    """Franchise-wide operating costs (rent, admin salaries, etc.) that
+    aren't tied to one vehicle's cash reconciliation — unlike the exp_*
+    columns on FranchiseDailyIncome/FranchiseWeeklyIncome, which are cash a
+    specific vehicle's collection actually paid out that day/week. These
+    roll up only into the Consolidated P&L (report_franchise_consolidated)
+    as a separate 'Operational Expenses' section that reduces Net Profit —
+    they deliberately don't touch the Daily/Weekly Income lists or the
+    Cash Reconciliation (deposited vs. variance) figures, since no vehicle
+    handled this cash."""
+    __tablename__ = 'franchise_operational_expenses'
+    id = db.Column(db.Integer, primary_key=True)
+    expense_date = db.Column(db.Date, nullable=False, default=date.today)
+    category_id = db.Column(db.Integer, db.ForeignKey('franchise_expense_categories.id'), nullable=False)
+    amount = db.Column(db.Float, nullable=False)
+    description = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
+
+    category = db.relationship('FranchiseExpenseCategory')
+
+
 class MaintenanceSchedule(db.Model):
     __tablename__ = 'maintenance_schedules'
     id = db.Column(db.Integer, primary_key=True)
@@ -1362,6 +1409,7 @@ PRECACHE_PAGES = [
     ('franchise', 'report_franchise_reconciliation'),
     ('franchise', 'report_franchise_dual_frequency'),
     ('franchise', 'report_franchise_weekly'),
+    ('franchise', 'franchise_operational_expenses_list'),
     ('franchise', 'report_franchise_consolidated'),
     ('store', 'store_parts'),
     ('store', 'store_purchases'),
@@ -2815,6 +2863,8 @@ def dashboard():
     expiring_docs += Vehicle.query.filter(
         Vehicle.insurance_expiry.between(today, expiry_threshold)).count()
     expired_docs += Vehicle.query.filter(Vehicle.insurance_expiry < today).count()
+    valid_docs = VehicleDocument.query.filter(VehicleDocument.expiry_date > expiry_threshold).count()
+    valid_docs += Vehicle.query.filter(Vehicle.insurance_expiry > expiry_threshold).count()
 
     fuel_logs_mtd = FuelLog.query.filter(FuelLog.log_date >= month_start).count()
     maintenance_logs_mtd = MaintenanceLog.query.filter(MaintenanceLog.log_date >= month_start).count()
@@ -2836,6 +2886,15 @@ def dashboard():
         MaintenanceSchedule.next_due_date <= expiry_threshold
     ).count()
 
+    month_capital = db.session.query(func.sum(CapitalContribution.amount)).filter(
+        CapitalContribution.contribution_date >= month_start).scalar() or 0
+    month_drawings = db.session.query(func.sum(OwnerDrawing.amount)).filter(
+        OwnerDrawing.drawing_date >= month_start).scalar() or 0
+    month_operating_expenses = db.session.query(func.sum(Expense.amount)).filter(
+        Expense.expense_date >= month_start).scalar() or 0
+    month_deposits = db.session.query(func.sum(DriverDeposit.amount)).filter(
+        DriverDeposit.deposit_date >= month_start).scalar() or 0
+
     recent_logs = DailyLog.query.order_by(DailyLog.log_date.desc()).limit(6).all()
 
     rev_chart = []
@@ -2850,7 +2909,7 @@ def dashboard():
         month_expenses=month_expenses, month_profit=month_profit,
         active_vehicles=active_vehicles, active_drivers=active_drivers,
         active_routes=active_routes,
-        expiring_docs=expiring_docs, expired_docs=expired_docs,
+        expiring_docs=expiring_docs, expired_docs=expired_docs, valid_docs=valid_docs,
         fuel_logs_mtd=fuel_logs_mtd, maintenance_logs_mtd=maintenance_logs_mtd,
         unpaid_payables=unpaid_payables, outstanding_receivables=outstanding_receivables,
         active_loans=active_loans,
@@ -2858,6 +2917,8 @@ def dashboard():
         franchise_vehicles=franchise_vehicles, franchise_daily_entries=franchise_daily_entries,
         franchise_weekly_entries=franchise_weekly_entries,
         schedules_due=schedules_due,
+        month_capital=month_capital, month_drawings=month_drawings,
+        month_operating_expenses=month_operating_expenses, month_deposits=month_deposits,
         recent_logs=recent_logs, revenue_chart=json.dumps(rev_chart),
         today=today)
 
@@ -8481,6 +8542,140 @@ def franchise_weekly_income_delete(eid):
     return redirect(url_for('franchise_weekly_income_list', vehicle_id=entry.vehicle_id))
 
 
+# ─────────────────────────────────────────────────────────────
+# Franchise Operational Expenses — franchise-wide costs (rent, admin
+# salaries, etc.) under a single 'Operational Expenses' heading with
+# manageable sub-headings (FranchiseExpenseCategory). Feed only into the
+# Consolidated P&L's Net Profit (see report_franchise_consolidated) — never
+# the Daily/Weekly Income lists or Cash Reconciliation, since no vehicle
+# handles this cash. See FranchiseOperationalExpense's docstring.
+# ─────────────────────────────────────────────────────────────
+@app.route('/franchise/operational-expenses')
+@login_required
+@permission_required('franchise')
+def franchise_operational_expenses_list():
+    df, dt = query_date_range()
+    expenses = FranchiseOperationalExpense.query.filter(
+        FranchiseOperationalExpense.expense_date.between(df, dt)
+    ).order_by(FranchiseOperationalExpense.expense_date.desc()).all()
+    categories = FranchiseExpenseCategory.query.order_by(FranchiseExpenseCategory.name).all()
+    total = sum(e.amount for e in expenses)
+    return render_template('franchise/operational_expenses.html', expenses=expenses, categories=categories,
+                           total=total, date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'),
+                           today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/franchise/operational-expenses/export')
+@login_required
+@permission_required('franchise')
+def franchise_operational_expenses_export():
+    df, dt = query_date_range()
+    expenses = FranchiseOperationalExpense.query.filter(
+        FranchiseOperationalExpense.expense_date.between(df, dt)
+    ).order_by(FranchiseOperationalExpense.expense_date.asc()).all()
+    rows = [[e.expense_date, e.category.name, e.description or '', f'{e.amount:.2f}'] for e in expenses]
+    return csv_export_response(f'franchise_operational_expenses_{df}_to_{dt}.csv',
+        ['Date', 'Sub-heading', 'Description', 'Amount'], rows)
+
+
+@app.route('/franchise/operational-expenses/add', methods=['POST'])
+@login_required
+@permission_required('franchise')
+@handle_form_errors
+def franchise_operational_expense_add():
+    client_id = request.form.get('_client_id')
+    if already_synced(client_id):
+        flash('Already recorded.', 'info')
+        return redirect(url_for('franchise_operational_expenses_list'))
+    e = FranchiseOperationalExpense(
+        expense_date=parse_date(request.form['expense_date']),
+        category_id=form_int(request.form, 'category_id'),
+        amount=form_float(request.form, 'amount', min_value=0),
+        description=request.form.get('description', '').strip(),
+        created_by=current_user.id,
+    )
+    db.session.add(e)
+    db.session.flush()
+    log_audit('CREATE', 'franchise_operational_expenses', e.id, f'Operational expense of {e.amount}')
+    record_offline_sync(client_id, 'franchise_operational_expense_add')
+    touch_sync_fields(e)
+    db.session.commit()
+    flash('Operational expense recorded.', 'success')
+    return redirect(url_for('franchise_operational_expenses_list'))
+
+
+@app.route('/franchise/operational-expenses/<int:eid>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def franchise_operational_expense_edit(eid):
+    e = FranchiseOperationalExpense.query.filter_by(id=eid).first_or_404()
+    if request.method == 'POST':
+        e.expense_date = parse_date(request.form['expense_date'])
+        e.category_id = form_int(request.form, 'category_id')
+        e.amount = form_float(request.form, 'amount', min_value=0)
+        e.description = request.form.get('description', '').strip()
+        log_audit('UPDATE', 'franchise_operational_expenses', e.id, f'Updated operational expense of {e.amount}')
+        touch_sync_fields(e)
+        db.session.commit()
+        flash('Operational expense updated.', 'success')
+        return redirect(url_for('franchise_operational_expenses_list'))
+    categories = FranchiseExpenseCategory.query.order_by(FranchiseExpenseCategory.name).all()
+    return render_template('franchise/operational_expense_edit.html', expense=e, categories=categories)
+
+
+@app.route('/franchise/operational-expenses/<int:eid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def franchise_operational_expense_delete(eid):
+    e = FranchiseOperationalExpense.query.filter_by(id=eid).first_or_404()
+    log_audit('DELETE', 'franchise_operational_expenses', eid, f'Deleted operational expense of {e.amount}')
+    e.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(e)
+    db.session.commit()
+    flash('Operational expense deleted.', 'warning')
+    return redirect(url_for('franchise_operational_expenses_list'))
+
+
+@app.route('/franchise/operational-expense-categories/add', methods=['POST'])
+@login_required
+@permission_required('franchise')
+@handle_form_errors
+def franchise_expense_category_add():
+    name = request.form.get('name', '').strip()
+    if not name:
+        raise ValueError('Sub-heading name is required.')
+    existing = FranchiseExpenseCategory.query.filter_by(name=name).first()
+    if existing:
+        flash(f'"{name}" already exists.', 'warning')
+    else:
+        cat = FranchiseExpenseCategory(name=name)
+        db.session.add(cat)
+        db.session.flush()
+        log_audit('CREATE', 'franchise_expense_categories', cat.id, f'Added operational expense sub-heading {cat.name}')
+        touch_sync_fields(cat)
+        db.session.commit()
+        flash(f'"{cat.name}" added.', 'success')
+    return redirect(url_for('franchise_operational_expenses_list'))
+
+
+@app.route('/franchise/operational-expense-categories/<int:cid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def franchise_expense_category_delete(cid):
+    cat = FranchiseExpenseCategory.query.filter_by(id=cid).first_or_404()
+    if FranchiseOperationalExpense.query.filter_by(category_id=cid).first():
+        flash(f'Cannot delete "{cat.name}" — operational expenses are recorded against it.', 'danger')
+        return redirect(url_for('franchise_operational_expenses_list'))
+    name = cat.name
+    log_audit('DELETE', 'franchise_expense_categories', cid, f'Deleted operational expense sub-heading {name}')
+    cat.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(cat)
+    db.session.commit()
+    flash(f'"{name}" deleted.', 'warning')
+    return redirect(url_for('franchise_operational_expenses_list'))
+
+
 def _franchise_income_kind(kind):
     kind = kind if kind in ('daily', 'weekly') else 'daily'
     list_endpoint = 'franchise_daily_income_list' if kind == 'daily' else 'franchise_weekly_income_list'
@@ -9479,10 +9674,15 @@ def report_franchise_weekly_export():
 def report_franchise_consolidated():
     """Consolidated P&L — single summary of income, expenditure by category,
     and the cash reconciliation for the whole period, combining the daily
-    and weekly income entities."""
+    and weekly income entities. Operational Expenses (FranchiseOperationalExpense)
+    are added here only — they reduce Net Profit but, unlike the per-entry
+    exp_* categories above, never touch Cash Reconciliation, since they
+    aren't cash any vehicle handled."""
     df, dt = query_date_range()
     daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
+    op_expenses = FranchiseOperationalExpense.query.filter(
+        FranchiseOperationalExpense.expense_date.between(df, dt)).all()
 
     daily_totals = _income_entry_totals(daily_entries)
     weekly_totals = _income_entry_totals(weekly_entries)
@@ -9490,7 +9690,13 @@ def report_franchise_consolidated():
     totals['income_daily'] = daily_totals['income']
     totals['income_weekly'] = weekly_totals['income']
     totals['total_income'] = totals.pop('income')
-    totals['net_profit'] = totals['total_income'] - totals['total_expenditure']
+
+    op_by_category = {}
+    for e in op_expenses:
+        op_by_category[e.category.name] = op_by_category.get(e.category.name, 0) + e.amount
+    totals['operational_expenses'] = sum(op_by_category.values())
+    totals['operational_expenses_by_category'] = sorted(op_by_category.items())
+    totals['net_profit'] = totals['total_income'] - totals['total_expenditure'] - totals['operational_expenses']
 
     return render_template('franchise/consolidated.html', title='Consolidated Franchise P&L Statement',
                            totals=totals, entry_count=len(daily_entries) + len(weekly_entries),
@@ -9504,9 +9710,17 @@ def report_franchise_consolidated_export():
     df, dt = query_date_range()
     daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
+    op_expenses = FranchiseOperationalExpense.query.filter(
+        FranchiseOperationalExpense.expense_date.between(df, dt)).all()
     daily_totals = _income_entry_totals(daily_entries)
     weekly_totals = _income_entry_totals(weekly_entries)
     totals = {k: daily_totals[k] + weekly_totals[k] for k in daily_totals}
+
+    op_by_category = {}
+    for e in op_expenses:
+        op_by_category[e.category.name] = op_by_category.get(e.category.name, 0) + e.amount
+    total_operational_expenses = sum(op_by_category.values())
+
     rows = [
         ['Daily Income', f"{daily_totals['income']:.2f}"],
         ['Weekly Income', f"{weekly_totals['income']:.2f}"],
@@ -9517,10 +9731,13 @@ def report_franchise_consolidated_export():
         ['Wages', f"{totals['exp_wages']:.2f}"],
         ['Other Expenditure', f"{totals['other_expenditure']:.2f}"],
         ['Total Expenditure', f"{totals['total_expenditure']:.2f}"],
-        ['Net Profit', f"{totals['income'] - totals['total_expenditure']:.2f}"],
-        ['Cash Deposited', f"{totals['deposited']:.2f}"],
-        ['Variance', f"{totals['variance']:.2f}"],
     ]
+    for name, amount in sorted(op_by_category.items()):
+        rows.append([f'Operational Expenses — {name}', f"{amount:.2f}"])
+    rows.append(['Total Operational Expenses', f"{total_operational_expenses:.2f}"])
+    rows.append(['Net Profit', f"{totals['income'] - totals['total_expenditure'] - total_operational_expenses:.2f}"])
+    rows.append(['Cash Deposited', f"{totals['deposited']:.2f}"])
+    rows.append(['Variance', f"{totals['variance']:.2f}"])
     return csv_export_response(f'franchise_consolidated_pl_{df}_to_{dt}.csv', ['Line Item', 'Amount'], rows)
 
 
@@ -10604,6 +10821,12 @@ SYNC_MODELS = {
     'franchise_collections': (FranchiseCollection, (
         'entry_date', 'frequency', 'amount', 'expense', 'notes', 'created_by', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'franchise_vehicles'}),
+    'franchise_expense_categories': (FranchiseExpenseCategory, (
+        'name', 'created_at', 'deleted_at',
+    ), {}),
+    'franchise_operational_expenses': (FranchiseOperationalExpense, (
+        'expense_date', 'amount', 'description', 'created_by', 'created_at', 'deleted_at',
+    ), {'category_id': 'franchise_expense_categories'}),
     # Phase 6 — financial tables. Full read/write on spokes, same as
     # every other synced table (Phase 6a's pull-only, spoke-write-blocked
     # burn-in period has ended).
@@ -10640,9 +10863,11 @@ SYNC_MODELS = {
 # Dependency order for apply — parents before children (see FK maps above).
 SYNC_TABLE_ORDER = [
     'vehicles', 'routes', 'spare_parts', 'expense_categories', 'franchise_vehicles',
+    'franchise_expense_categories',
     'loans', 'payables', 'receivables', 'capital_contributions', 'owner_drawings', 'budgets',
     'drivers', 'expenses', 'store_purchases', 'vehicle_documents', 'maintenance_schedules',
     'franchise_daily_income', 'franchise_weekly_income', 'franchise_collections',
+    'franchise_operational_expenses',
     'loan_payments', 'commission_payments',
     'daily_logs', 'fuel_logs', 'maintenance_logs', 'store_sales',
 ]
@@ -10657,7 +10882,7 @@ SYNC_TABLE_ORDER = [
 # like any other deletion instead of looking like the rows never existed to
 # a spoke that hasn't synced yet.
 DANGER_ZONE_MODULES = [
-    ('franchise', 'Franchise', ['franchise_daily_income', 'franchise_weekly_income', 'franchise_collections', 'franchise_vehicles']),
+    ('franchise', 'Franchise', ['franchise_daily_income', 'franchise_weekly_income', 'franchise_collections', 'franchise_vehicles', 'franchise_operational_expenses', 'franchise_expense_categories']),
     ('fleet', 'Fleet & Compliance', ['vehicles', 'drivers', 'routes', 'vehicle_documents', 'maintenance_schedules']),
     ('ledger', 'Daily Transactions (Crew Ledger)', ['daily_logs', 'driver_deposits']),
     ('operations', 'Operations (Fuel & Maintenance Logs)', ['fuel_logs', 'maintenance_logs']),
@@ -10671,6 +10896,7 @@ DANGER_ZONE_MODULES_BY_KEY = {key: (label, tables) for key, label, tables in DAN
 DANGER_ZONE_TABLE_LABELS = {
     'franchise_daily_income': 'Daily Income', 'franchise_weekly_income': 'Weekly Income',
     'franchise_collections': 'Collections (legacy)', 'franchise_vehicles': 'Franchise Vehicles',
+    'franchise_operational_expenses': 'Operational Expenses', 'franchise_expense_categories': 'Operational Expense Sub-headings',
     'vehicles': 'Vehicles', 'drivers': 'Drivers', 'routes': 'Routes',
     'vehicle_documents': 'Vehicle Documents', 'maintenance_schedules': 'Maintenance Schedules',
     'daily_logs': 'Daily Logs', 'fuel_logs': 'Fuel Logs', 'maintenance_logs': 'Maintenance Logs',
@@ -10703,6 +10929,8 @@ _DANGER_ZONE_LABEL_FIELDS = {
     'franchise_daily_income': ('entry_date', 'income'),
     'franchise_weekly_income': ('week_start', 'income'),
     'franchise_collections': ('entry_date', 'frequency', 'amount'),
+    'franchise_operational_expenses': ('expense_date', 'amount'),
+    'franchise_expense_categories': ('name',),
     'loans': ('lender', 'principal'),
     'payables': ('supplier_name', 'amount'),
     'receivables': ('client_name', 'amount'),
