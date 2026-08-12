@@ -3,6 +3,39 @@
 {% block page_title %}Finance — Payroll{% endblock %}
 
 {% block content %}
+{% macro crew_actions(driver_id, outstanding, payslip_url) %}
+<div style="display:flex;flex-direction:column;gap:4px;min-width:150px;">
+  <form method="POST" action="{{ url_for('commission_payment_add') }}" style="display:flex;gap:4px;align-items:center;">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="driver_id" value="{{ driver_id }}">
+    <input type="hidden" name="payment_date" value="{{ date_to }}">
+    <input type="hidden" name="period_start" value="{{ date_from }}">
+    <input type="hidden" name="period_end" value="{{ date_to }}">
+    <input type="number" name="amount" step="0.01" min="0" placeholder="Amount"
+           value="{{ '%.2f'|format(outstanding) if outstanding > 0 else '' }}" style="width:90px;padding:4px;">
+    <button class="btn btn-outline btn-xs">Pay</button>
+  </form>
+  <details>
+    <summary class="form-hint" style="cursor:pointer;">Deduct</summary>
+    <form method="POST" action="{{ url_for('payroll_deduction_add') }}" style="margin-top:4px;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="driver_id" value="{{ driver_id }}">
+      <input type="hidden" name="deduction_date" value="{{ date_to }}">
+      <div class="deduct-rows">
+        <div class="deduct-row" style="display:flex;gap:4px;margin-bottom:4px;">
+          <input type="number" name="amount[]" step="0.01" min="0" placeholder="Amount" style="width:80px;padding:4px;">
+          <input type="text" name="reason[]" placeholder="Reason" style="width:110px;padding:4px;">
+        </div>
+      </div>
+      <div style="display:flex;gap:4px;">
+        <button type="button" class="btn btn-outline btn-xs deduct-add-row">+ Reason</button>
+        <button type="submit" class="btn btn-outline btn-xs">Save</button>
+      </div>
+    </form>
+  </details>
+  <a href="{{ payslip_url }}" class="btn btn-outline btn-xs" target="_blank"><i data-feather="file-text"></i> Payslip</a>
+</div>
+{% endmacro %}
 <div class="page-header">
   <div>
     <h1>Crew Payroll / Commissions</h1>
@@ -85,31 +118,8 @@
           <td class="text-right text-success">{{ e.paid|currency }}</td>
           <td class="text-right {% if e.outstanding > 0 %}text-warning{% endif %}"><strong>{{ e.outstanding|currency }}</strong></td>
           <td>
-            <div style="display:flex;flex-direction:column;gap:4px;min-width:140px;">
-              <form method="POST" action="{{ url_for('commission_payment_add') }}" style="display:flex;gap:4px;align-items:center;">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="driver_id" value="{{ e.driver.id }}">
-                <input type="hidden" name="payment_date" value="{{ date_to }}">
-                <input type="hidden" name="period_start" value="{{ date_from }}">
-                <input type="hidden" name="period_end" value="{{ date_to }}">
-                <input type="number" name="amount" step="0.01" min="0" placeholder="Amount"
-                       value="{{ '%.2f'|format(e.outstanding) if e.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
-                <button class="btn btn-outline btn-xs">Pay</button>
-              </form>
-              <details>
-                <summary class="form-hint" style="cursor:pointer;">Deduct</summary>
-                <form method="POST" action="{{ url_for('payroll_deduction_add') }}" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px;">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <input type="hidden" name="driver_id" value="{{ e.driver.id }}">
-                  <input type="hidden" name="deduction_date" value="{{ date_to }}">
-                  <input type="number" name="amount" step="0.01" min="0" placeholder="Amount" style="width:80px;padding:4px;">
-                  <input type="text" name="reason" placeholder="Reason" required style="width:110px;padding:4px;">
-                  <button class="btn btn-outline btn-xs">Add</button>
-                </form>
-              </details>
-              <a href="{{ url_for('driver_payslip_pdf', driver_id=e.driver.id, date_from=date_from, date_to=date_to) }}"
-                 class="btn btn-outline btn-xs" target="_blank"><i data-feather="file-text"></i> Payslip</a>
-            </div>
+            {{ crew_actions(e.driver.id, e.outstanding,
+                             url_for('driver_payslip_pdf', driver_id=e.driver.id, date_from=date_from, date_to=date_to)) }}
           </td>
         </tr>
         {% for ce in e.conductors %}
@@ -126,7 +136,11 @@
           <td class="text-right">{{ ce.net_pay|currency }}</td>
           <td class="text-right">—</td>
           <td class="text-right"><strong>{{ ce.outstanding|currency }}</strong></td>
-          <td></td>
+          <td>
+            <a href="{{ url_for('conductor_payslip_pdf', driver_id=e.driver.id, date_from=date_from, date_to=date_to) }}"
+               class="btn btn-outline btn-xs" target="_blank"><i data-feather="file-text"></i> Payslip</a>
+            <div class="form-hint" style="margin-top:4px;">No named conductor — printed as "{{ e.driver.name.split(' ')[0] if e.driver.name else 'Conductor' }} Conductor".</div>
+          </td>
           {% else %}
           <td style="padding-left:28px;color:var(--text-muted);">&#8618; {{ ce.driver.name }}</td>
           <td><span class="badge badge-gray">Conductor</span></td>
@@ -140,31 +154,8 @@
           <td class="text-right text-success">{{ ce.paid|currency }}</td>
           <td class="text-right {% if ce.outstanding > 0 %}text-warning{% endif %}"><strong>{{ ce.outstanding|currency }}</strong></td>
           <td>
-            <div style="display:flex;flex-direction:column;gap:4px;min-width:140px;">
-              <form method="POST" action="{{ url_for('commission_payment_add') }}" style="display:flex;gap:4px;align-items:center;">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <input type="hidden" name="driver_id" value="{{ ce.driver.id }}">
-                <input type="hidden" name="payment_date" value="{{ date_to }}">
-                <input type="hidden" name="period_start" value="{{ date_from }}">
-                <input type="hidden" name="period_end" value="{{ date_to }}">
-                <input type="number" name="amount" step="0.01" min="0" placeholder="Amount"
-                       value="{{ '%.2f'|format(ce.outstanding) if ce.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
-                <button class="btn btn-outline btn-xs">Pay</button>
-              </form>
-              <details>
-                <summary class="form-hint" style="cursor:pointer;">Deduct</summary>
-                <form method="POST" action="{{ url_for('payroll_deduction_add') }}" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px;">
-                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                  <input type="hidden" name="driver_id" value="{{ ce.driver.id }}">
-                  <input type="hidden" name="deduction_date" value="{{ date_to }}">
-                  <input type="number" name="amount" step="0.01" min="0" placeholder="Amount" style="width:80px;padding:4px;">
-                  <input type="text" name="reason" placeholder="Reason" required style="width:110px;padding:4px;">
-                  <button class="btn btn-outline btn-xs">Add</button>
-                </form>
-              </details>
-              <a href="{{ url_for('driver_payslip_pdf', driver_id=ce.driver.id, date_from=date_from, date_to=date_to) }}"
-                 class="btn btn-outline btn-xs" target="_blank"><i data-feather="file-text"></i> Payslip</a>
-            </div>
+            {{ crew_actions(ce.driver.id, ce.outstanding,
+                             url_for('driver_payslip_pdf', driver_id=ce.driver.id, date_from=date_from, date_to=date_to)) }}
           </td>
           {% endif %}
         </tr>
@@ -190,4 +181,19 @@
   <div class="empty-state"><p>No commission data for the selected period.</p></div>
   {% endif %}
 </div>
+
+<script>
+// Lets a Deduct form collect several amount+reason pairs before saving,
+// since each deducted amount stands on its own with its own reason rather
+// than one lump figure — see payroll_deduction_add. Event-delegated so it
+// works for every crew member's row without per-row script duplication.
+document.addEventListener('click', function (evt) {
+  if (!evt.target.classList.contains('deduct-add-row')) return;
+  evt.preventDefault();
+  var rows = evt.target.closest('form').querySelector('.deduct-rows');
+  var clone = rows.querySelector('.deduct-row').cloneNode(true);
+  clone.querySelectorAll('input').forEach(function (input) { input.value = ''; });
+  rows.appendChild(clone);
+});
+</script>
 {% endblock %}

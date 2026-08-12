@@ -6594,23 +6594,49 @@ def payroll_deduction_edit(did):
 @permission_required('finance')
 @handle_form_errors
 def payroll_deduction_add():
-    reason = request.form.get('reason', '').strip()
-    if not reason:
-        raise ValueError('Reason is required.')
-    deduction = PayrollDeduction(
-        driver_id=form_int(request.form, 'driver_id'),
-        deduction_date=parse_date(request.form['deduction_date']),
-        amount=form_float(request.form, 'amount', min_value=0),
-        reason=reason,
-        created_by=current_user.id,
-    )
-    db.session.add(deduction)
+    """Records one or more deductions in a single submission — each
+    amount/reason pair (payroll.html's Deduct form lets you add several
+    before saving) becomes its own PayrollDeduction row, since each
+    deducted amount stands on its own with its own reason rather than
+    being lumped into one figure. Falls back to the singular amount/reason
+    fields for any caller that only ever posts one (e.g. a future
+    integration), so the multi-row list isn't the only supported shape."""
+    driver_id = form_int(request.form, 'driver_id')
+    deduction_date = parse_date(request.form['deduction_date'])
+    amounts = request.form.getlist('amount[]') or [request.form.get('amount', '')]
+    reasons = request.form.getlist('reason[]') or [request.form.get('reason', '')]
+
+    created = []
+    for amount_raw, reason in zip(amounts, reasons):
+        amount_raw = (amount_raw or '').strip()
+        reason = (reason or '').strip()
+        if not amount_raw and not reason:
+            continue
+        if not amount_raw:
+            raise ValueError('Each deduction needs an amount.')
+        try:
+            amount = float(amount_raw)
+        except ValueError:
+            raise ValueError('Amount must be a number.')
+        if amount < 0:
+            raise ValueError('Amount cannot be negative.')
+        if not reason:
+            raise ValueError('Each deduction needs its own reason.')
+        deduction = PayrollDeduction(driver_id=driver_id, deduction_date=deduction_date,
+                                      amount=amount, reason=reason, created_by=current_user.id)
+        db.session.add(deduction)
+        created.append(deduction)
+
+    if not created:
+        raise ValueError('Enter at least one deduction (amount + reason).')
+
     db.session.flush()
-    log_audit('CREATE', 'payroll_deductions', deduction.id,
-              f'Payroll deduction of {deduction.amount} for driver #{deduction.driver_id}: {reason}')
-    touch_sync_fields(deduction)
+    for deduction in created:
+        log_audit('CREATE', 'payroll_deductions', deduction.id,
+                  f'Payroll deduction of {deduction.amount} for driver #{driver_id}: {deduction.reason}')
+        touch_sync_fields(deduction)
     db.session.commit()
-    flash('Deduction recorded.', 'success')
+    flash(f'{len(created)} deductions recorded.' if len(created) > 1 else 'Deduction recorded.', 'success')
     return redirect(request.referrer or url_for('report_payroll'))
 
 
@@ -6657,6 +6683,41 @@ def driver_payslip_pdf(driver_id):
         CommissionPayment.driver_id == driver_id,
         CommissionPayment.payment_date.between(df, dt)).order_by(CommissionPayment.payment_date).all()
 
+    return _payslip_pdf_response(driver.name, driver.role.title(), e, deduction_rows, payment_rows,
+                                  date_from_str, date_to_str)
+
+
+@app.route('/reports/payroll/payslip/<int:driver_id>/conductor.pdf')
+@login_required
+@permission_required('reports')
+def conductor_payslip_pdf(driver_id):
+    """Payslip for a driver's placeholder conductor row — printed when no
+    named conductor is on file for them (see compute_payroll_earnings'
+    is_placeholder rows), so there's still something to hand the person who
+    actually rode that day. Printed under a generic "<driver's first name>
+    Conductor" label since there's no real Driver record to name it after —
+    and for the same reason, no deductions/payments can exist against them
+    yet (both need a real driver_id), so those sections always print empty."""
+    driver = Driver.query.filter_by(id=driver_id).first_or_404()
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    earnings, *_ = compute_payroll_earnings(df, dt)
+    row = next((r for r in earnings if r['driver'] and r['driver'].id == driver_id), None)
+    ce = next((c for c in row['conductors'] if c.get('is_placeholder')), None) if row else None
+    if ce is None:
+        flash(f'No placeholder conductor slip to print for {driver.name} in {date_from_str} to {date_to_str}.', 'warning')
+        return redirect(url_for('report_payroll', date_from=date_from_str, date_to=date_to_str))
+
+    first_name = driver.name.split()[0] if driver.name else 'Conductor'
+    display_name = f'{first_name} Conductor'
+    return _payslip_pdf_response(display_name, 'Conductor', ce, [], [], date_from_str, date_to_str)
+
+
+def _payslip_pdf_response(display_name, role_label, e, deduction_rows, payment_rows, date_from_str, date_to_str):
+    """Shared PDF body for driver_payslip_pdf/conductor_payslip_pdf — same
+    layout either way, just fed a display name/role and an earnings dict
+    (a real crew member's row, or a placeholder conductor's)."""
     styles = _pdf_styles()
     elements = [
         Paragraph('GRATZ Logistics Company', styles['Title']),
@@ -6667,8 +6728,8 @@ def driver_payslip_pdf(driver_id):
     ]
 
     elements.append(_pdf_statement_table([
-        ['Crew Member', driver.name],
-        ['Role', driver.role.title()],
+        ['Crew Member', display_name],
+        ['Role', role_label],
         ['Pay Period', f'{date_from_str} to {date_to_str}'],
         ['Days Worked', str(e['days_worked'])],
     ]))
@@ -6718,7 +6779,7 @@ def driver_payslip_pdf(driver_id):
     out.seek(0)
     resp = make_response(out.getvalue())
     resp.headers['Content-Type'] = 'application/pdf'
-    safe_name = driver.name.replace(' ', '_')
+    safe_name = display_name.replace(' ', '_')
     resp.headers['Content-Disposition'] = f'attachment; filename=payslip_{safe_name}_{date_from_str}_to_{date_to_str}.pdf'
     return resp
 
