@@ -12,6 +12,9 @@
     <a href="{{ url_for('commission_payments_list') }}" class="btn btn-outline">
       <i data-feather="list"></i> Payment History
     </a>
+    <a href="{{ url_for('payroll_deductions_list') }}" class="btn btn-outline">
+      <i data-feather="list"></i> Deduction History
+    </a>
     <a href="{{ url_for('export_payroll_excel', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
       <i data-feather="download"></i> Export Excel
     </a>
@@ -42,6 +45,10 @@
     <div class="kpi-label">Garnish (this period)</div>
     <div class="kpi-value">{{ total_garnish|currency }}</div>
   </div>
+  <div class="kpi-card kpi-red">
+    <div class="kpi-label">Deductions (this period)</div>
+    <div class="kpi-value">{{ total_deductions|currency }}</div>
+  </div>
   <div class="kpi-card kpi-green">
     <div class="kpi-label">Paid (this period)</div>
     <div class="kpi-value">{{ total_paid|currency }}</div>
@@ -60,7 +67,8 @@
       <thead>
         <tr><th>Crew Member</th><th>Role</th><th>Days Worked</th><th>Revenue Generated</th>
             <th class="text-right">Garnish</th><th>Rate</th>
-            <th class="text-right">Accrued</th><th class="text-right">Paid</th><th class="text-right">Outstanding</th><th></th></tr>
+            <th class="text-right">Accrued</th><th class="text-right">Deductions</th><th class="text-right">Net Pay</th>
+            <th class="text-right">Paid</th><th class="text-right">Outstanding</th><th></th></tr>
       </thead>
       <tbody>
         {% for e in earnings %}
@@ -72,19 +80,36 @@
           <td class="text-right {% if e.garnish %}text-danger{% endif %}">{{ e.garnish|currency if e.garnish else '—' }}</td>
           <td>{{ e.rate_pct|round(1) }}%</td>
           <td class="text-right">{{ e.commission|currency }}</td>
+          <td class="text-right {% if e.deductions %}text-danger{% endif %}">{{ e.deductions|currency if e.deductions else '—' }}</td>
+          <td class="text-right">{{ e.net_pay|currency }}</td>
           <td class="text-right text-success">{{ e.paid|currency }}</td>
           <td class="text-right {% if e.outstanding > 0 %}text-warning{% endif %}"><strong>{{ e.outstanding|currency }}</strong></td>
           <td>
-            <form method="POST" action="{{ url_for('commission_payment_add') }}" style="display:flex;gap:4px;align-items:center;">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="driver_id" value="{{ e.driver.id }}">
-              <input type="hidden" name="payment_date" value="{{ date_to }}">
-              <input type="hidden" name="period_start" value="{{ date_from }}">
-              <input type="hidden" name="period_end" value="{{ date_to }}">
-              <input type="number" name="amount" step="0.01" min="0" placeholder="Amount"
-                     value="{{ '%.2f'|format(e.outstanding) if e.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
-              <button class="btn btn-outline btn-xs">Pay</button>
-            </form>
+            <div style="display:flex;flex-direction:column;gap:4px;min-width:140px;">
+              <form method="POST" action="{{ url_for('commission_payment_add') }}" style="display:flex;gap:4px;align-items:center;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="driver_id" value="{{ e.driver.id }}">
+                <input type="hidden" name="payment_date" value="{{ date_to }}">
+                <input type="hidden" name="period_start" value="{{ date_from }}">
+                <input type="hidden" name="period_end" value="{{ date_to }}">
+                <input type="number" name="amount" step="0.01" min="0" placeholder="Amount"
+                       value="{{ '%.2f'|format(e.outstanding) if e.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
+                <button class="btn btn-outline btn-xs">Pay</button>
+              </form>
+              <details>
+                <summary class="form-hint" style="cursor:pointer;">Deduct</summary>
+                <form method="POST" action="{{ url_for('payroll_deduction_add') }}" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px;">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="driver_id" value="{{ e.driver.id }}">
+                  <input type="hidden" name="deduction_date" value="{{ date_to }}">
+                  <input type="number" name="amount" step="0.01" min="0" placeholder="Amount" style="width:80px;padding:4px;">
+                  <input type="text" name="reason" placeholder="Reason" required style="width:110px;padding:4px;">
+                  <button class="btn btn-outline btn-xs">Add</button>
+                </form>
+              </details>
+              <a href="{{ url_for('driver_payslip_pdf', driver_id=e.driver.id, date_from=date_from, date_to=date_to) }}"
+                 class="btn btn-outline btn-xs" target="_blank"><i data-feather="file-text"></i> Payslip</a>
+            </div>
           </td>
         </tr>
         {% for ce in e.conductors %}
@@ -98,6 +123,8 @@
           <td>{{ ce.rate_pct|round(1) }}%</td>
           <td class="text-right">{{ ce.commission|currency }}</td>
           <td class="text-right">—</td>
+          <td class="text-right">{{ ce.net_pay|currency }}</td>
+          <td class="text-right">—</td>
           <td class="text-right"><strong>{{ ce.outstanding|currency }}</strong></td>
           <td></td>
           {% else %}
@@ -108,19 +135,36 @@
           <td class="text-right {% if ce.garnish %}text-danger{% endif %}">{{ ce.garnish|currency if ce.garnish else '—' }}</td>
           <td>{{ ce.rate_pct|round(1) }}%</td>
           <td class="text-right">{{ ce.commission|currency }}</td>
+          <td class="text-right {% if ce.deductions %}text-danger{% endif %}">{{ ce.deductions|currency if ce.deductions else '—' }}</td>
+          <td class="text-right">{{ ce.net_pay|currency }}</td>
           <td class="text-right text-success">{{ ce.paid|currency }}</td>
           <td class="text-right {% if ce.outstanding > 0 %}text-warning{% endif %}"><strong>{{ ce.outstanding|currency }}</strong></td>
           <td>
-            <form method="POST" action="{{ url_for('commission_payment_add') }}" style="display:flex;gap:4px;align-items:center;">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-              <input type="hidden" name="driver_id" value="{{ ce.driver.id }}">
-              <input type="hidden" name="payment_date" value="{{ date_to }}">
-              <input type="hidden" name="period_start" value="{{ date_from }}">
-              <input type="hidden" name="period_end" value="{{ date_to }}">
-              <input type="number" name="amount" step="0.01" min="0" placeholder="Amount"
-                     value="{{ '%.2f'|format(ce.outstanding) if ce.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
-              <button class="btn btn-outline btn-xs">Pay</button>
-            </form>
+            <div style="display:flex;flex-direction:column;gap:4px;min-width:140px;">
+              <form method="POST" action="{{ url_for('commission_payment_add') }}" style="display:flex;gap:4px;align-items:center;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="driver_id" value="{{ ce.driver.id }}">
+                <input type="hidden" name="payment_date" value="{{ date_to }}">
+                <input type="hidden" name="period_start" value="{{ date_from }}">
+                <input type="hidden" name="period_end" value="{{ date_to }}">
+                <input type="number" name="amount" step="0.01" min="0" placeholder="Amount"
+                       value="{{ '%.2f'|format(ce.outstanding) if ce.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
+                <button class="btn btn-outline btn-xs">Pay</button>
+              </form>
+              <details>
+                <summary class="form-hint" style="cursor:pointer;">Deduct</summary>
+                <form method="POST" action="{{ url_for('payroll_deduction_add') }}" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center;margin-top:4px;">
+                  <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                  <input type="hidden" name="driver_id" value="{{ ce.driver.id }}">
+                  <input type="hidden" name="deduction_date" value="{{ date_to }}">
+                  <input type="number" name="amount" step="0.01" min="0" placeholder="Amount" style="width:80px;padding:4px;">
+                  <input type="text" name="reason" placeholder="Reason" required style="width:110px;padding:4px;">
+                  <button class="btn btn-outline btn-xs">Add</button>
+                </form>
+              </details>
+              <a href="{{ url_for('driver_payslip_pdf', driver_id=ce.driver.id, date_from=date_from, date_to=date_to) }}"
+                 class="btn btn-outline btn-xs" target="_blank"><i data-feather="file-text"></i> Payslip</a>
+            </div>
           </td>
           {% endif %}
         </tr>
@@ -133,6 +177,8 @@
           <td class="text-right">{{ total_garnish|currency }}</td>
           <td></td>
           <td class="text-right">{{ total_commissions|currency }}</td>
+          <td class="text-right">{{ total_deductions|currency }}</td>
+          <td class="text-right">{{ (total_commissions - total_deductions)|currency }}</td>
           <td class="text-right">{{ total_paid|currency }}</td>
           <td class="text-right">{{ total_outstanding|currency }}</td>
           <td></td>

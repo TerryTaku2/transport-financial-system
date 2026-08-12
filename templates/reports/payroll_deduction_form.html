@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}Edit Deduction{% endblock %}
+{% block page_title %}Edit Payroll Deduction{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Edit Payroll Deduction</h1>
+    <div class="subtitle">{{ deduction.driver.name if deduction.driver else 'Unknown driver' }}</div>
+  </div>
+  <a href="{{ url_for('payroll_deductions_list') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Crew Member<span class="req">*</span></label>
+          <select name="driver_id" required>
+            {% for d in drivers %}
+            <option value="{{ d.id }}" {% if deduction.driver_id==d.id %}selected{% endif %}>{{ d.name }} ({{ d.role|title }})</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="deduction_date" required value="{{ deduction.deduction_date }}">
+        </div>
+        <div class="form-group">
+          <label>Amount (USD)<span class="req">*</span></label>
+          <input type="number" name="amount" step="0.01" min="0" required value="{{ deduction.amount }}">
+        </div>
+        <div class="form-group full">
+          <label>Reason<span class="req">*</span></label>
+          <textarea name="reason" required>{{ deduction.reason or '' }}</textarea>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Deduction</button>
+        <a href="{{ url_for('payroll_deductions_list') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

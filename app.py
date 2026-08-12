@@ -801,6 +801,37 @@ class CommissionPayment(db.Model):
     driver = db.relationship('Driver')
 
 
+class PayrollDeduction(db.Model):
+    """A withholding against a crew member's accrued commission for a given
+    payslip period — loan repayments, advances, fines, damages, etc. Kept
+    separate from CommissionPayment (an actual cash payout, which reduces
+    what's still owed on top of this) and from DailyLog.garnish (a daily
+    revenue shortfall netted off before commission is even calculated) —
+    this instead reduces the commission already accrued, feeding into
+    compute_payroll_earnings' net_pay/outstanding figures and printed on
+    the per-driver payslip (see driver_payslip_pdf). reason is free text,
+    same as DailyLog.reason_for_shortfall, rather than a managed category
+    list — the deduction's date determines which payslip period it lands
+    in, same as CommissionPayment.payment_date."""
+    __tablename__ = 'payroll_deductions'
+    id = db.Column(db.Integer, primary_key=True)
+    driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=False)
+    deduction_date = db.Column(db.Date, nullable=False, default=date.today)
+    amount = db.Column(db.Float, nullable=False)
+    reason = db.Column(db.Text, nullable=False)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
+
+    driver = db.relationship('Driver')
+
+
 class CapitalContribution(db.Model):
     __tablename__ = 'capital_contributions'
     id = db.Column(db.Integer, primary_key=True)
@@ -5405,6 +5436,10 @@ def compute_payroll_earnings(df, dt):
         paid = db.session.query(func.sum(CommissionPayment.amount)).filter(
             CommissionPayment.driver_id == d.id,
             CommissionPayment.payment_date.between(df, dt)).scalar() or 0
+        deductions = db.session.query(func.sum(PayrollDeduction.amount)).filter(
+            PayrollDeduction.driver_id == d.id,
+            PayrollDeduction.deduction_date.between(df, dt)).scalar() or 0
+        net_pay = commission - deductions
         earnings.append({
             'driver': d,
             'total_revenue': rev,
@@ -5412,13 +5447,16 @@ def compute_payroll_earnings(df, dt):
             'rate_pct': rate * 100,
             'commission': commission,
             'garnish': garnish,
+            'deductions': deductions,
+            'net_pay': net_pay,
             'paid': paid,
-            'outstanding': commission - paid,
+            'outstanding': net_pay - paid,
             'conductors': [],
         })
 
     total_commissions = sum(e['commission'] for e in earnings)
     total_garnish = sum(e['garnish'] for e in earnings)
+    total_deductions = sum(e['deductions'] for e in earnings)
     total_paid = sum(e['paid'] for e in earnings)
     total_outstanding = sum(e['outstanding'] for e in earnings)
 
@@ -5449,7 +5487,8 @@ def compute_payroll_earnings(df, dt):
                 'driver': None, 'is_placeholder': True,
                 'total_revenue': e['total_revenue'], 'days_worked': e['days_worked'],
                 'rate_pct': co_rate * 100,
-                'commission': placeholder_commission, 'garnish': e['garnish'], 'paid': 0,
+                'commission': placeholder_commission, 'garnish': e['garnish'],
+                'deductions': 0, 'net_pay': placeholder_commission, 'paid': 0,
                 'outstanding': placeholder_commission,
             })
             placeholder_total += placeholder_commission
@@ -5465,7 +5504,7 @@ def compute_payroll_earnings(df, dt):
     total_commissions += placeholder_total
     total_outstanding += placeholder_total
 
-    return earnings, total_commissions, total_garnish, total_paid, total_outstanding
+    return earnings, total_commissions, total_garnish, total_deductions, total_paid, total_outstanding
 
 
 @app.route('/reports/payroll')
@@ -5474,11 +5513,11 @@ def compute_payroll_earnings(df, dt):
 def report_payroll():
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
-    earnings, total_commissions, total_garnish, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
+    earnings, total_commissions, total_garnish, total_deductions, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
 
     return render_template('reports/payroll.html',
         earnings=earnings, total_commissions=total_commissions,
-        total_garnish=total_garnish,
+        total_garnish=total_garnish, total_deductions=total_deductions,
         total_paid=total_paid, total_outstanding=total_outstanding,
         date_from=date_from_str, date_to=date_to_str)
 
@@ -5489,7 +5528,7 @@ def report_payroll():
 def export_payroll_excel():
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
-    earnings, total_commissions, total_garnish, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
+    earnings, total_commissions, total_garnish, total_deductions, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -5504,16 +5543,17 @@ def export_payroll_excel():
     ws.append([])
 
     headers = ['Crew Member', 'Role', 'Days Worked', 'Revenue Generated', 'Garnish',
-               'Rate %', 'Accrued', 'Paid', 'Outstanding']
+               'Rate %', 'Accrued', 'Deductions', 'Net Pay', 'Paid', 'Outstanding']
     ws.append(headers)
     for cell in ws[ws.max_row]:
         cell.font = bold
 
     def write_row(name, role, e):
         ws.append([name, role, e['days_worked'], e['total_revenue'], e['garnish'],
-                   round(e['rate_pct'], 1), e['commission'], e['paid'], e['outstanding']])
+                   round(e['rate_pct'], 1), e['commission'], e['deductions'], e['net_pay'],
+                   e['paid'], e['outstanding']])
         r = ws.max_row
-        for col in ('D', 'E', 'G', 'H', 'I'):
+        for col in ('D', 'E', 'G', 'H', 'I', 'J', 'K'):
             ws[f'{col}{r}'].number_format = money_fmt
 
     for e in earnings:
@@ -5523,14 +5563,15 @@ def export_payroll_excel():
             write_row(f'  {name}', 'Conductor', ce)
 
     ws.append([])
-    ws.append(['TOTAL', '', '', '', total_garnish, '', total_commissions, total_paid, total_outstanding])
+    ws.append(['TOTAL', '', '', '', total_garnish, '', total_commissions, total_deductions,
+               total_commissions - total_deductions, total_paid, total_outstanding])
     r = ws.max_row
     for cell in ws[r]:
         cell.font = bold
-    for col in ('E', 'G', 'H', 'I'):
+    for col in ('E', 'G', 'H', 'I', 'J', 'K'):
         ws[f'{col}{r}'].number_format = money_fmt
 
-    for i, width in enumerate([28, 12, 12, 17, 12, 8, 14, 14, 14], start=1):
+    for i, width in enumerate([28, 12, 12, 17, 12, 8, 14, 14, 14, 14, 14], start=1):
         ws.column_dimensions[get_column_letter(i)].width = width
 
     out = io.BytesIO()
@@ -5548,7 +5589,7 @@ def export_payroll_excel():
 def export_payroll_pdf():
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
-    earnings, total_commissions, total_garnish, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
+    earnings, total_commissions, total_garnish, total_deductions, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
 
     styles = getSampleStyleSheet()
     elements = [
@@ -5558,12 +5599,13 @@ def export_payroll_pdf():
         Spacer(1, 10),
     ]
 
-    headers = ['Crew Member', 'Role', 'Days', 'Revenue', 'Garnish', 'Rate', 'Accrued', 'Paid', 'Outstanding']
+    headers = ['Crew Member', 'Role', 'Days', 'Revenue', 'Garnish', 'Rate', 'Accrued', 'Deductions', 'Net Pay', 'Paid', 'Outstanding']
     data = [headers]
 
     def data_row(name, role, e):
         data.append([name, role, str(e['days_worked']), f"${e['total_revenue']:,.2f}",
                      f"${e['garnish']:,.2f}", f"{e['rate_pct']:.1f}%", f"${e['commission']:,.2f}",
+                     f"${e['deductions']:,.2f}", f"${e['net_pay']:,.2f}",
                      f"${e['paid']:,.2f}", f"${e['outstanding']:,.2f}"])
 
     for e in earnings:
@@ -5573,6 +5615,7 @@ def export_payroll_pdf():
             data_row(f'  {name}', 'Conductor', ce)
 
     data.append(['TOTAL', '', '', '', f'${total_garnish:,.2f}', '', f'${total_commissions:,.2f}',
+                 f'${total_deductions:,.2f}', f'${total_commissions - total_deductions:,.2f}',
                  f'${total_paid:,.2f}', f'${total_outstanding:,.2f}'])
 
     table = Table(data, repeatRows=1)
@@ -6000,13 +6043,14 @@ def _shortfalls_pdf(df, dt):
 
 
 def _payroll_pdf(df, dt):
-    earnings, total_commissions, total_garnish, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
-    headers = ['Crew Member', 'Role', 'Days', 'Revenue', 'Garnish', 'Rate', 'Accrued', 'Paid', 'Outstanding']
+    earnings, total_commissions, total_garnish, total_deductions, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
+    headers = ['Crew Member', 'Role', 'Days', 'Revenue', 'Garnish', 'Rate', 'Accrued', 'Deductions', 'Net Pay', 'Paid', 'Outstanding']
     data = [headers]
 
     def add_row(name, role, e):
         data.append([name, role, str(e['days_worked']), f"${e['total_revenue']:,.2f}", f"${e['garnish']:,.2f}",
-                    f"{e['rate_pct']:.1f}%", f"${e['commission']:,.2f}", f"${e['paid']:,.2f}", f"${e['outstanding']:,.2f}"])
+                    f"{e['rate_pct']:.1f}%", f"${e['commission']:,.2f}", f"${e['deductions']:,.2f}",
+                    f"${e['net_pay']:,.2f}", f"${e['paid']:,.2f}", f"${e['outstanding']:,.2f}"])
 
     for e in earnings:
         add_row(e['driver'].name, e['driver'].role.title(), e)
@@ -6014,6 +6058,7 @@ def _payroll_pdf(df, dt):
             name = ce['driver'].name if ce['driver'] else 'Conductor (placeholder)'
             add_row(f'  {name}', 'Conductor', ce)
     data.append(['TOTAL', '', '', '', f"${total_garnish:,.2f}", '', f"${total_commissions:,.2f}",
+                f"${total_deductions:,.2f}", f"${total_commissions - total_deductions:,.2f}",
                 f"${total_paid:,.2f}", f"${total_outstanding:,.2f}"])
     return _pdf_section('Crew Payroll / Commissions', f'Period: {df} to {dt}', [_pdf_table(data)])
 
@@ -6499,6 +6544,183 @@ def commission_payment_delete(pid):
     db.session.commit()
     flash('Commission payment deleted.', 'warning')
     return redirect(request.referrer or url_for('report_payroll'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Payroll Deductions — withholdings against a crew member's accrued
+# commission (see PayrollDeduction, compute_payroll_earnings), and the
+# per-driver Payslip PDF that itemizes them. CRUD mirrors CommissionPayment
+# above exactly (same permission split, same inline-add-from-Payroll-report
+# pattern) since the two are companion concepts on the same report.
+# ─────────────────────────────────────────────────────────────
+@app.route('/finance/payroll-deductions')
+@login_required
+@permission_required('finance')
+def payroll_deductions_list():
+    """Flat list of individual PayrollDeduction records with edit/delete —
+    the Payroll report only shows the total deducted per driver, with no
+    per-deduction row to attach those actions to."""
+    page = request.args.get('page', 1, type=int)
+    deductions = PayrollDeduction.query.join(Driver).order_by(
+        PayrollDeduction.deduction_date.desc()).paginate(page=page, per_page=30)
+    return render_template('reports/payroll_deductions.html', deductions=deductions)
+
+
+@app.route('/finance/payroll-deductions/<int:did>/edit', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def payroll_deduction_edit(did):
+    deduction = PayrollDeduction.query.filter_by(id=did).first_or_404()
+    if request.method == 'POST':
+        deduction.driver_id = form_int(request.form, 'driver_id')
+        deduction.deduction_date = parse_date(request.form['deduction_date'])
+        deduction.amount = form_float(request.form, 'amount', min_value=0)
+        deduction.reason = request.form.get('reason', '').strip()
+        if not deduction.reason:
+            raise ValueError('Reason is required.')
+        log_audit('UPDATE', 'payroll_deductions', deduction.id,
+                  f'Updated payroll deduction for driver #{deduction.driver_id}')
+        touch_sync_fields(deduction)
+        db.session.commit()
+        flash('Deduction updated.', 'success')
+        return redirect(url_for('payroll_deductions_list'))
+    all_drivers = Driver.query.order_by(Driver.name).all()
+    return render_template('reports/payroll_deduction_form.html', deduction=deduction, drivers=all_drivers)
+
+
+@app.route('/finance/payroll-deductions/add', methods=['POST'])
+@login_required
+@permission_required('finance')
+@handle_form_errors
+def payroll_deduction_add():
+    reason = request.form.get('reason', '').strip()
+    if not reason:
+        raise ValueError('Reason is required.')
+    deduction = PayrollDeduction(
+        driver_id=form_int(request.form, 'driver_id'),
+        deduction_date=parse_date(request.form['deduction_date']),
+        amount=form_float(request.form, 'amount', min_value=0),
+        reason=reason,
+        created_by=current_user.id,
+    )
+    db.session.add(deduction)
+    db.session.flush()
+    log_audit('CREATE', 'payroll_deductions', deduction.id,
+              f'Payroll deduction of {deduction.amount} for driver #{deduction.driver_id}: {reason}')
+    touch_sync_fields(deduction)
+    db.session.commit()
+    flash('Deduction recorded.', 'success')
+    return redirect(request.referrer or url_for('report_payroll'))
+
+
+@app.route('/finance/payroll-deductions/<int:did>/delete', methods=['POST'])
+@login_required
+@admin_required
+def payroll_deduction_delete(did):
+    deduction = PayrollDeduction.query.filter_by(id=did).first_or_404()
+    log_audit('DELETE', 'payroll_deductions', did, f'Deleted payroll deduction of {deduction.amount}')
+    deduction.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(deduction)
+    db.session.commit()
+    flash('Deduction deleted.', 'warning')
+    return redirect(request.referrer or url_for('report_payroll'))
+
+
+@app.route('/reports/payroll/payslip/<int:driver_id>.pdf')
+@login_required
+@permission_required('reports')
+def driver_payslip_pdf(driver_id):
+    """A single crew member's printable payslip for the selected period —
+    gross commission, itemized deductions with their reasons, net pay, and
+    what's already been paid vs. still owed. Reuses compute_payroll_earnings
+    so the figures can never drift from what the Payroll report itself
+    shows for this driver."""
+    driver = Driver.query.filter_by(id=driver_id).first_or_404()
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    earnings, *_ = compute_payroll_earnings(df, dt)
+    all_rows = []
+    for row in earnings:
+        all_rows.append(row)
+        all_rows.extend(row['conductors'])
+    e = next((r for r in all_rows if r.get('driver') and r['driver'].id == driver_id), None)
+    if e is None:
+        flash(f'{driver.name} has no payroll activity for {date_from_str} to {date_to_str}.', 'warning')
+        return redirect(url_for('report_payroll', date_from=date_from_str, date_to=date_to_str))
+
+    deduction_rows = PayrollDeduction.query.filter(
+        PayrollDeduction.driver_id == driver_id,
+        PayrollDeduction.deduction_date.between(df, dt)).order_by(PayrollDeduction.deduction_date).all()
+    payment_rows = CommissionPayment.query.filter(
+        CommissionPayment.driver_id == driver_id,
+        CommissionPayment.payment_date.between(df, dt)).order_by(CommissionPayment.payment_date).all()
+
+    styles = _pdf_styles()
+    elements = [
+        Paragraph('GRATZ Logistics Company', styles['Title']),
+        Paragraph('Payslip', styles['Heading2']),
+        Spacer(1, 4),
+        Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}', styles['Normal']),
+        Spacer(1, 10),
+    ]
+
+    elements.append(_pdf_statement_table([
+        ['Crew Member', driver.name],
+        ['Role', driver.role.title()],
+        ['Pay Period', f'{date_from_str} to {date_to_str}'],
+        ['Days Worked', str(e['days_worked'])],
+    ]))
+    elements.append(Spacer(1, 14))
+
+    elements.append(Paragraph('Earnings', styles['Heading3']))
+    elements.append(_pdf_statement_table([
+        ['Revenue Generated', f"${e['total_revenue']:,.2f}"],
+        ['Garnish (netted off before commission)', f"${e['garnish']:,.2f}"],
+        ['Commission Rate', f"{e['rate_pct']:.1f}%"],
+        ['Gross Commission Accrued', f"${e['commission']:,.2f}"],
+    ], bold_indices=(3,)))
+    elements.append(Spacer(1, 14))
+
+    elements.append(Paragraph('Deductions', styles['Heading3']))
+    if deduction_rows:
+        ded_data = [['Date', 'Reason', 'Amount']]
+        for dd in deduction_rows:
+            ded_data.append([dd.deduction_date.strftime('%Y-%m-%d'), dd.reason, f"${dd.amount:,.2f}"])
+        ded_data.append(['', 'TOTAL DEDUCTIONS', f"${e['deductions']:,.2f}"])
+        elements.append(_pdf_table(ded_data, col_widths=[75, 305, 90]))
+    else:
+        elements.append(Paragraph('No deductions this period.', styles['Normal']))
+    elements.append(Spacer(1, 14))
+
+    elements.append(Paragraph('Summary', styles['Heading3']))
+    elements.append(_pdf_statement_table([
+        ['Gross Commission Accrued', f"${e['commission']:,.2f}"],
+        ['Total Deductions', f"${e['deductions']:,.2f}"],
+        ['Net Pay', f"${e['net_pay']:,.2f}"],
+        ['Already Paid This Period', f"${e['paid']:,.2f}"],
+        ['Balance Due', f"${e['outstanding']:,.2f}"],
+    ], bold_indices=(2, 4)))
+
+    if payment_rows:
+        elements.append(Spacer(1, 14))
+        elements.append(Paragraph('Payments Made This Period', styles['Heading3']))
+        pay_data = [['Date', 'Amount', 'Method', 'Notes']]
+        for p in payment_rows:
+            pay_data.append([p.payment_date.strftime('%Y-%m-%d'), f"${p.amount:,.2f}", p.method or '—', p.notes or '—'])
+        elements.append(_pdf_table(pay_data, bold_last_row=False, col_widths=[75, 75, 90, 230]))
+
+    out = io.BytesIO()
+    doc = SimpleDocTemplate(out, pagesize=A4,
+                             leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm, bottomMargin=18 * mm)
+    doc.build(elements)
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'application/pdf'
+    safe_name = driver.name.replace(' ', '_')
+    resp.headers['Content-Disposition'] = f'attachment; filename=payslip_{safe_name}_{date_from_str}_to_{date_to_str}.pdf'
+    return resp
 
 
 def compute_cash_flow(df, dt):
@@ -10858,6 +11080,9 @@ SYNC_MODELS = {
         'payment_date', 'amount', 'period_start', 'period_end', 'method', 'notes',
         'created_by', 'created_at', 'deleted_at',
     ), {'driver_id': 'drivers'}),
+    'payroll_deductions': (PayrollDeduction, (
+        'deduction_date', 'amount', 'reason', 'created_by', 'created_at', 'deleted_at',
+    ), {'driver_id': 'drivers'}),
 }
 
 # Dependency order for apply — parents before children (see FK maps above).
@@ -10868,7 +11093,7 @@ SYNC_TABLE_ORDER = [
     'drivers', 'expenses', 'store_purchases', 'vehicle_documents', 'maintenance_schedules',
     'franchise_daily_income', 'franchise_weekly_income', 'franchise_collections',
     'franchise_operational_expenses',
-    'loan_payments', 'commission_payments',
+    'loan_payments', 'commission_payments', 'payroll_deductions',
     'daily_logs', 'fuel_logs', 'maintenance_logs', 'store_sales',
 ]
 
@@ -10886,7 +11111,7 @@ DANGER_ZONE_MODULES = [
     ('fleet', 'Fleet & Compliance', ['vehicles', 'drivers', 'routes', 'vehicle_documents', 'maintenance_schedules']),
     ('ledger', 'Daily Transactions (Crew Ledger)', ['daily_logs', 'driver_deposits']),
     ('operations', 'Operations (Fuel & Maintenance Logs)', ['fuel_logs', 'maintenance_logs']),
-    ('finance', 'Finance Ledger', ['loans', 'loan_payments', 'payables', 'receivables', 'capital_contributions', 'owner_drawings', 'budgets', 'expenses', 'expense_categories', 'commission_payments']),
+    ('finance', 'Finance Ledger', ['loans', 'loan_payments', 'payables', 'receivables', 'capital_contributions', 'owner_drawings', 'budgets', 'expenses', 'expense_categories', 'commission_payments', 'payroll_deductions']),
     ('store', 'Spares Store', ['spare_parts', 'store_purchases', 'store_sales']),
 ]
 DANGER_ZONE_MODULES_BY_KEY = {key: (label, tables) for key, label, tables in DANGER_ZONE_MODULES}
@@ -10904,6 +11129,7 @@ DANGER_ZONE_TABLE_LABELS = {
     'receivables': 'Receivables', 'capital_contributions': 'Capital Contributions',
     'owner_drawings': 'Owner Drawings', 'budgets': 'Budgets', 'expenses': 'Expenses',
     'expense_categories': 'Expense Categories', 'commission_payments': 'Commission Payments',
+    'payroll_deductions': 'Payroll Deductions',
     'spare_parts': 'Spare Parts', 'store_purchases': 'Store Purchases', 'store_sales': 'Store Sales',
 }
 
@@ -10939,6 +11165,7 @@ _DANGER_ZONE_LABEL_FIELDS = {
     'budgets': ('category', 'month', 'amount'),
     'loan_payments': ('payment_date', 'amount'),
     'commission_payments': ('payment_date', 'amount'),
+    'payroll_deductions': ('deduction_date', 'amount', 'reason'),
 }
 
 
@@ -11715,13 +11942,15 @@ def _wa_income(tokens):
 
 def _wa_payroll(tokens):
     df, dt, label = _wa_period(tokens)
-    earnings, total_commissions, total_garnish, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
+    earnings, total_commissions, total_garnish, total_deductions, total_paid, total_outstanding = compute_payroll_earnings(df, dt)
     lines = [f'*Payroll — {label}*', f'_{df} to {dt}_', '']
     for e in earnings:
         lines.append(f"{e['driver'].name} ({e['driver'].role}): "
                       f"{_wa_money(e['commission'])} accrued, {_wa_money(e['outstanding'])} outstanding")
     lines.append('')
     lines.append(f'*Total accrued: {_wa_money(total_commissions)}*')
+    if total_deductions:
+        lines.append(f'Deductions: {_wa_money(total_deductions)}')
     lines.append(f'Paid: {_wa_money(total_paid)}  |  Outstanding: {_wa_money(total_outstanding)}')
     return '\n'.join(lines)
 

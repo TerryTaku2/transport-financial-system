@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+{% block title %}Payroll Deductions{% endblock %}
+{% block page_title %}Finance — Payroll Deductions{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Payroll Deductions</h1>
+    <div class="subtitle">Every individual deduction recorded from the Payroll report</div>
+  </div>
+  <a href="{{ url_for('report_payroll') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Payroll</a>
+</div>
+
+<div class="card">
+  {% if deductions.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Crew Member</th>
+          <th class="text-right">Amount</th>
+          <th>Reason</th>
+          {% if current_user.role == 'admin' %}
+          <th></th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for d in deductions.items %}
+        <tr>
+          <td>{{ d.deduction_date }}</td>
+          <td>{{ d.driver.name if d.driver else '—' }}</td>
+          <td class="text-right">{{ d.amount|currency }}</td>
+          <td>{{ d.reason }}</td>
+          {% if current_user.role == 'admin' %}
+          <td class="btn-group">
+            <a href="{{ url_for('payroll_deduction_edit', did=d.id) }}" class="btn btn-outline btn-xs">Edit</a>
+            <form method="POST" action="{{ url_for('payroll_deduction_delete', did=d.id) }}" data-confirm="Delete this deduction?">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if deductions.pages > 1 %}
+  <div class="pagination">
+    {% if deductions.has_prev %}<a href="{{ url_for('payroll_deductions_list', page=deductions.prev_num) }}">&laquo; Prev</a>{% endif %}
+    <span>Page {{ deductions.page }} of {{ deductions.pages }}</span>
+    {% if deductions.has_next %}<a href="{{ url_for('payroll_deductions_list', page=deductions.next_num) }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% endif %}
+  {% else %}
+  <div class="empty-state"><p>No payroll deductions recorded yet.</p></div>
+  {% endif %}
+</div>
+{% endblock %}
