@@ -54,8 +54,14 @@
       <a href="{{ url_for('driver_ledger_export', vehicle_id=vehicle.id, period=period) }}" class="btn btn-xs btn-outline">
         <i data-feather="download"></i> Export CSV
       </a>
+      <a href="{{ url_for('driver_ledger_export', vehicle_id=vehicle.id, period=period, format='pdf') }}" class="btn btn-xs btn-outline">
+        <i data-feather="file-text"></i> Export PDF
+      </a>
       <a href="{{ url_for('export_daily_logs') }}" class="btn btn-xs btn-outline">
         <i data-feather="download-cloud"></i> Export All Vehicles
+      </a>
+      <a href="{{ url_for('export_daily_logs', format='pdf') }}" class="btn btn-xs btn-outline">
+        <i data-feather="file-text"></i> Export All Vehicles (PDF)
       </a>
       <form method="POST" action="{{ url_for('driver_ledger_import_preview') }}" enctype="multipart/form-data" style="display:flex;gap:6px;align-items:center;margin:0;">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">

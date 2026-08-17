@@ -9,6 +9,7 @@
     <div class="subtitle">{{ month_label }}</div>
   </div>
   <a href="{{ url_for('report_budget_export', month=month) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+  <a href="{{ url_for('report_budget_export', month=month, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
 </div>
 
 <form method="GET" class="filter-bar">

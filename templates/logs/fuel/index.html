@@ -24,6 +24,7 @@
   <button type="submit" class="btn btn-outline"><i data-feather="filter"></i> Filter</button>
   <a href="{{ url_for('fuel_logs') }}" class="btn btn-outline">Reset</a>
   <a href="{{ url_for('fuel_logs_export', vehicle_id=vehicle_id) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+  <a href="{{ url_for('fuel_logs_export', vehicle_id=vehicle_id, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
 </form>
 
 <div class="card">

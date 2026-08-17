@@ -11,6 +11,7 @@
   <div class="btn-group">
     <a href="{{ url_for('franchise_daily_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Daily Entries</a>
     <a href="{{ url_for('report_franchise_daily_defaulters_export', date_from=date_from, date_to=date_to, show_all='1' if show_all else '') }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+    <a href="{{ url_for('report_franchise_daily_defaulters_export', date_from=date_from, date_to=date_to, show_all='1' if show_all else '', format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
   </div>
 </div>
 

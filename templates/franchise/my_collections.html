@@ -1,0 +1,138 @@
+{% extends 'base.html' %}
+{% block title %}Franchise Collections{% endblock %}
+{% block page_title %}Franchise — Collections{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Franchise Collections</h1>
+    <div class="subtitle">Record what you've collected and register new vehicles — an admin reviews everything you submit</div>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Record a Daily Collection</h3></div>
+  <div class="card-body">
+    {% if vehicles %}
+    <form method="POST" action="{{ url_for('franchise_daily_income_add') }}" data-offline-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Vehicle<span class="req">*</span></label>
+          <select name="vehicle_id" required>
+            <option value="">Select a vehicle…</option>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}">{{ v.number_plate }} — {{ v.franchisee_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="entry_date" required value="{{ today }}">
+        </div>
+        <div class="form-group">
+          <label>Income Collected (USD)<span class="req">*</span></label>
+          <input type="number" name="income" step="0.01" min="0" placeholder="0.00" required>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <input type="text" name="description" maxlength="255" placeholder="Optional">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary"><i data-feather="plus"></i> Record Collection</button>
+    </form>
+    {% else %}
+    <div class="empty-state"><p>No active franchise vehicles yet — register one below first.</p></div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Record a Weekly Collection</h3></div>
+  <div class="card-body">
+    {% if vehicles %}
+    <form method="POST" action="{{ url_for('franchise_weekly_income_add') }}" data-offline-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Vehicle<span class="req">*</span></label>
+          <select name="vehicle_id" required>
+            <option value="">Select a vehicle…</option>
+            {% for v in vehicles %}
+            <option value="{{ v.id }}">{{ v.number_plate }} — {{ v.franchisee_name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Week Of<span class="req">*</span></label>
+          <input type="date" name="week_start" required value="{{ today }}">
+        </div>
+        <div class="form-group">
+          <label>Income Collected (USD)<span class="req">*</span></label>
+          <input type="number" name="income" step="0.01" min="0" placeholder="0.00" required>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <input type="text" name="description" maxlength="255" placeholder="Optional">
+        </div>
+      </div>
+      <button type="submit" class="btn btn-primary"><i data-feather="plus"></i> Record Collection</button>
+    </form>
+    {% else %}
+    <div class="empty-state"><p>No active franchise vehicles yet — register one below first.</p></div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Register a New Vehicle</h3></div>
+  <div class="card-body">
+    <div class="form-hint mb-16">Plate and franchisee name only — an admin will be alerted to fill in the fee agreement and other details before it's fully active.</div>
+    <form method="POST" action="{{ url_for('franchise_vehicle_quick_add') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="kind" value="daily">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Number Plate<span class="req">*</span></label>
+          <input type="text" name="number_plate" required>
+        </div>
+        <div class="form-group">
+          <label>Franchisee Name<span class="req">*</span></label>
+          <input type="text" name="franchisee_name" required>
+        </div>
+      </div>
+      <button type="submit" class="btn btn-outline"><i data-feather="truck"></i> Register Vehicle</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>My Recent Entries</h3></div>
+  {% if my_entries %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Date</th>
+          <th>Vehicle</th>
+          <th class="text-right">Income [$]</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in my_entries %}
+        <tr>
+          <td>{{ e.kind }}</td>
+          <td>{{ e.period }}</td>
+          <td>{{ e.vehicle.number_plate ~ ' — ' ~ e.vehicle.franchisee_name if e.vehicle else 'Whole Franchise' }}</td>
+          <td class="text-right">{{ e.income|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>You haven't recorded any collections yet.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

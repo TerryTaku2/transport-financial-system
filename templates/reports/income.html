@@ -18,6 +18,9 @@
   <a href="{{ url_for('export_income', date_from=date_from, date_to=date_to, vehicle_id=vehicle_id) }}" class="btn btn-outline">
     <i data-feather="download"></i> Export CSV
   </a>
+  <a href="{{ url_for('export_income', date_from=date_from, date_to=date_to, vehicle_id=vehicle_id, format='pdf') }}" class="btn btn-outline">
+    <i data-feather="file-text"></i> Export PDF
+  </a>
 </div>
 
 <form method="GET" class="filter-bar">

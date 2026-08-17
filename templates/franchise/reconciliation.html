@@ -13,6 +13,7 @@
     <a href="{{ url_for('franchise_weekly_income_list') }}" class="btn btn-outline"><i data-feather="list"></i> Weekly Entries</a>
     <a href="{{ url_for('franchise_suspense_account', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="alert-circle"></i> Suspense Account</a>
     <a href="{{ url_for('report_franchise_reconciliation_export', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+    <a href="{{ url_for('report_franchise_reconciliation_export', date_from=date_from, date_to=date_to, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
   </div>
 </div>
 
@@ -118,7 +119,13 @@
           <td class="text-right">{{ r.other_expenditure|currency }}</td>
           <td class="text-right">{{ r.cash_in_hand|currency }}</td>
           <td class="text-right">{{ r.deposited|currency }}</td>
-          <td class="text-right"><span class="{% if r.variance < 0 %}text-danger{% elif r.variance > 0 %}text-warning{% endif %}">{{ r.variance|currency }}</span></td>
+          <td class="text-right">
+            {% if r.cleared %}
+            <span class="badge badge-green" title="Cleared in Suspense Account — was {{ r.raw_variance|currency }}">Cleared</span>
+            {% else %}
+            <span class="{% if r.variance < 0 %}text-danger{% elif r.variance > 0 %}text-warning{% endif %}">{{ r.variance|currency }}</span>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>
@@ -174,7 +181,13 @@
           <td class="text-right">{{ r.other_expenditure|currency }}</td>
           <td class="text-right">{{ r.cash_in_hand|currency }}</td>
           <td class="text-right">{{ r.deposited|currency }}</td>
-          <td class="text-right"><span class="{% if r.variance < 0 %}text-danger{% elif r.variance > 0 %}text-warning{% endif %}">{{ r.variance|currency }}</span></td>
+          <td class="text-right">
+            {% if r.cleared %}
+            <span class="badge badge-green" title="Cleared in Suspense Account — was {{ r.raw_variance|currency }}">Cleared</span>
+            {% else %}
+            <span class="{% if r.variance < 0 %}text-danger{% elif r.variance > 0 %}text-warning{% endif %}">{{ r.variance|currency }}</span>
+            {% endif %}
+          </td>
         </tr>
         {% endfor %}
       </tbody>

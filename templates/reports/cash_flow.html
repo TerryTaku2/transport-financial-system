@@ -9,6 +9,7 @@
     <div class="subtitle">{{ date_from }} to {{ date_to }}</div>
   </div>
   <a href="{{ url_for('report_cash_flow_export', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+  <a href="{{ url_for('report_cash_flow_export', date_from=date_from, date_to=date_to, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
 </div>
 
 <form method="GET" class="filter-bar">

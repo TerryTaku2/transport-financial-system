@@ -11,6 +11,9 @@
   <a href="{{ url_for('export_financial_position', as_of=as_of_str) }}" class="btn btn-outline">
     <i data-feather="download"></i> Export CSV
   </a>
+  <a href="{{ url_for('export_financial_position', as_of=as_of_str, format='pdf') }}" class="btn btn-outline">
+    <i data-feather="file-text"></i> Export PDF
+  </a>
 </div>
 
 <form method="GET" class="filter-bar">

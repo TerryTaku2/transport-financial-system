@@ -11,6 +11,7 @@
   <div class="btn-group">
     <a href="{{ url_for('report_franchise_consolidated') }}" class="btn btn-outline"><i data-feather="pie-chart"></i> Consolidated P&amp;L</a>
     <a href="{{ url_for('franchise_operational_expenses_export', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+    <a href="{{ url_for('franchise_operational_expenses_export', date_from=date_from, date_to=date_to, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
   </div>
 </div>
 

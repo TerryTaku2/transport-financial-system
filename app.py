@@ -1393,6 +1393,7 @@ PERMISSIONS = {
     'finance':      'Finance Ledger — loans, payables, receivables, capital, expenses, budget',
     'store':        'Spares Store — parts inventory, purchases & marked-up sales',
     'franchise':    'Franchise Income — collection reconciliation entry & franchise P&L statements',
+    'franchise_entry': 'Franchise Collections (Clerk) — enter income & register vehicles only, no expenses, reports, or other franchise data',
 }
 
 PERMISSION_REDIRECTS = [
@@ -1409,6 +1410,7 @@ PERMISSION_REDIRECTS = [
     ('finance',     'loans_list'),
     ('store',       'store_parts'),
     ('franchise',   'franchise_daily_income_list'),
+    ('franchise_entry', 'franchise_my_collections'),
 ]
 
 
@@ -1466,6 +1468,7 @@ PRECACHE_PAGES = [
     ('franchise', 'report_franchise_weekly'),
     ('franchise', 'franchise_operational_expenses_list'),
     ('franchise', 'report_franchise_consolidated'),
+    ('franchise_entry', 'franchise_my_collections'),
     ('store', 'store_parts'),
     ('store', 'store_purchases'),
     ('store', 'store_sales'),
@@ -1560,6 +1563,18 @@ def csv_export_response(filename, header, rows):
     resp.headers['Content-Type'] = 'text/csv'
     resp.headers['Content-Disposition'] = f'attachment; filename={filename}'
     return resp
+
+
+def _table_pdf_response(filename, title, subtitle, header, rows):
+    """The PDF sibling of csv_export_response — same header+rows a caller
+    already built for the CSV, turned into a PDF via the same _pdf_table
+    look every report PDF uses (see _pdf_response/_pdf_table below), so a
+    CSV export gains a PDF option without a separate query/computation to
+    keep in sync. Landscape for wide tables so columns stay readable."""
+    pagesize = landscape(A4) if len(header) > 6 else A4
+    data = [header] + [[('' if c is None else str(c)) for c in row] for row in rows]
+    elements = _pdf_section(title, subtitle, [_pdf_table(data, bold_last_row=False)])
+    return _pdf_response(filename, elements, pagesize=pagesize)
 
 
 def _detect_dayfirst(values):
@@ -3394,32 +3409,9 @@ def driver_roster_export_pdf():
         total_revenue += row_revenue
 
     data.append(['', '', '', '', '', 'TOTAL', '', f'${total_revenue:,.2f}'])
-    table = Table(data, repeatRows=1)
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5f1015')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
-        ('ALIGN', (6, 0), (-1, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f1f5f9')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8fafc')]),
-    ]))
-    elements.append(table)
+    elements.append(_pdf_table(data))
 
-    out = io.BytesIO()
-    doc = SimpleDocTemplate(out, pagesize=landscape(A4),
-                             leftMargin=14 * mm, rightMargin=14 * mm,
-                             topMargin=14 * mm, bottomMargin=14 * mm)
-    doc.build(elements)
-    out.seek(0)
-
-    resp = make_response(out.getvalue())
-    resp.headers['Content-Type'] = 'application/pdf'
-    resp.headers['Content-Disposition'] = f'attachment; filename=driver_roster_{date_from_str}_to_{date_to_str}.pdf'
-    return resp
+    return _pdf_response(f'driver_roster_{date_from_str}_to_{date_to_str}.pdf', elements, pagesize=landscape(A4))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -3847,29 +3839,26 @@ def driver_ledger_export():
         return redirect(url_for('driver_ledger'))
 
     period, df, dt = resolve_ledger_period(request.args.get('period', 'month'), date.today())
-    rows, _, _, _ = vehicle_ledger_rows(vehicle.id, df, dt)
+    ledger_rows, _, _, _ = vehicle_ledger_rows(vehicle.id, df, dt)
 
     fuel_label = vehicle.fuel_type.capitalize()
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(['Date', 'Driver', 'Fare', f'{fuel_label} (USD)', 'Mileage', 'Distance',
-                'Garnish', 'Reason for Shortfall'])
-    for row in rows:
-        w.writerow([
-            row['date'], row['driver_names'] or '',
-            f"{row['fare']:.2f}" if row['fare'] else '',
-            f"{row['diesel_cost']:.2f}" if row['diesel_cost'] else '',
-            row['odometer'] if row['odometer'] is not None else '',
-            row['distance'] if row['distance'] is not None else '',
-            f"{row['garnish']:.2f}" if row['garnish'] else '',
-            row['reason_for_shortfall'] or '',
-        ])
-    out.seek(0)
-    resp = make_response(out.getvalue())
-    resp.headers['Content-Type'] = 'text/csv'
+    header = ['Date', 'Driver', 'Fare', f'{fuel_label} (USD)', 'Mileage', 'Distance',
+              'Garnish', 'Reason for Shortfall']
+    rows = [[
+        row['date'], row['driver_names'] or '',
+        f"{row['fare']:.2f}" if row['fare'] else '',
+        f"{row['diesel_cost']:.2f}" if row['diesel_cost'] else '',
+        row['odometer'] if row['odometer'] is not None else '',
+        row['distance'] if row['distance'] is not None else '',
+        f"{row['garnish']:.2f}" if row['garnish'] else '',
+        row['reason_for_shortfall'] or '',
+    ] for row in ledger_rows]
+
     safe_reg = vehicle.registration.replace(' ', '_')
-    resp.headers['Content-Disposition'] = f'attachment; filename={safe_reg}_ledger_{period}_{date.today()}.csv'
-    return resp
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'{safe_reg}_ledger_{period}_{date.today()}.pdf',
+            f'Driver Ledger — {vehicle.registration}', f'Period: {df} to {dt}', header, rows)
+    return csv_export_response(f'{safe_reg}_ledger_{period}_{date.today()}.csv', header, rows)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -4237,8 +4226,11 @@ def fuel_logs_export():
              f'{l.total_cost:.2f}' if l.total_cost is not None else '',
              l.odometer if l.odometer is not None else '', l.supplier or '', l.notes or '']
             for l in logs]
-    return csv_export_response(f'fuel_logs_{date.today()}.csv',
-        ['Date', 'Vehicle', 'Liters', 'Cost/Liter', 'Total Cost', 'Odometer', 'Supplier', 'Notes'], rows)
+    header = ['Date', 'Vehicle', 'Liters', 'Cost/Liter', 'Total Cost', 'Odometer', 'Supplier', 'Notes']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'fuel_logs_{date.today()}.pdf', 'Fuel Logs',
+            f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'fuel_logs_{date.today()}.csv', header, rows)
 
 
 @app.route('/logs/fuel/add', methods=['GET', 'POST'])
@@ -4358,8 +4350,11 @@ def maintenance_logs_export():
     rows = [[l.log_date, l.vehicle.registration, l.description, f'{l.parts_cost:.2f}',
              f'{l.labor_cost:.2f}', f'{l.total_cost:.2f}', l.mechanic or '', l.notes or '']
             for l in logs]
-    return csv_export_response(f'maintenance_logs_{date.today()}.csv',
-        ['Date', 'Vehicle', 'Description', 'Parts Cost', 'Labor Cost', 'Total Cost', 'Mechanic', 'Notes'], rows)
+    header = ['Date', 'Vehicle', 'Description', 'Parts Cost', 'Labor Cost', 'Total Cost', 'Mechanic', 'Notes']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'maintenance_logs_{date.today()}.pdf', 'Maintenance Logs',
+            f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'maintenance_logs_{date.today()}.csv', header, rows)
 
 
 @app.route('/logs/maintenance/add', methods=['GET', 'POST'])
@@ -4697,8 +4692,11 @@ def store_purchases_export():
     purchases = q.order_by(StorePurchase.purchase_date.desc()).all()
     rows = [[p.purchase_date, p.part.name, qty_filter(p.quantity), f'{p.unit_cost:.2f}',
              f'{p.total_cost:.2f}', p.supplier or '', p.notes or ''] for p in purchases]
-    return csv_export_response(f'store_purchases_{date.today()}.csv',
-        ['Date', 'Part', 'Quantity', 'Unit Cost', 'Total Cost', 'Supplier', 'Notes'], rows)
+    header = ['Date', 'Part', 'Quantity', 'Unit Cost', 'Total Cost', 'Supplier', 'Notes']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'store_purchases_{date.today()}.pdf', 'Spares Store Purchases',
+            f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'store_purchases_{date.today()}.csv', header, rows)
 
 
 @app.route('/store/purchases/add', methods=['GET', 'POST'])
@@ -4930,8 +4928,11 @@ def store_sales_export():
     rows = [[s.sale_date, s.part.name, qty_filter(s.quantity), f'{s.unit_cost:.2f}', f'{s.unit_price:.2f}',
              f'{s.total_amount:.2f}', s.vehicle.registration if s.vehicle else '',
              s.customer_name or '', s.notes or ''] for s in sales]
-    return csv_export_response(f'store_sales_{date.today()}.csv',
-        ['Date', 'Part', 'Quantity', 'Unit Cost', 'Unit Price', 'Total Amount', 'Sold To Vehicle', 'Customer', 'Notes'], rows)
+    header = ['Date', 'Part', 'Quantity', 'Unit Cost', 'Unit Price', 'Total Amount', 'Sold To Vehicle', 'Customer', 'Notes']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'store_sales_{date.today()}.pdf', 'Spares Store Sales',
+            f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'store_sales_{date.today()}.csv', header, rows)
 
 
 @app.route('/store/sales/add', methods=['GET', 'POST'])
@@ -5132,8 +5133,11 @@ def store_trading_account_export():
         margin = (gross_profit / row['sales'] * 100) if row['sales'] else 0
         rows.append([row['part'].name, row['quantity'], f"{row['sales']:.2f}",
                      f"{row['cost_of_sales']:.2f}", f"{gross_profit:.2f}", f"{margin:.1f}"])
-    return csv_export_response(f'store_trading_account_{df}_to_{dt}.csv',
-        ['Part', 'Quantity Sold', 'Sales', 'Cost of Sales', 'Gross Profit', 'Margin %'], rows)
+    header = ['Part', 'Quantity Sold', 'Sales', 'Cost of Sales', 'Gross Profit', 'Margin %']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'store_trading_account_{df}_to_{dt}.pdf', 'Spares Store Trading Account',
+            f'Period: {df} to {dt}', header, rows)
+    return csv_export_response(f'store_trading_account_{df}_to_{dt}.csv', header, rows)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -5641,31 +5645,9 @@ def export_payroll_pdf():
     data.append(['TOTAL', '', '', '', f'${total_garnish:,.2f}', '', f'${total_commissions:,.2f}',
                  f'${total_deductions:,.2f}', f'${total_commissions - total_deductions:,.2f}',
                  f'${total_paid:,.2f}', f'${total_outstanding:,.2f}'])
+    elements.append(_pdf_table(data))
 
-    table = Table(data, repeatRows=1)
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5f1015')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 8),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
-        ('ALIGN', (2, 0), (-1, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f1f5f9')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8fafc')]),
-    ]))
-    elements.append(table)
-
-    out = io.BytesIO()
-    doc = SimpleDocTemplate(out, pagesize=landscape(A4),
-                             leftMargin=14 * mm, rightMargin=14 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
-    doc.build(elements)
-    out.seek(0)
-    resp = make_response(out.getvalue())
-    resp.headers['Content-Type'] = 'application/pdf'
-    resp.headers['Content-Disposition'] = f'attachment; filename=payroll_{date_from_str}_to_{date_to_str}.pdf'
-    return resp
+    return _pdf_response(f'payroll_{date_from_str}_to_{date_to_str}.pdf', elements, pagesize=landscape(A4))
 
 
 def compute_consolidated_overview(df, dt):
@@ -5801,31 +5783,9 @@ def export_consolidated_pdf():
                      f"${s['expenses']:,.2f}", f"${s['net_profit']:,.2f}"])
     data.append(['TOTAL', '', f"${totals['revenue']:,.2f}",
                  f"${totals['expenses']:,.2f}", f"${totals['net_profit']:,.2f}"])
+    elements.append(_pdf_table(data))
 
-    table = Table(data, repeatRows=1)
-    table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#5f1015')),
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-        ('FONTSIZE', (0, 0), (-1, -1), 9),
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e2e8f0')),
-        ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
-        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#f1f5f9')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#f8fafc')]),
-    ]))
-    elements.append(table)
-
-    out = io.BytesIO()
-    doc = SimpleDocTemplate(out, pagesize=A4,
-                             leftMargin=14 * mm, rightMargin=14 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
-    doc.build(elements)
-    out.seek(0)
-    resp = make_response(out.getvalue())
-    resp.headers['Content-Type'] = 'application/pdf'
-    resp.headers['Content-Disposition'] = f'attachment; filename=consolidated_{date_from_str}_to_{date_to_str}.pdf'
-    return resp
+    return _pdf_response(f'consolidated_{date_from_str}_to_{date_to_str}.pdf', elements)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -5837,6 +5797,43 @@ def export_consolidated_pdf():
 # "as at" dt, and Compliance is always "as at today" since it's a
 # live status check, not a historical figure.
 # ─────────────────────────────────────────────────────────────
+_PDF_LOGO_PATH = os.path.join(app.root_path, 'static', 'img', 'logo-horizontal-dark.png')
+
+
+def _draw_pdf_letterhead(canvas, doc):
+    """onFirstPage/onLaterPages callback (see _pdf_response) — draws the
+    GRATZ logo at the top of every page of every generated PDF, plus a
+    page-number footer. Centralized here rather than as a flowable so
+    every current and future PDF export picks it up automatically just by
+    going through _pdf_response, with no per-report code."""
+    canvas.saveState()
+    logo_h = 12 * mm
+    canvas.drawImage(_PDF_LOGO_PATH, doc.leftMargin, doc.pagesize[1] - doc.topMargin + 6 * mm,
+                     height=logo_h, width=logo_h * (543 / 331),
+                     preserveAspectRatio=True, mask='auto')
+    canvas.setFont('Helvetica', 7.5)
+    canvas.setFillColor(colors.HexColor('#64748b'))
+    canvas.drawRightString(doc.pagesize[0] - doc.rightMargin, 10 * mm, f'Page {doc.page}')
+    canvas.restoreState()
+
+
+def _pdf_response(filename, elements, pagesize=A4, margins=14 * mm):
+    """One response builder for every PDF export — BytesIO buffer,
+    SimpleDocTemplate with the shared letterhead wired in, and the
+    Content-Type/Content-Disposition headers. topMargin is padded beyond
+    the caller's margin to leave room for the logo _draw_pdf_letterhead
+    draws on every page."""
+    out = io.BytesIO()
+    doc = SimpleDocTemplate(out, pagesize=pagesize, leftMargin=margins, rightMargin=margins,
+                            topMargin=margins + 14 * mm, bottomMargin=margins)
+    doc.build(elements, onFirstPage=_draw_pdf_letterhead, onLaterPages=_draw_pdf_letterhead)
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'application/pdf'
+    resp.headers['Content-Disposition'] = f'attachment; filename={filename}'
+    return resp
+
+
 def _pdf_styles():
     return getSampleStyleSheet()
 
@@ -6415,15 +6412,7 @@ def export_full_report_pack():
     if elements and isinstance(elements[-1], PageBreak):
         elements.pop()
 
-    out = io.BytesIO()
-    doc = SimpleDocTemplate(out, pagesize=A4,
-                             leftMargin=14 * mm, rightMargin=14 * mm, topMargin=14 * mm, bottomMargin=14 * mm)
-    doc.build(elements)
-    out.seek(0)
-    resp = make_response(out.getvalue())
-    resp.headers['Content-Type'] = 'application/pdf'
-    resp.headers['Content-Disposition'] = f'attachment; filename=full_report_pack_{date_from_str}_to_{date_to_str}.pdf'
-    return resp
+    return _pdf_response(f'full_report_pack_{date_from_str}_to_{date_to_str}.pdf', elements)
 
 
 def _compute_shortfall_rows(df, dt):
@@ -6491,8 +6480,11 @@ def report_shortfalls_export():
                  f"{r['target']:.2f}", f"{r['fare']:.2f}", f"{r['shortfall']:.2f}",
                  f"{r['garnish']:.2f}", f"{max(r['remaining'], 0):.2f}", r['reason_for_shortfall'] or '']
                 for r in rows]
-    return csv_export_response(f'revenue_shortfalls_{df}_to_{dt}.csv',
-        ['Date', 'Vehicle', 'Driver(s)', 'Target', 'Fare', 'Shortfall', 'Garnish Applied', 'Remaining', 'Reason'], out_rows)
+    header = ['Date', 'Vehicle', 'Driver(s)', 'Target', 'Fare', 'Shortfall', 'Garnish Applied', 'Remaining', 'Reason']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'revenue_shortfalls_{df}_to_{dt}.pdf', 'Revenue Shortfalls',
+            f'Period: {df} to {dt}', header, out_rows)
+    return csv_export_response(f'revenue_shortfalls_{df}_to_{dt}.csv', header, out_rows)
 
 
 @app.route('/finance/commission-payments')
@@ -6744,8 +6736,7 @@ def _payslip_pdf_response(display_name, role_label, e, deduction_rows, payment_r
     (a real crew member's row, or a placeholder conductor's)."""
     styles = _pdf_styles()
     elements = [
-        Paragraph('GRATZ Logistics Company', styles['Title']),
-        Paragraph('Payslip', styles['Heading2']),
+        Paragraph('Payslip', styles['Title']),
         Spacer(1, 4),
         Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}', styles['Normal']),
         Spacer(1, 10),
@@ -6796,16 +6787,8 @@ def _payslip_pdf_response(display_name, role_label, e, deduction_rows, payment_r
             pay_data.append([p.payment_date.strftime('%Y-%m-%d'), f"${p.amount:,.2f}", p.method or '—', p.notes or '—'])
         elements.append(_pdf_table(pay_data, bold_last_row=False, col_widths=[75, 75, 90, 230]))
 
-    out = io.BytesIO()
-    doc = SimpleDocTemplate(out, pagesize=A4,
-                             leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm, bottomMargin=18 * mm)
-    doc.build(elements)
-    out.seek(0)
-    resp = make_response(out.getvalue())
-    resp.headers['Content-Type'] = 'application/pdf'
     safe_name = display_name.replace(' ', '_')
-    resp.headers['Content-Disposition'] = f'attachment; filename=payslip_{safe_name}_{date_from_str}_to_{date_to_str}.pdf'
-    return resp
+    return _pdf_response(f'payslip_{safe_name}_{date_from_str}_to_{date_to_str}.pdf', elements, margins=18 * mm)
 
 
 def compute_cash_flow(df, dt):
@@ -6876,6 +6859,8 @@ def report_cash_flow():
 @permission_required('reports')
 def report_cash_flow_export():
     df, dt = query_date_range()
+    if request.args.get('format') == 'pdf':
+        return _pdf_response(f'cash_flow_{df}_to_{dt}.pdf', _cash_flow_pdf(df, dt))
     cf = compute_cash_flow(df, dt)
     rows = [
         ['Operating — Fare/Trip Revenue', f"{cf['operating_in']:.2f}"],
@@ -6959,8 +6944,11 @@ def report_budget_export():
     month_start, month_str = _resolve_budget_month(request.args.get('month', ''))
     rows = _compute_budget_rows(month_start)
     out_rows = [[r['category'], f"{r['budget']:.2f}", f"{r['actual']:.2f}", f"{r['variance']:.2f}"] for r in rows]
-    return csv_export_response(f'budget_vs_actual_{month_str}.csv',
-        ['Category', 'Budget', 'Actual', 'Variance'], out_rows)
+    header = ['Category', 'Budget', 'Actual', 'Variance']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'budget_vs_actual_{month_str}.pdf', 'Budget vs Actual',
+            f'Month: {month_str}', header, out_rows)
+    return csv_export_response(f'budget_vs_actual_{month_str}.csv', header, out_rows)
 
 
 @app.route('/reports/budget/set', methods=['POST'])
@@ -7060,8 +7048,11 @@ def report_fuel_efficiency_export():
     rows = _compute_fuel_efficiency_rows(df, dt)
     out_rows = [[r['vehicle'].registration, f"{r['total_distance']:.1f}", f"{r['total_liters']:.2f}",
                  f"{r['avg_l_per_100km']:.2f}", f"{r['km_per_liter']:.2f}"] for r in rows]
-    return csv_export_response(f'fuel_efficiency_{df}_to_{dt}.csv',
-        ['Vehicle', 'Total Distance (km)', 'Total Liters', 'Avg L/100km', 'Km/Liter'], out_rows)
+    header = ['Vehicle', 'Total Distance (km)', 'Total Liters', 'Avg L/100km', 'Km/Liter']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'fuel_efficiency_{df}_to_{dt}.pdf', 'Fuel Efficiency',
+            f'Period: {df} to {dt}', header, out_rows)
+    return csv_export_response(f'fuel_efficiency_{df}_to_{dt}.csv', header, out_rows)
 
 
 @app.route('/reports/distance-travelled')
@@ -7121,8 +7112,11 @@ def report_route_profitability_export():
     rows, _, _ = _compute_route_profitability(df, dt)
     out_rows = [[r['route'].name if r['route'] else 'Unrouted', f"{r['revenue']:.2f}", r['trips'],
                  r['log_days'], f"{r['allocated_cost']:.2f}", f"{r['net_profit']:.2f}"] for r in rows]
-    return csv_export_response(f'route_profitability_{df}_to_{dt}.csv',
-        ['Route', 'Revenue', 'Trips', 'Log Days', 'Allocated Cost', 'Net Profit'], out_rows)
+    header = ['Route', 'Revenue', 'Trips', 'Log Days', 'Allocated Cost', 'Net Profit']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'route_profitability_{df}_to_{dt}.pdf', 'Route Profitability',
+            f'Period: {df} to {dt}', header, out_rows)
+    return csv_export_response(f'route_profitability_{df}_to_{dt}.csv', header, out_rows)
 
 
 def _compute_route_profitability(df, dt):
@@ -7253,9 +7247,12 @@ def report_vehicle_efficiency_export():
         f"{r['cost_per_km']:.2f}" if r['cost_per_km'] is not None else '',
         f"{r['revenue_per_km']:.2f}" if r['revenue_per_km'] is not None else '',
     ] for r in rows]
-    return csv_export_response(f'vehicle_efficiency_{df}_to_{dt}.csv',
-        ['Vehicle', 'Revenue', 'Fuel Cost', 'Maintenance Cost', 'Other Expenses', 'Total Cost',
-         'Net Profit', 'Distance (km)', 'Liters', 'Km/Liter', 'Cost/km', 'Revenue/km'], out_rows)
+    header = ['Vehicle', 'Revenue', 'Fuel Cost', 'Maintenance Cost', 'Other Expenses', 'Total Cost',
+              'Net Profit', 'Distance (km)', 'Liters', 'Km/Liter', 'Cost/km', 'Revenue/km']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'vehicle_efficiency_{df}_to_{dt}.pdf', 'Vehicle Efficiency & Profitability',
+            f'Period: {df} to {dt}', header, out_rows)
+    return csv_export_response(f'vehicle_efficiency_{df}_to_{dt}.csv', header, out_rows)
 
 
 @app.route('/reports/financial-position')
@@ -7287,25 +7284,23 @@ def export_daily_logs():
         flash(str(e), 'danger')
         return redirect(url_for('driver_ledger'))
 
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(['Date', 'Vehicle', 'Driver', 'Conductor', 'Route',
-                'Trips', 'Gross Revenue (USD)', 'Garnish', 'Reason for Shortfall',
-                'Entered By', 'Notes'])
-    for log in q.all():
-        w.writerow([log.log_date, log.vehicle.registration, log.driver.name if log.driver else '',
-                    log.conductor.name if log.conductor else '',
-                    log.route.name if log.route else '', log.trips_completed,
-                    f'{log.gross_revenue:.2f}',
-                    f'{log.garnish:.2f}' if log.garnish else '',
-                    log.reason_for_shortfall or '',
-                    log.creator.username if log.creator else '',
-                    log.notes or ''])
-    out.seek(0)
-    resp = make_response(out.getvalue())
-    resp.headers['Content-Type'] = 'text/csv'
-    resp.headers['Content-Disposition'] = f'attachment; filename=daily_transactions_{date.today()}.csv'
-    return resp
+    header = ['Date', 'Vehicle', 'Driver', 'Conductor', 'Route',
+              'Trips', 'Gross Revenue (USD)', 'Garnish', 'Reason for Shortfall',
+              'Entered By', 'Notes']
+    rows = [[log.log_date, log.vehicle.registration, log.driver.name if log.driver else '',
+             log.conductor.name if log.conductor else '',
+             log.route.name if log.route else '', log.trips_completed,
+             f'{log.gross_revenue:.2f}',
+             f'{log.garnish:.2f}' if log.garnish else '',
+             log.reason_for_shortfall or '',
+             log.creator.username if log.creator else '',
+             log.notes or ''] for log in q.all()]
+
+    subtitle = f'{df or "earliest"} to {dt or "latest"}'
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'daily_transactions_{date.today()}.pdf',
+            'Daily Transactions', subtitle, header, rows)
+    return csv_export_response(f'daily_transactions_{date.today()}.csv', header, rows)
 
 
 @app.route('/reports/export/income')
@@ -7339,6 +7334,50 @@ def export_income():
     maintenance = maint_q.order_by(MaintenanceLog.log_date).all()
     expenses = exp_q.order_by(Expense.expense_date).all()
     spares = spares_q.order_by(StoreSale.sale_date).all()
+
+    total_rev = sum(l.gross_revenue for l in daily)
+    total_fuel_liters = sum(f.liters for f in fuel)
+    total_maint = sum(m.total_cost for m in maintenance)
+    total_exp = sum(e.amount for e in expenses)
+    total_spares = sum(s.total_amount for s in spares)
+
+    if request.args.get('format') == 'pdf':
+        styles = _pdf_styles()
+        flowables = []
+
+        def section(title, headers, data_rows, total_row):
+            flowables.append(Paragraph(title, styles['Heading3']))
+            flowables.append(Spacer(1, 4))
+            flowables.append(_pdf_table([headers] + data_rows + [total_row]))
+            flowables.append(Spacer(1, 14))
+
+        section('Revenue', ['Date', 'Vehicle', 'Route', 'Trips', 'Gross Revenue (USD)'],
+                [[l.log_date, l.vehicle.registration, l.route.name if l.route else '',
+                  str(l.trips_completed), f'{l.gross_revenue:.2f}'] for l in daily],
+                ['', '', '', 'TOTAL REVENUE', f'{total_rev:.2f}'])
+        section('Fuel Consumption (not a cost — tracked in liters only)', ['Date', 'Vehicle', 'Liters', 'Supplier'],
+                [[f.log_date, f.vehicle.registration, f.liters, f.supplier or ''] for f in fuel],
+                ['', '', 'TOTAL LITERS', f'{total_fuel_liters:.1f}'])
+        section('Maintenance Expenses', ['Date', 'Vehicle', 'Description', 'Parts (USD)', 'Labor (USD)', 'Total (USD)'],
+                [[m.log_date, m.vehicle.registration, m.description,
+                  f'{m.parts_cost:.2f}', f'{m.labor_cost:.2f}', f'{m.total_cost:.2f}'] for m in maintenance],
+                ['', '', '', '', 'TOTAL MAINTENANCE', f'{total_maint:.2f}'])
+        section('Other Expenses', ['Date', 'Category', 'Vehicle', 'Description', 'Amount (USD)'],
+                [[e.expense_date, e.category.display_name, e.vehicle.registration if e.vehicle else '(general)',
+                  e.description or '', f'{e.amount:.2f}'] for e in expenses],
+                ['', '', '', 'TOTAL OTHER EXPENSES', f'{total_exp:.2f}'])
+        section('Spares Sold to Company Vehicles (booked as a maintenance expense on that vehicle)',
+                ['Date', 'Part', 'Vehicle', 'Qty', 'Unit Price (USD)', 'Total (USD)'],
+                [[s.sale_date, s.part.name, s.vehicle.registration if s.vehicle else '',
+                  s.quantity, f'{s.unit_price:.2f}', f'{s.total_amount:.2f}'] for s in spares],
+                ['', '', '', '', 'TOTAL SPARES', f'{total_spares:.2f}'])
+
+        flowables.append(_pdf_statement_table(
+            [['NET PROFIT', f'${total_rev - total_maint - total_exp - total_spares:,.2f}']], bold_indices=(0,)))
+        elements = _pdf_section('Transport Fleet Income Statement (ZIMRA Compliant)',
+                                f'Scope: {vehicle_label} — Period: {df_str} to {dt_str}', flowables)
+        scope_suffix = f'_vehicle{vehicle_id}' if vehicle_id else '_consolidated'
+        return _pdf_response(f'income{scope_suffix}_{df_str}_to_{dt_str}.pdf', elements, pagesize=landscape(A4))
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -7414,6 +7453,9 @@ def export_financial_position():
     as_of = query_single_date('as_of')
     fp = compute_financial_position(as_of)
 
+    if request.args.get('format') == 'pdf':
+        return _pdf_response(f'financial_position_{as_of}.pdf', _financial_position_pdf(as_of))
+
     out = io.StringIO()
     w = csv.writer(out)
     w.writerow(['STATEMENT OF FINANCIAL POSITION (SIMPLIFIED — SEE NOTES)'])
@@ -7470,10 +7512,6 @@ def export_financial_position():
 def export_distance_travelled():
     df, dt = query_date_range()
 
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow([f'DISTANCE TRAVELLED — {df} to {dt}'])
-    w.writerow([])
     # Compute fleet revenue for the range
     fleet_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
         DailyLog.log_date.between(df, dt)).scalar() or 0.0
@@ -7497,7 +7535,22 @@ def export_distance_travelled():
                          odometer if odometer is not None else '',
                          f'{distance:.0f}' if distance is not None else ''))
 
-    # Write fleet totals before the per-vehicle table
+    if request.args.get('format') == 'pdf':
+        styles = _pdf_styles()
+        flowables = [_pdf_statement_table([
+            ['Fleet Total Distance (km)', f'{total_distance:,.0f}'],
+            ['Fleet Total Revenue (USD)', f'${fleet_revenue:,.2f}'],
+        ]), Spacer(1, 14)]
+        table_header = ['Vehicle', 'Previous Reading Date', 'Previous Odometer (km)',
+                        'Odometer in Range (km)', 'Distance Travelled (km)']
+        flowables.append(_pdf_table([table_header] + [list(r) for r in rows_out], bold_last_row=False))
+        elements = _pdf_section('Distance Travelled', f'Period: {df} to {dt}', flowables)
+        return _pdf_response(f'distance_travelled_{df}_to_{dt}.pdf', elements)
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([f'DISTANCE TRAVELLED — {df} to {dt}'])
+    w.writerow([])
     w.writerow(['Fleet Total Distance (km)', f'{total_distance:.0f}'])
     w.writerow(['Fleet Total Revenue (USD)', f'{fleet_revenue:.2f}'])
     w.writerow([])
@@ -7531,8 +7584,10 @@ def loans_export():
     all_loans = Loan.query.order_by(Loan.start_date.desc()).all()
     rows = [[l.lender, f'{l.principal:.2f}', l.interest_rate, l.start_date, l.term_months or '',
              l.status, f'{sum(p.amount for p in l.payments):.2f}', l.notes or ''] for l in all_loans]
-    return csv_export_response(f'loans_{date.today()}.csv',
-        ['Lender', 'Principal', 'Interest Rate %', 'Start Date', 'Term (months)', 'Status', 'Repaid to Date', 'Notes'], rows)
+    header = ['Lender', 'Principal', 'Interest Rate %', 'Start Date', 'Term (months)', 'Status', 'Repaid to Date', 'Notes']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'loans_{date.today()}.pdf', 'Loans', f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'loans_{date.today()}.csv', header, rows)
 
 
 @app.route('/finance/loans/add', methods=['GET', 'POST'])
@@ -7671,8 +7726,10 @@ def payables_export():
     all_payables = Payable.query.order_by(Payable.invoice_date.desc()).all()
     rows = [[p.supplier_name, p.description or '', f'{p.amount:.2f}', p.invoice_date,
              p.due_date or '', p.status, p.paid_date or ''] for p in all_payables]
-    return csv_export_response(f'payables_{date.today()}.csv',
-        ['Supplier', 'Description', 'Amount', 'Invoice Date', 'Due Date', 'Status', 'Paid Date'], rows)
+    header = ['Supplier', 'Description', 'Amount', 'Invoice Date', 'Due Date', 'Status', 'Paid Date']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'payables_{date.today()}.pdf', 'Payables', f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'payables_{date.today()}.csv', header, rows)
 
 
 @app.route('/finance/payables/add', methods=['GET', 'POST'])
@@ -7764,8 +7821,10 @@ def receivables_export():
     all_receivables = Receivable.query.order_by(Receivable.invoice_date.desc()).all()
     rows = [[r.client_name, r.description or '', f'{r.amount:.2f}', r.invoice_date,
              r.due_date or '', r.status, r.collected_date or ''] for r in all_receivables]
-    return csv_export_response(f'receivables_{date.today()}.csv',
-        ['Client', 'Description', 'Amount', 'Invoice Date', 'Due Date', 'Status', 'Collected Date'], rows)
+    header = ['Client', 'Description', 'Amount', 'Invoice Date', 'Due Date', 'Status', 'Collected Date']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'receivables_{date.today()}.pdf', 'Receivables', f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'receivables_{date.today()}.csv', header, rows)
 
 
 @app.route('/finance/receivables/add', methods=['GET', 'POST'])
@@ -7860,8 +7919,11 @@ def capital_export():
     rows = [['Contribution', c.contribution_date, c.contributor, f'{c.amount:.2f}', c.notes or ''] for c in contributions]
     rows += [['Drawing', d.drawing_date, '', f'{d.amount:.2f}', d.notes or ''] for d in drawings]
     rows.sort(key=lambda r: r[1], reverse=True)
-    return csv_export_response(f'capital_drawings_{date.today()}.csv',
-        ['Type', 'Date', 'Contributor', 'Amount', 'Notes'], rows)
+    header = ['Type', 'Date', 'Contributor', 'Amount', 'Notes']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'capital_drawings_{date.today()}.pdf', 'Capital / Drawings',
+            f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'capital_drawings_{date.today()}.csv', header, rows)
 
 
 @app.route('/finance/capital/contributions/add', methods=['GET', 'POST'])
@@ -7994,8 +8056,10 @@ def expenses_export():
     all_expenses = Expense.query.order_by(Expense.expense_date.desc()).all()
     rows = [[e.expense_date, e.category.display_name, e.vehicle.registration if e.vehicle else '',
              e.driver.name if e.driver else '', e.description or '', f'{e.amount:.2f}'] for e in all_expenses]
-    return csv_export_response(f'expenses_{date.today()}.csv',
-        ['Date', 'Category', 'Vehicle', 'Driver', 'Description', 'Amount'], rows)
+    header = ['Date', 'Category', 'Vehicle', 'Driver', 'Description', 'Amount']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'expenses_{date.today()}.pdf', 'Expenses', f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'expenses_{date.today()}.csv', header, rows)
 
 
 @app.route('/finance/expenses/add', methods=['GET', 'POST'])
@@ -8281,20 +8345,35 @@ def franchise_daily_income_list():
 
 @app.route('/franchise/daily-income/add', methods=['POST'])
 @login_required
-@permission_required('franchise')
+@permission_required_any('franchise', 'franchise_entry')
 def franchise_daily_income_add():
     # POST-only, no GET counterpart at this URL (see driver_ledger_add) —
     # errors are handled locally here and always redirect to the GET list page.
+    # A franchise_entry-only user (see franchise_my_collections) is a
+    # restricted clerk: collections against a specific vehicle only, no
+    # shared/vehicle-less expenditure row and no expense fields — those
+    # stay at their model default (0) below rather than being read from
+    # the form, and success takes them back to their own entry page
+    # instead of the full list they can't otherwise reach.
+    entry_only = not current_user.has_permission('franchise')
     period = request.form.get('period', 'month')
     vehicle_id = form_int(request.form, 'vehicle_id', required=False)
     client_id = request.form.get('_client_id')
+
+    def back():
+        if entry_only:
+            return redirect(url_for('franchise_my_collections'))
+        return redirect(url_for('franchise_daily_income_list', vehicle_id=vehicle_id, period=period))
+
     if already_synced(client_id):
         flash('Already recorded.', 'info')
-        return redirect(url_for('franchise_daily_income_list', vehicle_id=vehicle_id, period=period))
+        return back()
     try:
         vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
         if vehicle_id and not vehicle:
             raise ValueError('Select a valid franchise vehicle.')
+        if entry_only and not vehicle:
+            raise ValueError('Select a vehicle for this collection.')
         label = vehicle.number_plate if vehicle else 'the franchise\'s shared expenditure'
         entry_date = parse_date(request.form['entry_date'])
 
@@ -8318,7 +8397,14 @@ def franchise_daily_income_add():
         # still land on the agreed amount, not silently record nothing.
         income_default = vehicle.daily_fee if vehicle and vehicle.daily_fee is not None else 0
         entry.income = form_float(request.form, 'income', required=False, default=income_default)
-        entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
+        # An entry_only clerk's form has no expense/deposit fields at all —
+        # those are left at whatever the entry already had (0 for a new
+        # row), never read from the POST body, even if a crafted request
+        # included them.
+        if not entry_only:
+            entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
+        elif entry.other_expenditure is None:
+            entry.other_expenditure = 0
         # Cash Deposited is one lump sum per date covering every vehicle
         # combined, entered only on the shared (vehicle-less) row — see
         # franchise_daily_income_list. Admin-only (see
@@ -8333,8 +8419,13 @@ def franchise_daily_income_add():
             entry.deposited = 0
         entry.description = request.form.get('description', '').strip()
         entry.created_by = current_user.id
-        for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
-            setattr(entry, f, form_float(request.form, f, label=lbl, required=False, default=0))
+        if not entry_only:
+            for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
+                setattr(entry, f, form_float(request.form, f, label=lbl, required=False, default=0))
+        else:
+            for f, _lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
+                if getattr(entry, f) is None:
+                    setattr(entry, f, 0)
         db.session.flush()
         log_audit('CREATE', 'franchise_daily_income', entry.id,
                   f'Daily franchise income for {label} on {entry_date}: income {entry.income}, '
@@ -8343,6 +8434,11 @@ def franchise_daily_income_add():
         touch_sync_fields(entry)
         db.session.commit()
         flash('Daily franchise income recorded.', 'success')
+        if entry_only:
+            notify_admins_whatsapp(
+                f'Franchise collection entered by {current_user.username}: '
+                f'{label} on {entry_date}, income {entry.income:.2f}.'
+            )
     except KeyError as e:
         db.session.rollback()
         flash(f'Missing required field: {e}', 'danger')
@@ -8350,7 +8446,34 @@ def franchise_daily_income_add():
         db.session.rollback()
         flash(str(e), 'danger')
 
-    return redirect(url_for('franchise_daily_income_list', vehicle_id=vehicle_id, period=period))
+    return back()
+
+
+@app.route('/franchise/my-collections')
+@login_required
+@permission_required_any('franchise', 'franchise_entry')
+def franchise_my_collections():
+    """Restricted home page for a franchise_entry-only clerk (see PERMISSIONS)
+    — record a collection against a vehicle (income only, no expenses/
+    deposits — see franchise_daily_income_add/franchise_weekly_income_add),
+    register a new vehicle (franchise_vehicle_quick_add), and see only the
+    entries they personally created. Nothing else in Franchise is reachable
+    for this permission level — no reports, reconciliation, suspense
+    account, other vehicles' fees, or other users' entries. A full
+    franchise-permission holder can also reach this page, but has no reason
+    to since the full Daily/Weekly Income pages cover everything here and
+    more."""
+    vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.number_plate).all()
+    my_daily = FranchiseDailyIncome.query.filter_by(created_by=current_user.id).order_by(
+        FranchiseDailyIncome.entry_date.desc()).limit(50).all()
+    my_weekly = FranchiseWeeklyIncome.query.filter_by(created_by=current_user.id).order_by(
+        FranchiseWeeklyIncome.week_start.desc()).limit(50).all()
+    my_entries = sorted(
+        [dict(kind='Daily', period=e.entry_date, vehicle=e.vehicle, income=e.income) for e in my_daily] +
+        [dict(kind='Weekly', period=e.week_start, vehicle=e.vehicle, income=e.income) for e in my_weekly],
+        key=lambda r: r['period'], reverse=True)[:50]
+    return render_template('franchise/my_collections.html', vehicles=vehicles, my_entries=my_entries,
+                           today=date.today().strftime('%Y-%m-%d'))
 
 
 @app.route('/franchise/daily-income/bulk-fill', methods=['POST'])
@@ -8535,20 +8658,18 @@ def franchise_daily_income_export():
     period, df, dt = resolve_ledger_period(request.args.get('period', 'month'), date.today())
     entries = list(reversed(_franchise_income_period_rows(FranchiseDailyIncome, 'entry_date', vehicle, df, dt)))
 
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(['Date', 'Income', 'Traffic Fines', 'Facilitation Fees', 'Workshop', 'Wages',
-                'Other Expenditure', 'Total Expenditure', 'Cash Deposited', 'Variance', 'Description'])
-    for e in entries:
-        w.writerow([e.entry_date, f'{e.income:.2f}', f'{e.exp_traffic_fines:.2f}', f'{e.exp_facilitation_fees:.2f}',
-                    f'{e.exp_workshop:.2f}', f'{e.exp_wages:.2f}', f'{e.other_expenditure:.2f}',
-                    f'{e.total_expenditure:.2f}', f'{e.deposited:.2f}', f'{e.variance:.2f}', e.description or ''])
-    out.seek(0)
-    resp = make_response(out.getvalue())
-    resp.headers['Content-Type'] = 'text/csv'
+    header = ['Date', 'Income', 'Traffic Fines', 'Facilitation Fees', 'Workshop', 'Wages',
+              'Other Expenditure', 'Total Expenditure', 'Cash Deposited', 'Variance', 'Description']
+    rows = [[e.entry_date, f'{e.income:.2f}', f'{e.exp_traffic_fines:.2f}', f'{e.exp_facilitation_fees:.2f}',
+             f'{e.exp_workshop:.2f}', f'{e.exp_wages:.2f}', f'{e.other_expenditure:.2f}',
+             f'{e.total_expenditure:.2f}', f'{e.deposited:.2f}', f'{e.variance:.2f}', e.description or '']
+            for e in entries]
+
     label = vehicle.number_plate.replace(' ', '_') if vehicle else 'shared_expenditure'
-    resp.headers['Content-Disposition'] = f'attachment; filename={label}_daily_income_{period}_{date.today()}.csv'
-    return resp
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'{label}_daily_income_{period}_{date.today()}.pdf',
+            'Franchise Daily Income', f'Period: {df} to {dt}', header, rows)
+    return csv_export_response(f'{label}_daily_income_{period}_{date.today()}.csv', header, rows)
 
 
 @app.route('/franchise/daily-income/<int:eid>/delete', methods=['POST'])
@@ -8611,18 +8732,30 @@ def franchise_weekly_income_list():
 
 @app.route('/franchise/weekly-income/add', methods=['POST'])
 @login_required
-@permission_required('franchise')
+@permission_required_any('franchise', 'franchise_entry')
 def franchise_weekly_income_add():
+    # See franchise_daily_income_add — same entry_only clerk restrictions
+    # (vehicle required, no expense/deposit fields, notify admins, redirect
+    # to their own entry page instead of the full list).
+    entry_only = not current_user.has_permission('franchise')
     period = request.form.get('period', 'month')
     vehicle_id = form_int(request.form, 'vehicle_id', required=False)
     client_id = request.form.get('_client_id')
+
+    def back():
+        if entry_only:
+            return redirect(url_for('franchise_my_collections'))
+        return redirect(url_for('franchise_weekly_income_list', vehicle_id=vehicle_id, period=period))
+
     if already_synced(client_id):
         flash('Already recorded.', 'info')
-        return redirect(url_for('franchise_weekly_income_list', vehicle_id=vehicle_id, period=period))
+        return back()
     try:
         vehicle = FranchiseVehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
         if vehicle_id and not vehicle:
             raise ValueError('Select a valid franchise vehicle.')
+        if entry_only and not vehicle:
+            raise ValueError('Select a vehicle for this collection.')
         label = vehicle.number_plate if vehicle else 'the franchise\'s shared expenditure'
         week_start = parse_date(request.form['week_start'])  # the entry's own date, not normalized to Monday
 
@@ -8637,7 +8770,10 @@ def franchise_weekly_income_add():
         # franchise_daily_income_add.
         income_default = vehicle.weekly_fee if vehicle and vehicle.weekly_fee is not None else 0
         entry.income = form_float(request.form, 'income', required=False, default=income_default)
-        entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0)
+        # See franchise_daily_income_add — an entry_only clerk's form has
+        # no expense/deposit fields, so those are never read from the POST.
+        entry.other_expenditure = form_float(request.form, 'other_expenditure', required=False, default=0) \
+            if not entry_only else 0
         # Cash Deposited is one lump sum per week, entered only on the
         # shared row — see franchise_daily_income_add /
         # franchise_weekly_income_deposit.
@@ -8647,8 +8783,9 @@ def franchise_weekly_income_add():
             entry.deposited = 0
         entry.description = request.form.get('description', '').strip()
         entry.created_by = current_user.id
-        for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
-            setattr(entry, f, form_float(request.form, f, label=lbl, required=False, default=0))
+        if not entry_only:
+            for f, lbl in FRANCHISE_INCOME_EXPENSE_FIELDS:
+                setattr(entry, f, form_float(request.form, f, label=lbl, required=False, default=0))
         db.session.flush()
         log_audit('CREATE', 'franchise_weekly_income', entry.id,
                   f'Weekly franchise income for {label} for week of {week_start}: income {entry.income}, '
@@ -8657,6 +8794,11 @@ def franchise_weekly_income_add():
         touch_sync_fields(entry)
         db.session.commit()
         flash('Weekly franchise income recorded.', 'success')
+        if entry_only:
+            notify_admins_whatsapp(
+                f'Franchise collection entered by {current_user.username}: '
+                f'{label} for week of {week_start}, income {entry.income:.2f}.'
+            )
     except KeyError as e:
         db.session.rollback()
         flash(f'Missing required field: {e}', 'danger')
@@ -8664,7 +8806,7 @@ def franchise_weekly_income_add():
         db.session.rollback()
         flash(str(e), 'danger')
 
-    return redirect(url_for('franchise_weekly_income_list', vehicle_id=vehicle_id, period=period))
+    return back()
 
 
 @app.route('/franchise/weekly-income/bulk-fill', methods=['POST'])
@@ -8820,20 +8962,18 @@ def franchise_weekly_income_export():
     period, df, dt = resolve_ledger_period(request.args.get('period', 'month'), date.today())
     entries = list(reversed(_franchise_income_period_rows(FranchiseWeeklyIncome, 'week_start', vehicle, df, dt)))
 
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(['Week Of', 'Income', 'Traffic Fines', 'Facilitation Fees', 'Workshop', 'Wages',
-                'Other Expenditure', 'Total Expenditure', 'Cash Deposited', 'Variance', 'Description'])
-    for e in entries:
-        w.writerow([e.week_start, f'{e.income:.2f}', f'{e.exp_traffic_fines:.2f}', f'{e.exp_facilitation_fees:.2f}',
-                    f'{e.exp_workshop:.2f}', f'{e.exp_wages:.2f}', f'{e.other_expenditure:.2f}',
-                    f'{e.total_expenditure:.2f}', f'{e.deposited:.2f}', f'{e.variance:.2f}', e.description or ''])
-    out.seek(0)
-    resp = make_response(out.getvalue())
-    resp.headers['Content-Type'] = 'text/csv'
+    header = ['Week Of', 'Income', 'Traffic Fines', 'Facilitation Fees', 'Workshop', 'Wages',
+              'Other Expenditure', 'Total Expenditure', 'Cash Deposited', 'Variance', 'Description']
+    rows = [[e.week_start, f'{e.income:.2f}', f'{e.exp_traffic_fines:.2f}', f'{e.exp_facilitation_fees:.2f}',
+             f'{e.exp_workshop:.2f}', f'{e.exp_wages:.2f}', f'{e.other_expenditure:.2f}',
+             f'{e.total_expenditure:.2f}', f'{e.deposited:.2f}', f'{e.variance:.2f}', e.description or '']
+            for e in entries]
+
     label = vehicle.number_plate.replace(' ', '_') if vehicle else 'shared_expenditure'
-    resp.headers['Content-Disposition'] = f'attachment; filename={label}_weekly_income_{period}_{date.today()}.csv'
-    return resp
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'{label}_weekly_income_{period}_{date.today()}.pdf',
+            'Franchise Weekly Income', f'Period: {df} to {dt}', header, rows)
+    return csv_export_response(f'{label}_weekly_income_{period}_{date.today()}.csv', header, rows)
 
 
 @app.route('/franchise/weekly-income/<int:eid>/delete', methods=['POST'])
@@ -8881,8 +9021,11 @@ def franchise_operational_expenses_export():
         FranchiseOperationalExpense.expense_date.between(df, dt)
     ).order_by(FranchiseOperationalExpense.expense_date.asc()).all()
     rows = [[e.expense_date, e.category.name, e.description or '', f'{e.amount:.2f}'] for e in expenses]
-    return csv_export_response(f'franchise_operational_expenses_{df}_to_{dt}.csv',
-        ['Date', 'Sub-heading', 'Description', 'Amount'], rows)
+    header = ['Date', 'Sub-heading', 'Description', 'Amount']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'franchise_operational_expenses_{df}_to_{dt}.pdf',
+            'Franchise Operational Expenses', f'Period: {df} to {dt}', header, rows)
+    return csv_export_response(f'franchise_operational_expenses_{df}_to_{dt}.csv', header, rows)
 
 
 @app.route('/franchise/operational-expenses/add', methods=['POST'])
@@ -9306,7 +9449,7 @@ def franchise_vehicle_add():
 
 @app.route('/franchise/vehicles/quick-add', methods=['POST'])
 @login_required
-@permission_required('franchise')
+@permission_required_any('franchise', 'franchise_entry')
 def franchise_vehicle_quick_add():
     """Inline "+ New Vehicle" registration from the Daily/Weekly Income
     pages (both the By Vehicle picker and the By Date/Week all-vehicles
@@ -9322,12 +9465,18 @@ def franchise_vehicle_quick_add():
     (e.g. a plate that's already registered) back onto this same POST-only
     path and 405 instead of showing the error, taking the duplicate-plate
     message from check_unique with it."""
+    # A franchise_entry-only clerk has no access to the Daily/Weekly Income
+    # list pages at all (see franchise_my_collections) — quick-add reached
+    # from their own page always bounces back there instead.
+    entry_only = not current_user.has_permission('franchise')
     kind = request.form.get('kind') if request.form.get('kind') in ('daily', 'weekly') else 'daily'
     period = request.form.get('period', 'month')
     view = request.form.get('view', '')
     endpoint = 'franchise_weekly_income_list' if kind == 'weekly' else 'franchise_daily_income_list'
 
     def back_to_list(**extra):
+        if entry_only:
+            return redirect(url_for('franchise_my_collections'))
         params = {'period': period, **extra}
         if view == 'date':
             params['view'] = 'date'
@@ -9370,7 +9519,7 @@ def franchise_vehicle_quick_add():
     # From the By Date/Week listing, stay there (the new vehicle now shows
     # up in it, ready to have today's/this week's entry filled in) rather
     # than jumping to its own, currently-empty By Vehicle tab.
-    if view == 'date':
+    if entry_only or view == 'date':
         return back_to_list()
     return redirect(url_for(endpoint, vehicle_id=vehicle.id, period=period))
 
@@ -9555,6 +9704,27 @@ def _group_income_by_period(entries, period_attr):
     ]
 
 
+def _apply_suspense_clearance(rows, source_type, date_from, date_to):
+    """Zeroes out the variance on any row whose period has been cleared in
+    the Suspense Account (see franchise_suspense_resolve) — once an admin
+    has investigated and explained a discrepancy there, it's resolved and
+    the reconciliation schedule should no longer report it as outstanding.
+    The original figure is kept as raw_variance so cleared rows can still
+    show what was cleared, and rows gain a `cleared` flag for display."""
+    resolutions = {
+        r.period_date
+        for r in FranchiseSuspenseResolution.query.filter(
+            FranchiseSuspenseResolution.source_type == source_type,
+            FranchiseSuspenseResolution.period_date.between(date_from, date_to)).all()
+    }
+    for r in rows:
+        r['raw_variance'] = r['variance']
+        r['cleared'] = r['period'] in resolutions
+        if r['cleared']:
+            r['variance'] = 0.0
+    return rows
+
+
 @app.route('/reports/franchise/reconciliation')
 @login_required
 @permission_required('franchise')
@@ -9576,11 +9746,13 @@ def report_franchise_reconciliation():
     daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
 
-    daily_rows = _group_income_by_period(daily_entries, 'entry_date')
-    weekly_rows = _group_income_by_period(weekly_entries, 'week_start')
+    daily_rows = _apply_suspense_clearance(_group_income_by_period(daily_entries, 'entry_date'), 'daily', df, dt)
+    weekly_rows = _apply_suspense_clearance(_group_income_by_period(weekly_entries, 'week_start'), 'weekly', df, dt)
 
     daily_totals = _income_entry_totals(daily_entries)
+    daily_totals['variance'] = sum(r['variance'] for r in daily_rows)
     weekly_totals = _income_entry_totals(weekly_entries)
+    weekly_totals['variance'] = sum(r['variance'] for r in weekly_rows)
     combined_totals = {k: daily_totals[k] + weekly_totals[k] for k in daily_totals}
     combined_totals['net_profit'] = combined_totals['income'] - combined_totals['total_expenditure']
 
@@ -9619,10 +9791,12 @@ def report_franchise_reconciliation_export():
     daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
 
-    daily_rows = _group_income_by_period(daily_entries, 'entry_date')
-    weekly_rows = _group_income_by_period(weekly_entries, 'week_start')
+    daily_rows = _apply_suspense_clearance(_group_income_by_period(daily_entries, 'entry_date'), 'daily', df, dt)
+    weekly_rows = _apply_suspense_clearance(_group_income_by_period(weekly_entries, 'week_start'), 'weekly', df, dt)
     daily_totals = _income_entry_totals(daily_entries)
+    daily_totals['variance'] = sum(r['variance'] for r in daily_rows)
     weekly_totals = _income_entry_totals(weekly_entries)
+    weekly_totals['variance'] = sum(r['variance'] for r in weekly_rows)
 
     days = {}
     for e in daily_entries:
@@ -9645,6 +9819,23 @@ def report_franchise_reconciliation_export():
         return ['TOTAL', f"{t['income']:.2f}", f"{t['exp_traffic_fines']:.2f}", f"{t['exp_facilitation_fees']:.2f}",
                 f"{t['exp_workshop']:.2f}", f"{t['exp_wages']:.2f}", f"{t['other_expenditure']:.2f}",
                 f"{t['cash_in_hand']:.2f}", f"{t['deposited']:.2f}", f"{t['variance']:.2f}"]
+
+    if request.args.get('format') == 'pdf':
+        styles = _pdf_styles()
+        flowables = [
+            Paragraph('Day by Day', styles['Heading3']), Spacer(1, 4),
+            _pdf_table([['Date', 'Day', 'Daily Income', 'Weekly Income', 'Total Income']] + day_by_day_rows +
+                      [['TOTAL', '', f"{day_totals['daily']:.2f}", f"{day_totals['weekly']:.2f}",
+                        f"{day_totals['daily'] + day_totals['weekly']:.2f}"]]),
+            Spacer(1, 14),
+            Paragraph('Daily Reconciliation Schedule', styles['Heading3']), Spacer(1, 4),
+            _pdf_table([schedule_header] + [schedule_row(r) for r in daily_rows] + [schedule_total_row(daily_totals)]),
+            Spacer(1, 14),
+            Paragraph('Weekly Reconciliation Schedule', styles['Heading3']), Spacer(1, 4),
+            _pdf_table([schedule_header] + [schedule_row(r) for r in weekly_rows] + [schedule_total_row(weekly_totals)]),
+        ]
+        elements = _pdf_section('Franchise Collection Reconciliation Schedule', f'Period: {df} to {dt}', flowables)
+        return _pdf_response(f'franchise_reconciliation_{df}_to_{dt}.pdf', elements, pagesize=landscape(A4))
 
     out = io.StringIO()
     w = csv.writer(out)
@@ -9700,32 +9891,38 @@ def franchise_suspense_account():
     manually investigates and clears them; nothing here reconciles itself
     automatically. The variance figures are always recomputed live from
     the source income entries (see _group_income_by_period) — only the
-    clearance itself (FranchiseSuspenseResolution) is persisted."""
+    clearance itself (FranchiseSuspenseResolution) is persisted.
+
+    Cleared rows are kept as a permanent history independent of the live
+    >0.01 variance filter: once a period is resolved it stays listed under
+    Cleared for as long as the FranchiseSuspenseResolution row exists, even
+    if later edits to its source entries happen to bring the live variance
+    back to ~0 (which would otherwise silently drop it from both tables)."""
     df, dt = query_date_range()
     daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
 
-    daily_rows = [r for r in _group_income_by_period(daily_entries, 'entry_date') if abs(r['variance']) > 0.01]
-    weekly_rows = [r for r in _group_income_by_period(weekly_entries, 'week_start') if abs(r['variance']) > 0.01]
+    daily_by_period = {r['period']: r for r in _group_income_by_period(daily_entries, 'entry_date')}
+    weekly_by_period = {r['period']: r for r in _group_income_by_period(weekly_entries, 'week_start')}
 
-    resolutions = {
-        (r.source_type, r.period_date): r
-        for r in FranchiseSuspenseResolution.query.filter(
-            FranchiseSuspenseResolution.period_date.between(df, dt)).all()
-    }
+    resolutions = FranchiseSuspenseResolution.query.filter(
+        FranchiseSuspenseResolution.period_date.between(df, dt)).all()
+    resolutions_by_type = {'daily': {}, 'weekly': {}}
+    for r in resolutions:
+        resolutions_by_type[r.source_type][r.period_date] = r
 
-    def split(rows, source_type):
-        open_rows, cleared_rows = [], []
-        for r in rows:
-            resolution = resolutions.get((source_type, r['period']))
-            if resolution:
-                cleared_rows.append(dict(r, resolution=resolution))
-            else:
-                open_rows.append(r)
+    def split(rows_by_period, source_type):
+        resolved = resolutions_by_type[source_type]
+        open_rows = [r for period, r in rows_by_period.items()
+                     if abs(r['variance']) > 0.01 and period not in resolved]
+        cleared_rows = [dict(rows_by_period.get(period, dict(period=period)), resolution=resolution)
+                        for period, resolution in resolved.items()]
+        open_rows.sort(key=lambda r: r['period'])
+        cleared_rows.sort(key=lambda r: r['period'])
         return open_rows, cleared_rows
 
-    daily_open, daily_cleared = split(daily_rows, 'daily')
-    weekly_open, weekly_cleared = split(weekly_rows, 'weekly')
+    daily_open, daily_cleared = split(daily_by_period, 'daily')
+    weekly_open, weekly_cleared = split(weekly_by_period, 'weekly')
     open_balance = sum(r['variance'] for r in daily_open) + sum(r['variance'] for r in weekly_open)
 
     return render_template('franchise/suspense_account.html',
@@ -9883,9 +10080,12 @@ def report_franchise_dual_frequency_export():
                      len(d_entries), f"{d_totals['income']:.2f}", len(w_entries), f"{w_totals['income']:.2f}",
                      f"{d_totals['income'] + w_totals['income']:.2f}"])
     rows.sort(key=lambda r: r[0])
-    return csv_export_response(f'franchise_dual_frequency_{df}_to_{dt}.csv',
-        ['Number Plate', 'Franchisee', 'Paid Via', 'Daily Entries', 'Daily Income',
-         'Weekly Entries', 'Weekly Income', 'Total Income'], rows)
+    header = ['Number Plate', 'Franchisee', 'Paid Via', 'Daily Entries', 'Daily Income',
+              'Weekly Entries', 'Weekly Income', 'Total Income']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'franchise_dual_frequency_{df}_to_{dt}.pdf', 'Franchise Daily & Weekly Payers',
+            f'Period: {df} to {dt}', header, rows)
+    return csv_export_response(f'franchise_dual_frequency_{df}_to_{dt}.csv', header, rows)
 
 
 @app.route('/reports/franchise/daily-defaulters')
@@ -9994,9 +10194,12 @@ def report_franchise_daily_defaulters_export():
                      max(missed_dates) if missed_dates else ''])
     rows.sort(key=lambda r: (-r[5], r[0]))
 
-    return csv_export_response(f'franchise_daily_defaulters_{df}_to_{dt}.csv',
-        ['Number Plate', 'Franchisee', 'Daily Fee', 'Days Due', 'Days Paid', 'Days Missed',
-         'Expected', 'Collected', 'Shortfall', 'Last Missed Date'], rows)
+    header = ['Number Plate', 'Franchisee', 'Daily Fee', 'Days Due', 'Days Paid', 'Days Missed',
+              'Expected', 'Collected', 'Shortfall', 'Last Missed Date']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'franchise_daily_defaulters_{df}_to_{dt}.pdf', 'Franchise Daily Fee Defaulters',
+            f'Period: {df} to {dt}', header, rows)
+    return csv_export_response(f'franchise_daily_defaulters_{df}_to_{dt}.csv', header, rows)
 
 
 @app.route('/reports/franchise/weekly')
@@ -10082,8 +10285,11 @@ def report_franchise_weekly_export():
                      f"{weekly_totals['income']:.2f}", f"{daily_totals['income'] + weekly_totals['income']:.2f}",
                      f"{daily_totals['total_expenditure'] + weekly_totals['total_expenditure']:.2f}",
                      f"{(daily_totals['income'] + weekly_totals['income']) - (daily_totals['total_expenditure'] + weekly_totals['total_expenditure']):.2f}"])
-    return csv_export_response(f'franchise_weekly_analysis_{df}_to_{dt}.csv',
-        ['Week Start', 'Week End', 'Daily Income', 'Weekly Income', 'Total Income', 'Total Expenditure', 'Net Profit'], rows)
+    header = ['Week Start', 'Week End', 'Daily Income', 'Weekly Income', 'Total Income', 'Total Expenditure', 'Net Profit']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'franchise_weekly_analysis_{df}_to_{dt}.pdf', 'Franchise Weekly Analysis',
+            f'Period: {df} to {dt}', header, rows)
+    return csv_export_response(f'franchise_weekly_analysis_{df}_to_{dt}.csv', header, rows)
 
 
 @app.route('/reports/franchise/consolidated')
@@ -10156,7 +10362,11 @@ def report_franchise_consolidated_export():
     rows.append(['Net Profit', f"{totals['income'] - totals['total_expenditure'] - total_operational_expenses:.2f}"])
     rows.append(['Cash Deposited', f"{totals['deposited']:.2f}"])
     rows.append(['Variance', f"{totals['variance']:.2f}"])
-    return csv_export_response(f'franchise_consolidated_pl_{df}_to_{dt}.csv', ['Line Item', 'Amount'], rows)
+    header = ['Line Item', 'Amount']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'franchise_consolidated_pl_{df}_to_{dt}.pdf', 'Consolidated Franchise P&L Statement',
+            f'Period: {df} to {dt}', header, rows)
+    return csv_export_response(f'franchise_consolidated_pl_{df}_to_{dt}.csv', header, rows)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -10260,8 +10470,11 @@ def report_fleet_reconciliation_export():
                  f"{r['deposited']:.2f}", f"{r['variance']:.2f}"] for r in rows]
     out_rows.append(['TOTAL', f"{totals['income']:.2f}", f"{totals['expenses']:.2f}", f"{totals['net_income']:.2f}",
                       f"{totals['deposited']:.2f}", f"{totals['variance']:.2f}"])
-    return csv_export_response(f'fleet_reconciliation_{df}_to_{dt}.csv',
-        ['Driver', 'Income', 'Expenses', 'Net Income', 'Cash Deposited', 'Variance'], out_rows)
+    header = ['Driver', 'Income', 'Expenses', 'Net Income', 'Cash Deposited', 'Variance']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'fleet_reconciliation_{df}_to_{dt}.pdf', 'Fleet Reconciliation',
+            f'Period: {df} to {dt}', header, out_rows)
+    return csv_export_response(f'fleet_reconciliation_{df}_to_{dt}.csv', header, out_rows)
 
 
 @app.route('/reports/fleet/consolidated')
@@ -10284,8 +10497,11 @@ def report_fleet_consolidated_export():
                  f"{r['deposited']:.2f}", f"{r['variance']:.2f}"] for r in rows]
     out_rows.append(['TOTAL', f"{totals['income']:.2f}", f"{totals['expenses']:.2f}", f"{totals['net_income']:.2f}",
                       f"{totals['deposited']:.2f}", f"{totals['variance']:.2f}"])
-    return csv_export_response(f'fleet_consolidated_{df}_to_{dt}.csv',
-        ['Vehicle', 'Income', 'Expenses', 'Net Income', 'Cash Deposited', 'Variance'], out_rows)
+    header = ['Vehicle', 'Income', 'Expenses', 'Net Income', 'Cash Deposited', 'Variance']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'fleet_consolidated_{df}_to_{dt}.pdf', 'Fleet Reconciliation (by Vehicle)',
+            f'Period: {df} to {dt}', header, out_rows)
+    return csv_export_response(f'fleet_consolidated_{df}_to_{dt}.csv', header, out_rows)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -10353,8 +10569,11 @@ def compliance_export():
 
     rows = [[e['vehicle'].registration, e['doc_type'], e['reference_number'] or '',
              e['issue_date'] or '', e['expiry_date'], status(e['expiry_date'])] for e in entries]
-    return csv_export_response(f'compliance_documents_{today}.csv',
-        ['Vehicle', 'Document Type', 'Reference Number', 'Issue Date', 'Expiry Date', 'Status'], rows)
+    header = ['Vehicle', 'Document Type', 'Reference Number', 'Issue Date', 'Expiry Date', 'Status']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'compliance_documents_{today}.pdf', 'Compliance Documents',
+            f'As at {today}', header, rows)
+    return csv_export_response(f'compliance_documents_{today}.csv', header, rows)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -10381,11 +10600,29 @@ def user_add():
         email = request.form['email'].strip().lower()
         check_unique(User, 'username', username)
         check_unique(User, 'email', email)
+        # 'role' is otherwise a free-text label (see users/form.html's
+        # "Other — type a custom role…" option) — only the exact value
+        # 'admin' has any special meaning to the app (User.has_permission's
+        # full-access bypass, admin_required); everything else grants
+        # nothing on its own and is scoped entirely by the permissions
+        # list below, set on the Permissions page after creation.
+        role_preset = request.form.get('role_preset', 'manager')
+        role = request.form.get('role_custom', '').strip() if role_preset == '__custom__' else role_preset
+        if not role:
+            role = 'manager'
+        if role.lower() == 'admin':
+            role = 'admin'
         u = User(
             username=username,
             email=email,
-            role=request.form.get('role', 'manager'),
+            role=role,
         )
+        # The Franchise Clerk preset is pre-seeded with the franchise_entry
+        # permission so it works immediately without a second trip to the
+        # Permissions page — every other role/preset still starts with no
+        # access until an admin grants it there, same as before.
+        if role_preset == 'Franchise Clerk':
+            u.permissions = json.dumps(['franchise_entry'])
         u.set_password(password)
         db.session.add(u)
         db.session.flush()
@@ -10544,8 +10781,10 @@ def audit_log_export():
     rows = [[l.timestamp.strftime('%Y-%m-%d %H:%M:%S'), l.user.username if l.user else 'System',
              l.action, l.table_name or '', l.record_id or '', l.description or '', l.ip_address or '']
             for l in logs]
-    return csv_export_response(f'audit_log_{date.today()}.csv',
-        ['Timestamp', 'User', 'Action', 'Table', 'Record ID', 'Description', 'IP'], rows)
+    header = ['Timestamp', 'User', 'Action', 'Table', 'Record ID', 'Description', 'IP']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'audit_log_{date.today()}.pdf', 'Audit Log', f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'audit_log_{date.today()}.csv', header, rows)
 
 
 # ─────────────────────────────────────────────────────────────
