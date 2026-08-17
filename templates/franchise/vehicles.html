@@ -24,8 +24,28 @@
 
 <div class="card">
   {% if vehicles %}
+  <div class="filter-bar mb-16">
+    <div class="form-group" style="min-width:240px;">
+      <label>Search</label>
+      <input type="text" id="vehicle-search" placeholder="Number plate or franchisee…">
+    </div>
+    <div class="form-group">
+      <label>Status</label>
+      <select id="vehicle-status-filter">
+        <option value="">All</option>
+        <option value="active">Active</option>
+        <option value="inactive">Inactive</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>&nbsp;</label>
+      <label style="display:flex;align-items:center;gap:6px;font-weight:400;height:38px;">
+        <input type="checkbox" id="vehicle-needs-review-filter"> Needs Review only
+      </label>
+    </div>
+  </div>
   <div class="table-wrap">
-    <table>
+    <table id="vehicle-table">
       <thead>
         <tr>
           <th>Number Plate</th>
@@ -41,7 +61,7 @@
       </thead>
       <tbody>
         {% for v in vehicles %}
-        <tr>
+        <tr data-search="{{ (v.number_plate ~ ' ' ~ v.franchisee_name)|lower }}" data-status="{{ v.status }}" data-pending="{{ '1' if v.pending_review else '0' }}">
           <td>{{ v.number_plate }} {% if v.pending_review %}<span class="badge badge-amber" title="Quick-registered — details not yet reviewed">Needs Review</span>{% endif %}</td>
           <td>{{ v.franchisee_name }}</td>
           <td><span class="badge {% if v.status == 'active' %}badge-green{% else %}badge-gray{% endif %}">{{ v.status|capitalize }}</span></td>
@@ -70,7 +90,39 @@
         {% endfor %}
       </tbody>
     </table>
+    <div class="empty-state" id="vehicle-filter-empty" style="display:none;">
+      <p>No vehicles match your search/filter.</p>
+    </div>
   </div>
+  <script>
+  (function () {
+    var search = document.getElementById('vehicle-search');
+    var statusFilter = document.getElementById('vehicle-status-filter');
+    var needsReview = document.getElementById('vehicle-needs-review-filter');
+    var rows = document.querySelectorAll('#vehicle-table tbody tr');
+    var emptyMsg = document.getElementById('vehicle-filter-empty');
+
+    function applyFilter() {
+      var q = (search.value || '').trim().toLowerCase();
+      var status = statusFilter.value;
+      var pendingOnly = needsReview.checked;
+      var visibleCount = 0;
+      rows.forEach(function (row) {
+        var matchesSearch = !q || row.getAttribute('data-search').indexOf(q) !== -1;
+        var matchesStatus = !status || row.getAttribute('data-status') === status;
+        var matchesPending = !pendingOnly || row.getAttribute('data-pending') === '1';
+        var visible = matchesSearch && matchesStatus && matchesPending;
+        row.style.display = visible ? '' : 'none';
+        if (visible) visibleCount++;
+      });
+      emptyMsg.style.display = visibleCount ? 'none' : '';
+    }
+
+    search.addEventListener('input', applyFilter);
+    statusFilter.addEventListener('change', applyFilter);
+    needsReview.addEventListener('change', applyFilter);
+  })();
+  </script>
   {% else %}
   <div class="empty-state">
     <div class="empty-icon">🚐</div>
