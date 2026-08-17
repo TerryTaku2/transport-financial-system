@@ -58,7 +58,7 @@
           <td class="text-right">{{ p.markup_percent|pct }}</td>
           <td class="text-right"><strong>{{ p.selling_price|currency }}</strong></td>
           <td class="text-right">
-            {{ p.quantity_on_hand }}
+            {{ p.quantity_on_hand|qty }}
             {% if p.status == 'active' and p.low_stock %}<span class="badge badge-red">Low</span>{% endif %}
           </td>
           <td>

@@ -28,13 +28,13 @@
           <select name="part_id" required data-refdata="parts">
             <option value="">Select part</option>
             {% for p in parts %}
-            <option value="{{ p.id }}" {% if purchase and purchase.part_id==p.id %}selected{% endif %}>{{ p.name }}{% if p.part_number %} ({{ p.part_number }}){% endif %} — {{ p.quantity_on_hand }} {{ p.unit }} on hand</option>
+            <option value="{{ p.id }}" {% if purchase and purchase.part_id==p.id %}selected{% endif %}>{{ p.name }}{% if p.part_number %} ({{ p.part_number }}){% endif %} — {{ p.quantity_on_hand|qty }} {{ p.unit }} on hand</option>
             {% endfor %}
           </select>
         </div>
         <div class="form-group">
           <label>Quantity<span class="req">*</span></label>
-          <input type="number" id="pur_qty" name="quantity" min="1" step="1" required value="{{ purchase.quantity if purchase }}">
+          <input type="number" id="pur_qty" name="quantity" min="0.01" step="0.01" required value="{{ purchase.quantity|qty if purchase }}">
         </div>
         <div class="form-group">
           <label>Unit Cost (USD)<span class="req">*</span></label>

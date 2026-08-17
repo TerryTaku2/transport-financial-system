@@ -52,7 +52,7 @@
         <tr>
           <td>{{ pu.purchase_date.strftime('%d %b %Y') }}</td>
           <td>{{ pu.part.name }}</td>
-          <td class="text-right">{{ pu.quantity }} {{ pu.part.unit }}</td>
+          <td class="text-right">{{ pu.quantity|qty }} {{ pu.part.unit }}</td>
           <td class="text-right">{{ pu.unit_cost|currency }}</td>
           <td class="text-right"><strong>{{ pu.total_cost|currency }}</strong></td>
           <td>{{ pu.supplier or '—' }}</td>

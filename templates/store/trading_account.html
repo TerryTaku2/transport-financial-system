@@ -118,7 +118,7 @@
         {% for row in part_breakdown %}
         <tr>
           <td><strong>{{ row.part.name }}</strong>{% if row.part.part_number %} <span class="form-hint">({{ row.part.part_number }})</span>{% endif %}</td>
-          <td class="text-right">{{ row.quantity }} {{ row.part.unit }}</td>
+          <td class="text-right">{{ row.quantity|qty }} {{ row.part.unit }}</td>
           <td class="text-right">{{ row.sales|currency }}</td>
           <td class="text-right">({{ row.cost_of_sales|currency }})</td>
           <td class="text-right {% if row.gross_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ row.gross_profit|currency }}</strong></td>

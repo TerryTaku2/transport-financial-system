@@ -41,7 +41,7 @@
         <tr>
           <td>{{ s.sale_date.strftime('%d %b %Y') }}</td>
           <td>{{ s.part.name }}</td>
-          <td class="text-right">{{ s.quantity }} {{ s.part.unit }}</td>
+          <td class="text-right">{{ s.quantity|qty }} {{ s.part.unit }}</td>
           <td class="text-right">{{ s.unit_price|currency }}</td>
           <td class="text-right"><strong>{{ s.total_amount|currency }}</strong></td>
           <td class="text-right" style="color:var(--success);">{{ s.profit|currency }}</td>

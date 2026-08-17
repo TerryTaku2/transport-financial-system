@@ -113,7 +113,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!salePart) return;
     var opt = salePart.options[salePart.selectedIndex];
     var price = opt ? parseFloat(opt.getAttribute('data-price')) || 0 : 0;
-    var stock = opt ? parseInt(opt.getAttribute('data-stock'), 10) || 0 : 0;
+    var stock = opt ? parseFloat(opt.getAttribute('data-stock')) || 0 : 0;
     if (salePrice && opt && opt.value) salePrice.value = price.toFixed(2);
     if (saleQty && opt && opt.value) saleQty.setAttribute('max', stock);
     if (saleStockHint) saleStockHint.textContent = opt && opt.value ? stock + ' in stock' : '';

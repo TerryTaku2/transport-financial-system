@@ -1249,7 +1249,7 @@ class SparePart(db.Model):
     # editable directly, it's a derived stock-valuation figure.
     cost_price = db.Column(db.Float, nullable=False, default=0.0)
     markup_percent = db.Column(db.Float, nullable=False, default=0.0)
-    quantity_on_hand = db.Column(db.Integer, nullable=False, default=0)
+    quantity_on_hand = db.Column(db.Float, nullable=False, default=0)
     reorder_level = db.Column(db.Integer, nullable=False, default=0)
     status = db.Column(db.String(20), default='active')
     notes = db.Column(db.Text)
@@ -1288,7 +1288,7 @@ class StorePurchase(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     part_id = db.Column(db.Integer, db.ForeignKey('spare_parts.id'), nullable=False)
     purchase_date = db.Column(db.Date, nullable=False, default=date.today)
-    quantity = db.Column(db.Integer, nullable=False)
+    quantity = db.Column(db.Float, nullable=False)
     unit_cost = db.Column(db.Float, nullable=False)
     total_cost = db.Column(db.Float, nullable=False)
     supplier = db.Column(db.String(100))
@@ -1319,7 +1319,7 @@ class StoreSale(db.Model):
     # exclusive with customer_name in practice, not enforced at the DB level.
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=True)
     sale_date = db.Column(db.Date, nullable=False, default=date.today)
-    quantity = db.Column(db.Integer, nullable=False)
+    quantity = db.Column(db.Float, nullable=False)
     unit_cost = db.Column(db.Float, nullable=False)
     unit_price = db.Column(db.Float, nullable=False)
     total_amount = db.Column(db.Float, nullable=False)
@@ -2357,9 +2357,9 @@ def import_stock_purchase_rows(file_rows, auto_create_parts=False):
                 raise ValueError('part name / part number is required.')
             if quantity_raw is None:
                 raise ValueError('Quantity is required.')
-            if quantity_raw <= 0 or quantity_raw != int(quantity_raw):
-                raise ValueError(f'Quantity "{quantity_raw}" must be a whole number greater than 0.')
-            quantity = int(quantity_raw)
+            if quantity_raw <= 0:
+                raise ValueError(f'Quantity "{quantity_raw}" must be greater than 0.')
+            quantity = quantity_raw
 
             unit_cost = parse_import_number(row.get('unit_cost'), 'Unit Cost')
             if unit_cost is None:
@@ -4671,7 +4671,7 @@ def store_purchases_export():
     if part_id:
         q = q.filter(StorePurchase.part_id == part_id)
     purchases = q.order_by(StorePurchase.purchase_date.desc()).all()
-    rows = [[p.purchase_date, p.part.name, p.quantity, f'{p.unit_cost:.2f}',
+    rows = [[p.purchase_date, p.part.name, qty_filter(p.quantity), f'{p.unit_cost:.2f}',
              f'{p.total_cost:.2f}', p.supplier or '', p.notes or ''] for p in purchases]
     return csv_export_response(f'store_purchases_{date.today()}.csv',
         ['Date', 'Part', 'Quantity', 'Unit Cost', 'Total Cost', 'Supplier', 'Notes'], rows)
@@ -4688,7 +4688,7 @@ def store_purchase_add():
             flash('Already recorded.', 'info')
             return redirect(url_for('store_purchases'))
         part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
-        quantity = form_int(request.form, 'quantity', min_value=1)
+        quantity = form_float(request.form, 'quantity', min_value=0.01)
         unit_cost = form_float(request.form, 'unit_cost', min_value=0)
 
         purchase = StorePurchase(
@@ -4730,7 +4730,7 @@ def store_purchase_edit(pid):
     purchase = StorePurchase.query.filter_by(id=pid).first_or_404()
     if request.method == 'POST':
         part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
-        quantity = form_int(request.form, 'quantity', min_value=1)
+        quantity = form_float(request.form, 'quantity', min_value=0.01)
         unit_cost = form_float(request.form, 'unit_cost', min_value=0)
 
         # Reverse this purchase's old quantity off whichever part it was
@@ -4903,7 +4903,7 @@ def store_sales_export():
     if part_id:
         q = q.filter(StoreSale.part_id == part_id)
     sales = q.order_by(StoreSale.sale_date.desc()).all()
-    rows = [[s.sale_date, s.part.name, s.quantity, f'{s.unit_cost:.2f}', f'{s.unit_price:.2f}',
+    rows = [[s.sale_date, s.part.name, qty_filter(s.quantity), f'{s.unit_cost:.2f}', f'{s.unit_price:.2f}',
              f'{s.total_amount:.2f}', s.vehicle.registration if s.vehicle else '',
              s.customer_name or '', s.notes or ''] for s in sales]
     return csv_export_response(f'store_sales_{date.today()}.csv',
@@ -4921,7 +4921,7 @@ def store_sale_add():
             flash('Already recorded.', 'info')
             return redirect(url_for('store_sales'))
         part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
-        quantity = form_int(request.form, 'quantity', min_value=1)
+        quantity = form_float(request.form, 'quantity', min_value=0.01)
         if quantity > part.quantity_on_hand:
             raise ValueError(f'Only {part.quantity_on_hand} {part.unit}(s) of {part.name} in stock.')
         unit_price = form_float(request.form, 'unit_price', required=False,
@@ -4970,7 +4970,7 @@ def store_sale_edit(sid):
     sale = StoreSale.query.filter_by(id=sid).first_or_404()
     if request.method == 'POST':
         part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
-        quantity = form_int(request.form, 'quantity', min_value=1)
+        quantity = form_float(request.form, 'quantity', min_value=0.01)
 
         # Put the old sale's quantity back onto its old part before checking
         # stock for the new quantity/part — same reversal approach as
@@ -10977,7 +10977,7 @@ def api_refdata():
         label = p.name
         if p.part_number:
             label += f' ({p.part_number})'
-        label += f' — {p.quantity_on_hand} {p.unit} in stock'
+        label += f' — {qty_filter(p.quantity_on_hand)} {p.unit} in stock'
         return label
 
     expense_categories = []
@@ -12198,6 +12198,18 @@ def pct_filter(value):
     return f'{value:.1f}%' if value is not None else '0.0%'
 
 
+@app.template_filter('qty')
+def qty_filter(value):
+    """Formats a store quantity that may now carry a fractional part (e.g.
+    2.5 litres of oil) without showing a pointless '.0' on whole numbers."""
+    if value is None:
+        return '0'
+    value = float(value)
+    if value == int(value):
+        return str(int(value))
+    return f'{value:.2f}'.rstrip('0').rstrip('.')
+
+
 @app.template_filter('pretty_json')
 def pretty_json_filter(value):
     """Used on sync/conflicts.html to render SyncConflict's stored payload
@@ -12256,6 +12268,19 @@ def migrate_db():
             if 'vehicle_id' not in store_sale_cols:
                 conn.execute(text(
                     "ALTER TABLE store_sales ADD COLUMN vehicle_id INTEGER REFERENCES vehicles(id)"))
+
+        # Store quantities can now be fractional (e.g. 2.5 litres of oil sold
+        # from a bulk container) instead of being forced to whole units.
+        # SQLite columns are type-affinity only and already accept floats in
+        # an INTEGER-declared column, so only Postgres — which enforces the
+        # declared type strictly — needs an explicit ALTER here.
+        if db.engine.name == 'postgresql':
+            for qty_table, qty_column in (('spare_parts', 'quantity_on_hand'),
+                                          ('store_purchases', 'quantity'),
+                                          ('store_sales', 'quantity')):
+                qty_col = next((c for c in inspector.get_columns(qty_table) if c['name'] == qty_column), None)
+                if qty_col is not None and isinstance(qty_col['type'], db.Integer):
+                    conn.execute(text(f"ALTER TABLE {qty_table} ALTER COLUMN {qty_column} TYPE DOUBLE PRECISION"))
 
         driver_cols = inspector.get_columns('drivers')
         driver_col_names = [c['name'] for c in driver_cols]
