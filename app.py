@@ -1212,6 +1212,30 @@ class FranchiseOperationalExpense(db.Model):
     category = db.relationship('FranchiseExpenseCategory')
 
 
+class FranchiseSuspenseResolution(db.Model):
+    """Tracks manual clearance of a daily/weekly franchise reconciliation
+    variance (see report_franchise_reconciliation / franchise_suspense_
+    account) — the variance itself is never stored here, it's always
+    recomputed live from FranchiseDailyIncome/FranchiseWeeklyIncome via
+    _group_income_by_period, so this table can never drift out of sync
+    with the source entries. A (source_type, period_date) pair with no row
+    here is still open/unreconciled. Deliberately has no offline-sync
+    fields, like AuditLog/ImportBatch above — this is a Central-side admin
+    control record, not a synced business transaction."""
+    __tablename__ = 'franchise_suspense_resolutions'
+    __table_args__ = (db.UniqueConstraint('source_type', 'period_date',
+                                          name='uq_franchise_suspense_source_period'),)
+    id = db.Column(db.Integer, primary_key=True)
+    source_type = db.Column(db.String(10), nullable=False)  # 'daily' | 'weekly'
+    period_date = db.Column(db.Date, nullable=False)        # entry_date or week_start
+    resolved_amount = db.Column(db.Float, nullable=False)   # variance snapshot at resolve time
+    notes = db.Column(db.Text, nullable=False)
+    resolved_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    resolved_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    resolver = db.relationship('User')
+
+
 class MaintenanceSchedule(db.Model):
     __tablename__ = 'maintenance_schedules'
     id = db.Column(db.Integer, primary_key=True)
@@ -9654,6 +9678,117 @@ def report_franchise_reconciliation_export():
     resp.headers['Content-Type'] = 'text/csv'
     resp.headers['Content-Disposition'] = f'attachment; filename=franchise_reconciliation_{df}_to_{dt}.csv'
     return resp
+
+
+def _franchise_suspense_variance(source_type, period_date):
+    """Recomputes a single date's/week's reconciliation variance the same
+    way report_franchise_reconciliation does (via _group_income_by_period),
+    scoped to just that one period_date — used when resolving a suspense
+    item, so the amount snapshotted is always current, never stale."""
+    model_cls = FranchiseDailyIncome if source_type == 'daily' else FranchiseWeeklyIncome
+    date_field = 'entry_date' if source_type == 'daily' else 'week_start'
+    entries = model_cls.query.filter(getattr(model_cls, date_field) == period_date).all()
+    return _income_entry_totals(entries)['variance']
+
+
+@app.route('/franchise/suspense-account')
+@login_required
+@permission_required('franchise')
+def franchise_suspense_account():
+    """Suspense Account — daily/weekly reconciliation variances (see
+    report_franchise_reconciliation) sit here as 'open' until an admin
+    manually investigates and clears them; nothing here reconciles itself
+    automatically. The variance figures are always recomputed live from
+    the source income entries (see _group_income_by_period) — only the
+    clearance itself (FranchiseSuspenseResolution) is persisted."""
+    df, dt = query_date_range()
+    daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
+    weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
+
+    daily_rows = [r for r in _group_income_by_period(daily_entries, 'entry_date') if abs(r['variance']) > 0.01]
+    weekly_rows = [r for r in _group_income_by_period(weekly_entries, 'week_start') if abs(r['variance']) > 0.01]
+
+    resolutions = {
+        (r.source_type, r.period_date): r
+        for r in FranchiseSuspenseResolution.query.filter(
+            FranchiseSuspenseResolution.period_date.between(df, dt)).all()
+    }
+
+    def split(rows, source_type):
+        open_rows, cleared_rows = [], []
+        for r in rows:
+            resolution = resolutions.get((source_type, r['period']))
+            if resolution:
+                cleared_rows.append(dict(r, resolution=resolution))
+            else:
+                open_rows.append(r)
+        return open_rows, cleared_rows
+
+    daily_open, daily_cleared = split(daily_rows, 'daily')
+    weekly_open, weekly_cleared = split(weekly_rows, 'weekly')
+    open_balance = sum(r['variance'] for r in daily_open) + sum(r['variance'] for r in weekly_open)
+
+    return render_template('franchise/suspense_account.html',
+                           daily_open=daily_open, daily_cleared=daily_cleared,
+                           weekly_open=weekly_open, weekly_cleared=weekly_cleared,
+                           open_balance=open_balance,
+                           open_count=len(daily_open) + len(weekly_open),
+                           cleared_count=len(daily_cleared) + len(weekly_cleared),
+                           date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'))
+
+
+@app.route('/franchise/suspense-account/<source_type>/<period_date>/resolve', methods=['POST'])
+@login_required
+@admin_required
+def franchise_suspense_resolve(source_type, period_date):
+    if source_type not in ('daily', 'weekly'):
+        abort(404)
+    period_date = parse_date(period_date)
+    notes = request.form.get('notes', '').strip()
+    date_from = request.form.get('date_from', '')
+    date_to = request.form.get('date_to', '')
+    if not notes:
+        flash('Explain the discrepancy before clearing it.', 'danger')
+        return redirect(url_for('franchise_suspense_account', date_from=date_from, date_to=date_to))
+
+    resolution = FranchiseSuspenseResolution.query.filter_by(
+        source_type=source_type, period_date=period_date).first()
+    amount = _franchise_suspense_variance(source_type, period_date)
+    if resolution:
+        resolution.notes = notes
+        resolution.resolved_amount = amount
+        resolution.resolved_by = current_user.id
+        resolution.resolved_at = datetime.now(timezone.utc)
+    else:
+        resolution = FranchiseSuspenseResolution(
+            source_type=source_type, period_date=period_date, resolved_amount=amount,
+            notes=notes, resolved_by=current_user.id)
+        db.session.add(resolution)
+    db.session.flush()
+    log_audit('UPDATE', 'franchise_suspense_resolutions', resolution.id,
+              f'Cleared {source_type} suspense item for {period_date} (variance {amount:.2f}): {notes}')
+    db.session.commit()
+    flash('Suspense item cleared.', 'success')
+    return redirect(url_for('franchise_suspense_account', date_from=date_from, date_to=date_to))
+
+
+@app.route('/franchise/suspense-account/<source_type>/<period_date>/reopen', methods=['POST'])
+@login_required
+@admin_required
+def franchise_suspense_reopen(source_type, period_date):
+    if source_type not in ('daily', 'weekly'):
+        abort(404)
+    period_date = parse_date(period_date)
+    date_from = request.form.get('date_from', '')
+    date_to = request.form.get('date_to', '')
+    resolution = FranchiseSuspenseResolution.query.filter_by(
+        source_type=source_type, period_date=period_date).first_or_404()
+    log_audit('DELETE', 'franchise_suspense_resolutions', resolution.id,
+              f'Reopened {source_type} suspense item for {period_date} (was cleared: {resolution.notes})')
+    db.session.delete(resolution)
+    db.session.commit()
+    flash('Suspense item reopened.', 'warning')
+    return redirect(url_for('franchise_suspense_account', date_from=date_from, date_to=date_to))
 
 
 @app.route('/reports/franchise/dual-frequency')

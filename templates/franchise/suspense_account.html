@@ -1,0 +1,148 @@
+{% extends 'base.html' %}
+{% block title %}Suspense Account{% endblock %}
+{% block page_title %}Franchise — Suspense Account{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Suspense Account</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; unreconciled daily/weekly variances, cleared manually only</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('report_franchise_reconciliation', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="list"></i> Reconciliation Schedule</a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid mb-24">
+  <div class="kpi-card {% if open_balance < 0 %}kpi-red{% else %}kpi-teal{% endif %}">
+    <div class="kpi-label">Open Suspense Balance</div>
+    <div class="kpi-value">{{ open_balance|currency }}</div>
+  </div>
+  <div class="kpi-card kpi-amber">
+    <div class="kpi-label">Open Items</div>
+    <div class="kpi-value">{{ open_count }}</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-label">Cleared This Period</div>
+    <div class="kpi-value">{{ cleared_count }}</div>
+  </div>
+</div>
+
+{% macro open_table(rows, source_type, period_label) %}
+{% if rows %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>{{ period_label }}</th>
+        <th class="text-right">Net Income [$]</th>
+        <th class="text-right">Cash Deposited [$]</th>
+        <th class="text-right">Variance [$]</th>
+        <th>Description</th>
+        {% if current_user.role == 'admin' %}<th></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.period }}</td>
+        <td class="text-right">{{ r.cash_in_hand|currency }}</td>
+        <td class="text-right">{{ r.deposited|currency }}</td>
+        <td class="text-right"><span class="{% if r.variance < 0 %}text-danger{% elif r.variance > 0 %}text-warning{% endif %}">{{ r.variance|currency }}</span></td>
+        <td>
+          {% if current_user.role == 'admin' %}
+          <form method="POST" action="{{ url_for('franchise_suspense_resolve', source_type=source_type, period_date=r.period) }}" style="display:flex;gap:4px;align-items:center;margin:0;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="date_from" value="{{ date_from }}">
+            <input type="hidden" name="date_to" value="{{ date_to }}">
+            <input type="text" name="notes" placeholder="Explain the discrepancy…" required style="flex:1;font-size:12px;padding:4px 6px;">
+            <button class="btn btn-outline btn-xs" title="Clear this suspense item">Clear</button>
+          </form>
+          {% else %}
+          <span style="color:var(--text-muted);">&mdash;</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state"><p>Nothing unreconciled for the selected period.</p></div>
+{% endif %}
+{% endmacro %}
+
+{% macro cleared_table(rows, source_type, period_label) %}
+{% if rows %}
+<div class="table-wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>{{ period_label }}</th>
+        <th class="text-right">Variance [$]</th>
+        <th>Cleared By</th>
+        <th>Cleared On</th>
+        <th>Notes</th>
+        {% if current_user.role == 'admin' %}<th></th>{% endif %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in rows %}
+      <tr>
+        <td>{{ r.period }}</td>
+        <td class="text-right">{{ r.resolution.resolved_amount|currency }}</td>
+        <td>{{ r.resolution.resolver.username if r.resolution.resolver else '—' }}</td>
+        <td>{{ r.resolution.resolved_at.strftime('%Y-%m-%d %H:%M') if r.resolution.resolved_at else '—' }}</td>
+        <td>{{ r.resolution.notes }}</td>
+        {% if current_user.role == 'admin' %}
+        <td>
+          <form method="POST" action="{{ url_for('franchise_suspense_reopen', source_type=source_type, period_date=r.period) }}" data-confirm="Reopen this suspense item?">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="date_from" value="{{ date_from }}">
+            <input type="hidden" name="date_to" value="{{ date_to }}">
+            <button class="btn btn-outline btn-xs">Reopen</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty-state"><p>No cleared suspense items for the selected period.</p></div>
+{% endif %}
+{% endmacro %}
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Daily &mdash; Open</h3></div>
+  {{ open_table(daily_open, 'daily', 'Date') }}
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Weekly &mdash; Open</h3></div>
+  {{ open_table(weekly_open, 'weekly', 'Week Of') }}
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Daily &mdash; Cleared</h3></div>
+  {{ cleared_table(daily_cleared, 'daily', 'Date') }}
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Weekly &mdash; Cleared</h3></div>
+  {{ cleared_table(weekly_cleared, 'weekly', 'Week Of') }}
+</div>
+{% endblock %}
