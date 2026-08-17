@@ -22,6 +22,29 @@ document.addEventListener('DOMContentLoaded', function () {
     });
   }
 
+  // ── Main content: remember scroll position across a form-submit page
+  // reload. Recording an entry on a long list (Franchise Collections,
+  // Daily/Weekly Income, etc.) POSTs and redirects back to the same page —
+  // the browser starts that fresh page scrolled to the top, forcing a
+  // rescroll down to keep working. Same idea as the sidebar scroll memory
+  // above, but keyed to the page itself and only armed by a form submit
+  // (not every navigation), so it doesn't fight the browser's own
+  // back/forward scroll restoration on ordinary link clicks. ──
+  var pageScrollKey = 'pageScrollTop:' + window.location.pathname;
+  var savedPageScroll = sessionStorage.getItem(pageScrollKey);
+  if (savedPageScroll !== null) {
+    sessionStorage.removeItem(pageScrollKey);
+    var restoreY = parseInt(savedPageScroll, 10) || 0;
+    window.scrollTo(0, restoreY);
+    // Re-apply after layout settles (icons/tables can still be reflowing).
+    requestAnimationFrame(function () { window.scrollTo(0, restoreY); });
+  }
+  document.addEventListener('submit', function (e) {
+    if (e.target && e.target.tagName === 'FORM') {
+      try { sessionStorage.setItem('pageScrollTop:' + window.location.pathname, window.scrollY); } catch (_) {}
+    }
+  }, true);
+
   // ── Mobile nav: hamburger toggle + backdrop ──
   var sidebarToggle = document.getElementById('sidebarToggle');
   var sidebarOverlay = document.getElementById('sidebarOverlay');
