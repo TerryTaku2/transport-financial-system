@@ -1020,6 +1020,7 @@ class FranchiseDailyIncome(db.Model):
         return (self.deposited or 0) - self.cash_in_hand
 
     vehicle = db.relationship('FranchiseVehicle')
+    creator = db.relationship('User', foreign_keys=[created_by])
 
 
 class FranchiseWeeklyIncome(db.Model):
@@ -1074,6 +1075,7 @@ class FranchiseWeeklyIncome(db.Model):
         return (self.deposited or 0) - self.cash_in_hand
 
     vehicle = db.relationship('FranchiseVehicle')
+    creator = db.relationship('User', foreign_keys=[created_by])
 
 
 class FranchiseVehicle(db.Model):

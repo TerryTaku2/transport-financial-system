@@ -405,6 +405,8 @@
           <th>Week Of</th>
           <th class="text-right">Income</th>
           <th>Description</th>
+          <th>Entered By</th>
+          <th>Entered At</th>
           {% if current_user.role == 'admin' %}
           <th></th>
           {% endif %}
@@ -416,6 +418,8 @@
           <td>{{ e.week_start }}</td>
           <td class="text-right">{{ e.income|currency }}</td>
           <td>{{ e.description or '—' }}</td>
+          <td>{{ e.creator.username if e.creator else '—' }}</td>
+          <td>{{ e.created_at.strftime('%Y-%m-%d %H:%M') if e.created_at else '—' }}</td>
           {% if current_user.role == 'admin' %}
           <td class="btn-group">
             <a href="{{ url_for('franchise_weekly_income_edit', eid=e.id) }}" class="btn btn-outline btn-xs">Edit</a>
