@@ -1395,7 +1395,7 @@ PERMISSIONS = {
     'finance':      'Finance Ledger — loans, payables, receivables, capital, expenses, budget',
     'store':        'Spares Store — parts inventory, purchases & marked-up sales',
     'franchise':    'Franchise Income — collection reconciliation entry & franchise P&L statements',
-    'franchise_entry': 'Franchise Collections (Clerk) — enter income & register vehicles only, no expenses, reports, or other franchise data',
+    'franchise_entry': 'Franchise Collections (Clerk) — enter income, register vehicles, and confirm vehicle payments; can see all clerks\' recorded income but not expenses, reports, or other franchise data',
 }
 
 PERMISSION_REDIRECTS = [
@@ -1471,6 +1471,7 @@ PRECACHE_PAGES = [
     ('franchise', 'franchise_operational_expenses_list'),
     ('franchise', 'report_franchise_consolidated'),
     ('franchise_entry', 'franchise_my_collections'),
+    ('franchise_entry', 'franchise_confirm_payments'),
     ('store', 'store_parts'),
     ('store', 'store_purchases'),
     ('store', 'store_sales'),
@@ -8458,10 +8459,11 @@ def franchise_my_collections():
     """Restricted home page for a franchise_entry-only clerk (see PERMISSIONS)
     — record a collection against a vehicle (income only, no expenses/
     deposits — see franchise_daily_income_add/franchise_weekly_income_add),
-    register a new vehicle (franchise_vehicle_quick_add), and see only the
-    entries they personally created. Nothing else in Franchise is reachable
-    for this permission level — no reports, reconciliation, suspense
-    account, other vehicles' fees, or other users' entries. A full
+    register a new vehicle (franchise_vehicle_quick_add), see their own
+    recent entries, and see every clerk's recent entries (team_entries,
+    below) so they can tell who's already recorded what. Nothing else in
+    Franchise is reachable for this permission level — no reports,
+    reconciliation, suspense account, or other vehicles' fees. A full
     franchise-permission holder can also reach this page, but has no reason
     to since the full Daily/Weekly Income pages cover everything here and
     more."""
@@ -8474,45 +8476,105 @@ def franchise_my_collections():
         [dict(kind='Daily', period=e.entry_date, vehicle=e.vehicle, income=e.income) for e in my_daily] +
         [dict(kind='Weekly', period=e.week_start, vehicle=e.vehicle, income=e.income) for e in my_weekly],
         key=lambda r: r['period'], reverse=True)[:50]
+
+    # Every clerk's recorded collections, not just this one's — so a clerk
+    # can see what colleagues have recorded (who recorded what, and how
+    # much), same data as my_entries above but across all users. created_by
+    # is already populated on every entry (see franchise_daily_income_add /
+    # franchise_daily_income_bulk_fill), so this needs no schema change.
+    team_daily = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.vehicle_id.isnot(None)).order_by(
+        FranchiseDailyIncome.entry_date.desc()).limit(50).all()
+    team_weekly = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.vehicle_id.isnot(None)).order_by(
+        FranchiseWeeklyIncome.week_start.desc()).limit(50).all()
+    team_entries = sorted(
+        [dict(kind='Daily', period=e.entry_date, vehicle=e.vehicle, income=e.income,
+              recorded_by=e.creator.username if e.creator else '—') for e in team_daily] +
+        [dict(kind='Weekly', period=e.week_start, vehicle=e.vehicle, income=e.income,
+              recorded_by=e.creator.username if e.creator else '—') for e in team_weekly],
+        key=lambda r: r['period'], reverse=True)[:50]
+
     return render_template('franchise/my_collections.html', vehicles=vehicles, my_entries=my_entries,
-                           today=date.today().strftime('%Y-%m-%d'))
+                           team_entries=team_entries, today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/franchise/confirm-payments')
+@login_required
+@permission_required_any('franchise', 'franchise_entry')
+def franchise_confirm_payments():
+    """"Who's paid?" view for a franchise clerk — every active vehicle for
+    one date (or week) side by side, with a one-click Confirm for any
+    vehicle that hasn't paid yet. This is the franchise_entry-reachable
+    counterpart of the admin's "By Date"/"By Week" tab on
+    franchise_daily_income_list/franchise_weekly_income_list (same
+    _franchise_income_by_vehicle_on data), trimmed down to just
+    confirm/record — no fleet KPIs, shared expenditure, or delete, since a
+    franchise_entry-only clerk only ever enters/confirms income (see
+    PERMISSIONS). A full 'franchise' permission holder can reach this too
+    as a shortcut, but the By Date/By Week tab on the full Income pages
+    covers the same ground plus more."""
+    today = date.today()
+    all_vehicles = FranchiseVehicle.query.filter_by(status='active').order_by(FranchiseVehicle.number_plate).all()
+    kind = request.args.get('kind')
+    if kind not in ('daily', 'weekly'):
+        kind = 'daily'
+
+    if kind == 'weekly':
+        on_week_raw = parse_date(request.args.get('on_week')) or today
+        on_period = on_week_raw - timedelta(days=on_week_raw.weekday())
+        rows = _franchise_income_by_vehicle_on(FranchiseWeeklyIncome, 'week_start', on_period, all_vehicles,
+                                                end_date=on_period + timedelta(days=6))
+    else:
+        on_period = parse_date(request.args.get('on_date')) or today
+        rows = _franchise_income_by_vehicle_on(FranchiseDailyIncome, 'entry_date', on_period, all_vehicles)
+
+    total = sum(r['income'] for r in rows)
+    missing = sum(1 for r in rows if not r['entries'])
+    return render_template('franchise/confirm_payments.html', kind=kind,
+                           on_period=on_period.strftime('%Y-%m-%d'), rows=rows, total=total, missing=missing)
 
 
 @app.route('/franchise/daily-income/bulk-fill', methods=['POST'])
 @login_required
-@permission_required('franchise')
+@permission_required_any('franchise', 'franchise_entry')
 def franchise_daily_income_bulk_fill():
     """One-click alternative to picking each vehicle from the dropdown and
     submitting the Add Income form 100+ times over — most franchise vehicles
-    charge the same flat daily fee, so on the "By Date" view an admin can
-    fill many vehicles at once instead. Only fills vehicles explicitly
-    checked in vehicle_ids — the "By Date" table lists every vehicle
-    without an entry pre-checked, so an admin can uncheck the ones that
-    didn't run/pay that day (rather than everyone being forced to a flat fee
-    regardless of whether they were actually out that day). A vehicle with
-    its own agreed Daily Fee (see FranchiseVehicle.daily_fee) still gets
-    that fee rather than the typed amount — this only stands in for
-    vehicles without one, it never overrides an already-agreed rate.
+    charge the same flat daily fee, so on the "By Date" view an admin (or,
+    via franchise_confirm_payments, a franchise_entry-only clerk confirming
+    who's paid) can fill many vehicles at once instead. Only fills vehicles
+    explicitly checked in vehicle_ids — the "By Date" table lists every
+    vehicle without an entry pre-checked, so an admin can uncheck the ones
+    that didn't run/pay that day (rather than everyone being forced to a
+    flat fee regardless of whether they were actually out that day). A
+    vehicle with its own agreed Daily Fee (see FranchiseVehicle.daily_fee)
+    still gets that fee rather than the typed amount — this only stands in
+    for vehicles without one, it never overrides an already-agreed rate.
     Vehicles that already have a (non-deleted) entry for the date are
     skipped even if somehow checked, same as the single-entry Add form's
     own duplicate guard."""
+    entry_only = not current_user.has_permission('franchise')
+
+    def back(**kw):
+        if entry_only:
+            return redirect(url_for('franchise_confirm_payments', **kw))
+        return redirect(url_for('franchise_daily_income_list', view='date', **kw))
+
     period = request.form.get('period', 'month')
     try:
         on_date = parse_date(request.form['on_date'])
         amount = form_float(request.form, 'amount', label='Income amount', required=True, min_value=0)
     except KeyError as e:
         flash(f'Missing required field: {e}', 'danger')
-        return redirect(url_for('franchise_daily_income_list', view='date', period=period))
+        return back(period=period)
     except ValueError as e:
         flash(str(e), 'danger')
-        return redirect(url_for('franchise_daily_income_list', view='date', period=period))
+        return back(period=period)
 
     selected_ids = set(request.form.getlist('vehicle_ids', type=int))
     if not selected_ids:
         flash('No vehicles selected — check the vehicles to fill, or uncheck the ones that didn\'t pay '
               'that day, before submitting.', 'warning')
-        return redirect(url_for('franchise_daily_income_list', view='date',
-                                 on_date=on_date.strftime('%Y-%m-%d'), period=period))
+        return back(on_date=on_date.strftime('%Y-%m-%d'), period=period)
 
     vehicles = FranchiseVehicle.query.filter(FranchiseVehicle.id.in_(selected_ids), FranchiseVehicle.status == 'active').all()
     already_recorded = {e.vehicle_id for e in FranchiseDailyIncome.query
@@ -8525,6 +8587,7 @@ def franchise_daily_income_bulk_fill():
                                                                   FranchiseDailyIncome.deleted_at.isnot(None)).all()}
 
     filled = 0
+    filled_labels = []
     for v in vehicles:
         if v.id in already_recorded:
             continue
@@ -8538,6 +8601,7 @@ def franchise_daily_income_bulk_fill():
         entry.created_by = current_user.id
         touch_sync_fields(entry)
         filled += 1
+        filled_labels.append(v.number_plate)
 
     if filled:
         db.session.flush()
@@ -8545,11 +8609,16 @@ def franchise_daily_income_bulk_fill():
                   f'Bulk-filled daily income (default {amount}) for {filled} vehicle(s) without an entry on {on_date}')
         db.session.commit()
         flash(f'Recorded daily income for {filled} vehicle(s) on {on_date}.', 'success')
+        if entry_only:
+            notify_admins_whatsapp(
+                f'Franchise payment confirmed by {current_user.username}: '
+                f'{", ".join(filled_labels)} on {on_date}.'
+            )
     else:
         db.session.rollback()
         flash(f'No entries created — the selected vehicle(s) already have a daily income entry for {on_date}.', 'info')
 
-    return redirect(url_for('franchise_daily_income_list', view='date', on_date=on_date.strftime('%Y-%m-%d'), period=period))
+    return back(on_date=on_date.strftime('%Y-%m-%d'), period=period)
 
 
 @app.route('/franchise/daily-income/bulk-delete', methods=['POST'])
@@ -8813,27 +8882,36 @@ def franchise_weekly_income_add():
 
 @app.route('/franchise/weekly-income/bulk-fill', methods=['POST'])
 @login_required
-@permission_required('franchise')
+@permission_required_any('franchise', 'franchise_entry')
 def franchise_weekly_income_bulk_fill():
     """Bulk-fill weekly income for checked vehicles that don't already
     have an entry in the target week. Mirrors the daily bulk-fill's
-    behaviour but expands the week to [on_week, on_week+6] when checking
-    for existing entries so any entry inside the week counts as present."""
+    behaviour (including the franchise_entry-only clerk path via
+    franchise_confirm_payments) but expands the week to
+    [on_week, on_week+6] when checking for existing entries so any entry
+    inside the week counts as present."""
+    entry_only = not current_user.has_permission('franchise')
+
+    def back(**kw):
+        if entry_only:
+            return redirect(url_for('franchise_confirm_payments', kind='weekly', **kw))
+        return redirect(url_for('franchise_weekly_income_list', view='date', **kw))
+
     period = request.form.get('period', 'month')
     try:
         on_week = parse_date(request.form['on_week'])
         amount = form_float(request.form, 'amount', label='Income amount', required=True, min_value=0)
     except KeyError as e:
         flash(f'Missing required field: {e}', 'danger')
-        return redirect(url_for('franchise_weekly_income_list', view='date', period=period))
+        return back(period=period)
     except ValueError as e:
         flash(str(e), 'danger')
-        return redirect(url_for('franchise_weekly_income_list', view='date', period=period))
+        return back(period=period)
 
     selected_ids = set(request.form.getlist('vehicle_ids', type=int))
     if not selected_ids:
         flash('No vehicles selected — check the vehicles to fill before submitting.', 'warning')
-        return redirect(url_for('franchise_weekly_income_list', view='date', on_week=on_week.strftime('%Y-%m-%d'), period=period))
+        return back(on_week=on_week.strftime('%Y-%m-%d'), period=period)
 
     vehicles = FranchiseVehicle.query.filter(FranchiseVehicle.id.in_(selected_ids), FranchiseVehicle.status == 'active').all()
     # Any entry for that vehicle within the week counts as already recorded
@@ -8843,6 +8921,7 @@ def franchise_weekly_income_bulk_fill():
                          .filter(FranchiseWeeklyIncome.vehicle_id.isnot(None)).all()}
 
     filled = 0
+    filled_labels = []
     for v in vehicles:
         if v.id in already_recorded:
             continue
@@ -8852,6 +8931,7 @@ def franchise_weekly_income_bulk_fill():
         touch_sync_fields(entry)
         db.session.add(entry)
         filled += 1
+        filled_labels.append(v.number_plate)
 
     if filled:
         db.session.flush()
@@ -8859,11 +8939,16 @@ def franchise_weekly_income_bulk_fill():
                   f'Bulk-filled weekly income (default {amount}) for {filled} vehicle(s) for week of {on_week}')
         db.session.commit()
         flash(f'Recorded weekly income for {filled} vehicle(s) for week of {on_week}.', 'success')
+        if entry_only:
+            notify_admins_whatsapp(
+                f'Franchise payment confirmed by {current_user.username}: '
+                f'{", ".join(filled_labels)} for week of {on_week}.'
+            )
     else:
         db.session.rollback()
         flash(f'No entries created — the selected vehicle(s) already have a weekly income entry in that week.', 'info')
 
-    return redirect(url_for('franchise_weekly_income_list', view='date', on_week=on_week.strftime('%Y-%m-%d'), period=period))
+    return back(on_week=on_week.strftime('%Y-%m-%d'), period=period)
 
 
 @app.route('/franchise/weekly-income/bulk-delete', methods=['POST'])

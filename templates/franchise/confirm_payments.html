@@ -1,0 +1,164 @@
+{% extends 'base.html' %}
+{% block title %}Confirm Franchise Payments{% endblock %}
+{% block page_title %}Franchise — Confirm Payments{% endblock %}
+
+{% set fill_endpoint = 'franchise_weekly_income_bulk_fill' if kind == 'weekly' else 'franchise_daily_income_bulk_fill' %}
+{% set date_field = 'on_week' if kind == 'weekly' else 'on_date' %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Confirm Franchise Payments</h1>
+    <div class="subtitle">See which vehicles have paid their {{ 'weekly' if kind == 'weekly' else 'daily' }} fee, and confirm the ones that just paid</div>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar mb-24">
+  <div class="form-group">
+    <label>Fee Type</label>
+    <div class="btn-group">
+      <a href="{{ url_for('franchise_confirm_payments', kind='daily') }}" class="btn btn-xs {% if kind=='daily' %}btn-primary{% else %}btn-outline{% endif %}">Daily</a>
+      <a href="{{ url_for('franchise_confirm_payments', kind='weekly') }}" class="btn btn-xs {% if kind=='weekly' %}btn-primary{% else %}btn-outline{% endif %}">Weekly</a>
+    </div>
+  </div>
+</form>
+
+<div class="card mb-24">
+  <div class="card-header" style="flex-wrap:wrap;gap:10px;">
+    <form method="GET" style="display:flex;gap:10px;align-items:flex-end;margin:0;">
+      <input type="hidden" name="kind" value="{{ kind }}">
+      <div class="form-group" style="margin:0;">
+        <label>{{ 'Week Of' if kind == 'weekly' else 'Date' }}</label>
+        <input type="date" name="{{ date_field }}" value="{{ on_period }}">
+      </div>
+      <button type="submit" class="btn btn-outline btn-xs">Go</button>
+    </form>
+    <input type="text" id="confirm-search" placeholder="Search vehicle or franchisee…" style="max-width:240px;">
+  </div>
+
+  {% if rows %}
+  {% if missing %}
+  <form method="POST" action="{{ url_for(fill_endpoint) }}" id="bulk-fill-form" data-confirm="Continue?">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="{{ date_field }}" value="{{ on_period }}">
+    <div class="card-body" style="border-bottom:1px solid var(--border);">
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div class="form-group" style="margin:0;max-width:160px;">
+          <label>Income (USD)</label>
+          <input type="number" id="bulk-fill-amount" name="amount" step="0.01" min="0" value="10.00" required>
+        </div>
+        <button type="button" class="btn btn-outline btn-xs" id="bulk-select-all">Select all</button>
+        <button type="button" class="btn btn-outline btn-xs" id="bulk-select-none">Clear</button>
+        <button type="submit" class="btn btn-primary btn-xs" id="bulk-fill-submit">
+          <i data-feather="zap"></i> Confirm checked vehicle(s)
+        </button>
+      </div>
+      <div class="form-hint mt-8">
+        Vehicles that haven't paid yet are checked below — uncheck any that were absent or didn't pay,
+        or click a single vehicle's own Confirm button to record just that one. A vehicle with its own
+        agreed fee gets that fee instead of the amount above either way.
+      </div>
+    </div>
+  </form>
+  {% endif %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          {% if missing %}<th></th>{% endif %}
+          <th>Vehicle</th>
+          <th>Franchisee</th>
+          <th>Status</th>
+          <th class="text-right">Income</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+        <tr data-vehicle-label="{{ (r.vehicle.number_plate ~ ' ' ~ r.vehicle.franchisee_name)|lower }}">
+          {% if missing %}
+          <td>
+            {% if not r.entries %}
+            <div style="display:flex;gap:8px;align-items:center;">
+              <input type="checkbox" class="bulk-check" name="vehicle_ids" value="{{ r.vehicle.id }}"
+                     form="bulk-fill-form" checked title="Include in bulk Confirm above">
+              <form method="POST" action="{{ url_for(fill_endpoint) }}" style="margin:0;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="{{ date_field }}" value="{{ on_period }}">
+                <input type="hidden" name="vehicle_ids" value="{{ r.vehicle.id }}">
+                <input type="hidden" name="amount" class="row-confirm-amount" value="10.00">
+                <button type="submit" class="btn btn-primary btn-xs" title="Record this vehicle's payment now">
+                  <i data-feather="check"></i> Confirm
+                </button>
+              </form>
+            </div>
+            {% endif %}
+          </td>
+          {% endif %}
+          <td>{{ r.vehicle.number_plate }}</td>
+          <td>{{ r.vehicle.franchisee_name }}</td>
+          <td>
+            {% if r.entries %}
+            <span class="badge badge-success">Paid</span>
+            {% else %}
+            <span class="badge badge-warning">Not paid</span>
+            {% endif %}
+          </td>
+          <td class="text-right">{% if r.entries %}{{ r.income|currency }}{% else %}<span class="form-hint">— not recorded —</span>{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <th colspan="{{ 3 if missing else 2 }}">Total</th>
+          <th class="text-right">{{ total|currency }}</th>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% if missing %}
+  <script>
+  (function () {
+    var form = document.getElementById('bulk-fill-form');
+    if (!form) return;
+    var boxes = document.querySelectorAll('.bulk-check');
+    document.getElementById('bulk-select-all').addEventListener('click', function () {
+      boxes.forEach(function (b) { b.checked = true; });
+    });
+    document.getElementById('bulk-select-none').addEventListener('click', function () {
+      boxes.forEach(function (b) { b.checked = false; });
+    });
+    var fillBtn = document.getElementById('bulk-fill-submit');
+    if (fillBtn) fillBtn.addEventListener('click', function () {
+      form.setAttribute('data-confirm', 'Confirm payment for the checked vehicle(s)?');
+    });
+
+    var amountInput = document.getElementById('bulk-fill-amount');
+    var rowAmounts = document.querySelectorAll('.row-confirm-amount');
+    if (amountInput) {
+      var syncRowAmounts = function () {
+        rowAmounts.forEach(function (el) { el.value = amountInput.value; });
+      };
+      amountInput.addEventListener('input', syncRowAmounts);
+      syncRowAmounts();
+    }
+  })();
+  </script>
+  {% endif %}
+  {% else %}
+  <div class="empty-state"><p>No franchise vehicles registered yet.</p></div>
+  {% endif %}
+</div>
+<script>
+(function () {
+  var filter = document.getElementById('confirm-search');
+  if (!filter) return;
+  var rows = document.querySelectorAll('tr[data-vehicle-label]');
+  filter.addEventListener('input', function () {
+    var q = filter.value.trim().toLowerCase();
+    rows.forEach(function (row) {
+      row.style.display = row.getAttribute('data-vehicle-label').indexOf(q) === -1 ? 'none' : '';
+    });
+  });
+})();
+</script>
+{% endblock %}

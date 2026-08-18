@@ -106,7 +106,7 @@
   </div>
 </div>
 
-<div class="card">
+<div class="card mb-24">
   <div class="card-header"><h3>My Recent Entries</h3></div>
   {% if my_entries %}
   <div class="table-wrap">
@@ -133,6 +133,38 @@
   </div>
   {% else %}
   <div class="empty-state"><p>You haven't recorded any collections yet.</p></div>
+  {% endif %}
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>All Clerks' Recent Entries</h3></div>
+  {% if team_entries %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Date</th>
+          <th>Vehicle</th>
+          <th>Recorded By</th>
+          <th class="text-right">Income [$]</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in team_entries %}
+        <tr>
+          <td>{{ e.kind }}</td>
+          <td>{{ e.period }}</td>
+          <td>{{ e.vehicle.number_plate ~ ' — ' ~ e.vehicle.franchisee_name if e.vehicle else 'Whole Franchise' }}</td>
+          <td>{{ 'You' if e.recorded_by == current_user.username else e.recorded_by }}</td>
+          <td class="text-right">{{ e.income|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No collections recorded yet.</p></div>
   {% endif %}
 </div>
 {% endblock %}

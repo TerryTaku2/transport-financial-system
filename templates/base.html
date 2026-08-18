@@ -203,6 +203,9 @@
       <a href="{{ url_for('franchise_my_collections') }}" class="nav-item {% if request.endpoint == 'franchise_my_collections' %}active{% endif %}">
         <i data-feather="credit-card"></i> Collections
       </a>
+      <a href="{{ url_for('franchise_confirm_payments') }}" class="nav-item {% if request.endpoint == 'franchise_confirm_payments' %}active{% endif %}">
+        <i data-feather="check-circle"></i> Confirm Payments
+      </a>
     </div>
     {% endif %}
 
