@@ -92,7 +92,7 @@
                 <option value="{{ d.id }}">{{ d.name }}</option>
                 {% endfor %}
               </select>
-              <input type="number" name="garnish" step="0.01" min="0" placeholder="Amount"
+              <input type="number" name="garnish" step="any" min="0" placeholder="Amount"
                      value="{{ '%.2f'|format(row.remaining) }}" style="width:80px;padding:4px;">
               <input type="text" name="reason_for_shortfall" placeholder="Reason" style="width:120px;padding:4px;">
               <button class="btn btn-outline btn-xs">Garnish</button>

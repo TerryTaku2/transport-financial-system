@@ -34,11 +34,11 @@
         </div>
         <div class="form-group">
           <label>Quantity<span class="req">*</span></label>
-          <input type="number" id="pur_qty" name="quantity" min="0.01" step="0.01" required value="{{ purchase.quantity|qty if purchase }}">
+          <input type="number" id="pur_qty" name="quantity" min="0.01" step="any" required value="{{ purchase.quantity|qty if purchase }}">
         </div>
         <div class="form-group">
           <label>Unit Cost (USD)<span class="req">*</span></label>
-          <input type="number" id="pur_cost" name="unit_cost" step="0.01" min="0" required value="{{ purchase.unit_cost if purchase }}">
+          <input type="number" id="pur_cost" name="unit_cost" step="any" min="0" required value="{{ purchase.unit_cost if purchase }}">
         </div>
         <div class="form-group">
           <label>Supplier</label>

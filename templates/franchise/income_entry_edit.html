@@ -24,32 +24,32 @@
         {% if entry.vehicle %}
         <div class="form-group">
           <label>Income (USD)</label>
-          <input type="number" name="income" step="0.01" min="0" value="{{ entry.income }}">
+          <input type="number" name="income" step="any" min="0" value="{{ entry.income }}">
         </div>
         {% else %}
         <div class="form-group">
           <label>Traffic Fines (USD)</label>
-          <input type="number" name="exp_traffic_fines" step="0.01" min="0" value="{{ entry.exp_traffic_fines }}">
+          <input type="number" name="exp_traffic_fines" step="any" min="0" value="{{ entry.exp_traffic_fines }}">
         </div>
         <div class="form-group">
           <label>Facilitation Fees (USD)</label>
-          <input type="number" name="exp_facilitation_fees" step="0.01" min="0" value="{{ entry.exp_facilitation_fees }}">
+          <input type="number" name="exp_facilitation_fees" step="any" min="0" value="{{ entry.exp_facilitation_fees }}">
         </div>
         <div class="form-group">
           <label>Workshop (USD)</label>
-          <input type="number" name="exp_workshop" step="0.01" min="0" value="{{ entry.exp_workshop }}">
+          <input type="number" name="exp_workshop" step="any" min="0" value="{{ entry.exp_workshop }}">
         </div>
         <div class="form-group">
           <label>Wages (USD)</label>
-          <input type="number" name="exp_wages" step="0.01" min="0" value="{{ entry.exp_wages }}">
+          <input type="number" name="exp_wages" step="any" min="0" value="{{ entry.exp_wages }}">
         </div>
         <div class="form-group">
           <label>Other Expenditure (USD)</label>
-          <input type="number" name="other_expenditure" step="0.01" min="0" value="{{ entry.other_expenditure }}">
+          <input type="number" name="other_expenditure" step="any" min="0" value="{{ entry.other_expenditure }}">
         </div>
         <div class="form-group">
           <label>Cash Deposited (USD)</label>
-          <input type="number" name="deposited" step="0.01" value="{{ entry.deposited }}">
+          <input type="number" name="deposited" step="any" value="{{ entry.deposited }}">
           <div class="form-hint">One lump sum for this date/week covering every vehicle's collections combined.</div>
         </div>
         {% endif %}

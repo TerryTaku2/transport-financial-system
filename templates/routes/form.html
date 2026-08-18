@@ -35,7 +35,7 @@
         </div>
         <div class="form-group">
           <label>Fare Rate (USD per trip)<span class="req">*</span></label>
-          <input type="number" name="fare_rate" step="0.01" min="0" required value="{{ route.fare_rate if route else '' }}">
+          <input type="number" name="fare_rate" step="any" min="0" required value="{{ route.fare_rate if route else '' }}">
         </div>
         <div class="form-group">
           <label>Status</label>

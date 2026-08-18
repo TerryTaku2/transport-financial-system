@@ -35,13 +35,13 @@
         </div>
         <div class="form-group">
           <label>Daily Fare (USD)</label>
-          <input type="number" name="fare" step="0.01" min="0" placeholder="0.00"
+          <input type="number" name="fare" step="any" min="0" placeholder="0.00"
                  value="{{ log.gross_revenue if log else '' }}">
           <div class="form-hint">Can be logged with no driver selected yet.</div>
         </div>
         <div class="form-group">
           <label>{{ vehicle.fuel_type|capitalize }} (USD)</label>
-          <input type="number" name="diesel_cost" step="0.01" min="0" placeholder="0.00"
+          <input type="number" name="diesel_cost" step="any" min="0" placeholder="0.00"
                  value="{{ fuel.total_cost if fuel and fuel.total_cost else '' }}">
         </div>
         <div class="form-group">
@@ -51,7 +51,7 @@
         </div>
         <div class="form-group">
           <label>Garnish (USD)</label>
-          <input type="number" name="garnish" step="0.01" min="0" placeholder="0.00"
+          <input type="number" name="garnish" step="any" min="0" placeholder="0.00"
                  value="{{ log.garnish if log and log.garnish else '' }}">
           <div class="form-hint">Deducted from this driver's commission when they miss their revenue target. Needs a driver selected — fare alone doesn't.</div>
         </div>

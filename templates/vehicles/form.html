@@ -38,7 +38,7 @@
         </div>
         <div class="form-group">
           <label>Acquisition Cost (USD)</label>
-          <input type="number" name="acquisition_cost" step="0.01" min="0" placeholder="0.00"
+          <input type="number" name="acquisition_cost" step="any" min="0" placeholder="0.00"
                  value="{{ vehicle.acquisition_cost if vehicle else '' }}">
         </div>
         <div class="form-group">
@@ -50,7 +50,7 @@
         </div>
         <div class="form-group">
           <label>Daily Revenue Target (USD)</label>
-          <input type="number" name="daily_target" step="0.01" min="0" placeholder="e.g. 100.00"
+          <input type="number" name="daily_target" step="any" min="0" placeholder="e.g. 100.00"
                  value="{{ vehicle.daily_target if vehicle and vehicle.daily_target is not none else '' }}">
           <div class="form-hint">Days this vehicle's fare falls short flag on the Revenue Shortfalls report. Leave blank to not track a target.</div>
         </div>

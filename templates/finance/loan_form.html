@@ -22,11 +22,11 @@
         </div>
         <div class="form-group">
           <label>Principal (USD)<span class="req">*</span></label>
-          <input type="number" name="principal" step="0.01" min="0" required placeholder="0.00" value="{{ loan.principal if loan }}">
+          <input type="number" name="principal" step="any" min="0" required placeholder="0.00" value="{{ loan.principal if loan }}">
         </div>
         <div class="form-group">
           <label>Interest Rate (% p.a.)</label>
-          <input type="number" name="interest_rate" step="0.01" min="0" placeholder="0.00" value="{{ loan.interest_rate if loan else '' }}">
+          <input type="number" name="interest_rate" step="any" min="0" placeholder="0.00" value="{{ loan.interest_rate if loan else '' }}">
           <div class="form-hint">Recorded for reference only — not separately expensed in reports (see SOFP notes).</div>
         </div>
         <div class="form-group">

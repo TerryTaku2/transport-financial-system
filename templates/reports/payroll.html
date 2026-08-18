@@ -11,7 +11,7 @@
     <input type="hidden" name="payment_date" value="{{ date_to }}">
     <input type="hidden" name="period_start" value="{{ date_from }}">
     <input type="hidden" name="period_end" value="{{ date_to }}">
-    <input type="number" name="amount" step="0.01" min="0" placeholder="Amount"
+    <input type="number" name="amount" step="any" min="0" placeholder="Amount"
            value="{{ '%.2f'|format(outstanding) if outstanding > 0 else '' }}" style="width:90px;padding:4px;">
     <button class="btn btn-outline btn-xs">Pay</button>
   </form>
@@ -23,7 +23,7 @@
       <input type="hidden" name="deduction_date" value="{{ date_to }}">
       <div class="deduct-rows">
         <div class="deduct-row" style="display:flex;gap:4px;margin-bottom:4px;">
-          <input type="number" name="amount[]" step="0.01" min="0" placeholder="Amount" style="width:80px;padding:4px;">
+          <input type="number" name="amount[]" step="any" min="0" placeholder="Amount" style="width:80px;padding:4px;">
           <input type="text" name="reason[]" placeholder="Reason" style="width:110px;padding:4px;">
         </div>
       </div>
