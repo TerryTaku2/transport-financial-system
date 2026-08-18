@@ -3775,6 +3775,21 @@ def driver_ledger_add():
             raise ValueError('Enter at least a fare, diesel cost, mileage reading, or garnish.')
 
         if fare is not None or garnish is not None:
+            # Reject an exact repeat of an already-recorded entry for this
+            # vehicle, date and driver — same fare and garnish as an
+            # existing (non-deleted) row is virtually certainly the same
+            # transaction re-entered (a double-tapped submit, or someone
+            # re-keying a fare they already logged), not a second genuine
+            # shift. A different driver, fare, or garnish for the same
+            # vehicle/date still goes through — multiple genuine entries
+            # per day (different drivers/shifts) are expected and already
+            # relied on elsewhere (see the day-total shortfall check below).
+            dup = DailyLog.query.filter_by(vehicle_id=vehicle_id, log_date=log_date, driver_id=driver_id,
+                                            gross_revenue=fare or 0.0, garnish=garnish or 0.0).first()
+            if dup:
+                raise ValueError(f'A ledger entry for {vehicle.registration} on {log_date} with the same '
+                                  f'driver, fare and garnish already exists — this looks like a duplicate submission.')
+
             driver = Driver.query.filter_by(id=driver_id).first()
             conductor = driver.paired_conductors[0] if driver and driver.paired_conductors else None
             daily = DailyLog(
@@ -3790,6 +3805,16 @@ def driver_ledger_add():
                        (f', garnish {garnish} ({reason_for_shortfall})' if garnish else ''))
 
         if diesel_cost is not None:
+            # Same principle as the fare/garnish check above — an identical
+            # diesel cost already logged for this vehicle/date is a
+            # duplicate submission, not a second genuine fill-up (a real
+            # second fill-up on the same day would almost never cost the
+            # exact same amount).
+            dup_fuel = FuelLog.query.filter_by(vehicle_id=vehicle_id, log_date=log_date, total_cost=diesel_cost).first()
+            if dup_fuel:
+                raise ValueError(f'A fuel entry for {vehicle.registration} on {log_date} with the same diesel '
+                                  f'cost already exists — this looks like a duplicate submission.')
+
             price = fuel_price_for(vehicle.fuel_type)
             fuel = FuelLog(
                 vehicle_id=vehicle_id, log_date=log_date,
@@ -3801,6 +3826,11 @@ def driver_ledger_add():
             touch_sync_fields(fuel)
             log_audit('CREATE', 'fuel_logs', None, f'Ledger entry for {vehicle.registration} on {log_date}: diesel ${diesel_cost}')
         elif mileage is not None:
+            dup_fuel = FuelLog.query.filter_by(vehicle_id=vehicle_id, log_date=log_date, liters=0, odometer=mileage).first()
+            if dup_fuel:
+                raise ValueError(f'An odometer reading for {vehicle.registration} on {log_date} with the same '
+                                  f'value already exists — this looks like a duplicate submission.')
+
             fuel = FuelLog(
                 vehicle_id=vehicle_id, log_date=log_date, liters=0, odometer=mileage, created_by=current_user.id,
             )
