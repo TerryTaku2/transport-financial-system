@@ -8355,6 +8355,7 @@ def franchise_daily_income_list():
     # vehicle's.
     fleet_deposited = sum(e.deposited for e in expenditure_entries)
     net_income = fleet_income - total_expenditure
+    fleet_variance = _franchise_fleet_variance(FranchiseDailyIncome, 'entry_date', 'daily', df, dt)
 
     # "By Date" view — every vehicle's income for one calendar date side by
     # side, complementing the "By Vehicle" view above which is one vehicle
@@ -8371,7 +8372,7 @@ def franchise_daily_income_list():
         period=period, today=today.strftime('%Y-%m-%d'),
         vehicle_income_total=sum(e.income for e in income_entries),
         fleet_income=fleet_income, total_expenditure=total_expenditure,
-        net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_deposited - net_income,
+        net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_variance,
         view=view, on_date=on_date.strftime('%Y-%m-%d'), by_date_rows=by_date_rows, by_date_total=by_date_total,
         by_date_missing=by_date_missing)
 
@@ -8810,6 +8811,7 @@ def franchise_weekly_income_list():
     # week covering every vehicle combined, recorded on the shared row.
     fleet_deposited = sum(e.deposited for e in expenditure_entries)
     net_income = fleet_income - total_expenditure
+    fleet_variance = _franchise_fleet_variance(FranchiseWeeklyIncome, 'week_start', 'weekly', df, dt)
 
     # "By Week" view — every vehicle's income for one week side by side. See
     # franchise_daily_income_list's "By Date" view / _franchise_income_by_vehicle_on.
@@ -8826,7 +8828,7 @@ def franchise_weekly_income_list():
         period=period, today=today.strftime('%Y-%m-%d'),
         vehicle_income_total=sum(e.income for e in income_entries),
         fleet_income=fleet_income, total_expenditure=total_expenditure,
-        net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_deposited - net_income,
+        net_income=net_income, fleet_deposited=fleet_deposited, fleet_variance=fleet_variance,
         view=view, on_week=on_week.strftime('%Y-%m-%d'), by_date_rows=by_date_rows, by_date_total=by_date_total,
         by_date_missing=by_date_missing)
 
@@ -9828,18 +9830,28 @@ def _apply_suspense_clearance(rows, source_type, date_from, date_to):
     the reconciliation schedule should no longer report it as outstanding.
     The original figure is kept as raw_variance so cleared rows can still
     show what was cleared, and rows gain a `cleared` flag for display."""
-    resolutions = {
-        r.period_date
-        for r in FranchiseSuspenseResolution.query.filter(
-            FranchiseSuspenseResolution.source_type == source_type,
-            FranchiseSuspenseResolution.period_date.between(date_from, date_to)).all()
-    }
+    q = FranchiseSuspenseResolution.query.filter(FranchiseSuspenseResolution.source_type == source_type)
+    if date_from:
+        q = q.filter(FranchiseSuspenseResolution.period_date.between(date_from, date_to))
+    resolutions = {r.period_date for r in q.all()}
     for r in rows:
         r['raw_variance'] = r['variance']
         r['cleared'] = r['period'] in resolutions
         if r['cleared']:
             r['variance'] = 0.0
     return rows
+
+
+def _franchise_fleet_variance(model_cls, date_field, source_type, df, dt):
+    """Fleet-wide Cash Variance for the Daily/Weekly Income pages' KPI card,
+    with any period already cleared through the Suspense Account (see
+    _apply_suspense_clearance) zeroed out of the total — otherwise a variance
+    an admin has resolved there would keep reading as outstanding here,
+    disagreeing with the Reconciliation Schedule for the same data."""
+    col = getattr(model_cls, date_field)
+    q = model_cls.query.filter(col.between(df, dt)) if df else model_cls.query
+    rows = _apply_suspense_clearance(_group_income_by_period(q.all(), date_field), source_type, df, dt)
+    return sum(r['variance'] for r in rows)
 
 
 @app.route('/reports/franchise/reconciliation')
