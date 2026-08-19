@@ -8354,8 +8354,14 @@ def franchise_daily_income_list():
     # it against the whole fleet's net income for the period, not any one
     # vehicle's.
     fleet_deposited = sum(e.deposited for e in expenditure_entries)
-    net_income = fleet_income - total_expenditure
     fleet_variance = _franchise_fleet_variance(FranchiseDailyIncome, 'entry_date', 'daily', df, dt)
+    # Net Income is deposited cash minus whatever variance is still
+    # outstanding, not the raw income-minus-expenditure book figure — once a
+    # variance is cleared through the Suspense Account, that discrepancy is
+    # considered explained/settled, so it should stop separating Net Income
+    # from Total Cash Deposited. If every variance in the period is cleared,
+    # fleet_variance is 0 and the two KPI cards read identically.
+    net_income = fleet_deposited - fleet_variance
 
     # "By Date" view — every vehicle's income for one calendar date side by
     # side, complementing the "By Vehicle" view above which is one vehicle
@@ -8810,8 +8816,11 @@ def franchise_weekly_income_list():
     # See franchise_daily_income_list — Cash Deposited is one lump sum per
     # week covering every vehicle combined, recorded on the shared row.
     fleet_deposited = sum(e.deposited for e in expenditure_entries)
-    net_income = fleet_income - total_expenditure
     fleet_variance = _franchise_fleet_variance(FranchiseWeeklyIncome, 'week_start', 'weekly', df, dt)
+    # See franchise_daily_income_list — Net Income reconciles to Total Cash
+    # Deposited once suspense-cleared variance is excluded, rather than
+    # staying at the raw income-minus-expenditure figure.
+    net_income = fleet_deposited - fleet_variance
 
     # "By Week" view — every vehicle's income for one week side by side. See
     # franchise_daily_income_list's "By Date" view / _franchise_income_by_vehicle_on.
