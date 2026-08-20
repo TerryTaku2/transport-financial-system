@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1>Driver Deposits</h1>
-    <div class="subtitle">Cash each driver banks — reconciled against fleet net income on the Fleet Reconciliation report</div>
+    <div class="subtitle">Cash banked, per driver or as one fleet-wide total — reconciled against fleet net income on the Fleet Reconciliation report</div>
   </div>
   <div class="btn-group">
     <a href="{{ url_for('report_fleet_reconciliation') }}" class="btn btn-outline"><i data-feather="bar-chart-2"></i> Reconciliation</a>
@@ -39,24 +39,34 @@
   <div class="card-body">
     <form method="POST" action="{{ url_for('driver_deposit_add') }}" data-offline-form>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group mb-16">
+        <label>
+          <input type="checkbox" id="fleet-total-toggle" style="width:auto;"
+                 onchange="document.getElementById('driver-deposit-fields').style.display = this.checked ? 'none' : '';
+                           document.getElementById('driver-select').required = !this.checked;">
+          Fleet-wide total (all vehicles combined, not attributed to one driver)
+        </label>
+      </div>
       <div class="form-grid mb-16">
-        <div class="form-group">
-          <label>Driver<span class="req">*</span></label>
-          <select name="driver_id" required data-refdata="drivers">
-            <option value="">Select driver</option>
-            {% for d in drivers %}
-            <option value="{{ d.id }}">{{ d.name }}</option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="form-group">
-          <label>Vehicle (optional)</label>
-          <select name="vehicle_id" data-refdata="vehicles">
-            <option value="">Use driver's assigned vehicle</option>
-            {% for v in vehicles %}
-            <option value="{{ v.id }}">{{ v.registration }}</option>
-            {% endfor %}
-          </select>
+        <div id="driver-deposit-fields" style="display:contents;">
+          <div class="form-group">
+            <label>Driver<span class="req">*</span></label>
+            <select name="driver_id" id="driver-select" required data-refdata="drivers">
+              <option value="">Select driver</option>
+              {% for d in drivers %}
+              <option value="{{ d.id }}">{{ d.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Vehicle (optional)</label>
+            <select name="vehicle_id" data-refdata="vehicles">
+              <option value="">Use driver's assigned vehicle</option>
+              {% for v in vehicles %}
+              <option value="{{ v.id }}">{{ v.registration }}</option>
+              {% endfor %}
+            </select>
+          </div>
         </div>
         <div class="form-group">
           <label>Date<span class="req">*</span></label>
@@ -91,7 +101,7 @@
         {% for d in deposits.items %}
         <tr>
           <td>{{ d.deposit_date }}</td>
-          <td>{{ d.driver.name }}</td>
+          <td>{{ d.driver.name if d.driver else 'All vehicles (fleet total)' }}</td>
           <td>{{ d.vehicle.registration if d.vehicle else '—' }}</td>
           <td class="text-right">{{ d.amount|currency }}</td>
           <td>{{ d.notes or '—' }}</td>

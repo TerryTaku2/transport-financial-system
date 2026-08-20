@@ -24,6 +24,7 @@ import webbrowser
 import zipfile
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
+from types import SimpleNamespace
 
 import openpyxl
 import requests
@@ -946,15 +947,20 @@ class Budget(db.Model):
 
 
 class DriverDeposit(db.Model):
-    """Cash a driver banks for a given date, for reconciliation against the
-    fleet's own net income (DailyLog.gross_revenue minus driver-attributed
-    Expense rows — see report_fleet_reconciliation/report_fleet_consolidated).
+    """Cash banked for a given date, for reconciliation against the fleet's
+    own net income (DailyLog.gross_revenue minus driver-attributed Expense
+    rows — see report_fleet_reconciliation/report_fleet_consolidated).
     vehicle_id is optional and only used to attribute the deposit to a
     vehicle for the consolidated-by-vehicle view; a driver who drove more
-    than one vehicle that day can leave it blank."""
+    than one vehicle that day can leave it blank. driver_id is also optional:
+    a row with driver_id (and vehicle_id) left blank is a fleet-wide total —
+    one combined cash-deposited figure for all vehicles that date, for
+    reconciliations that don't track deposits per driver — and is folded
+    into the totals/variance on the reconciliation reports without being
+    attributed to any single driver or vehicle row."""
     __tablename__ = 'driver_deposits'
     id = db.Column(db.Integer, primary_key=True)
-    driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=False)
+    driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=True)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=True)
     deposit_date = db.Column(db.Date, nullable=False, default=date.today)
     amount = db.Column(db.Float, nullable=False)
@@ -3931,17 +3937,22 @@ def driver_deposit_add():
         flash('Already recorded.', 'info')
         return redirect(url_for('driver_deposits_list'))
     try:
-        driver_id = form_int(request.form, 'driver_id')
-        driver = Driver.query.filter_by(id=driver_id).first()
-        if not driver:
-            raise ValueError('Select a valid driver.')
-        # Falls back to the driver's normally assigned vehicle when the form
-        # leaves it blank — keeps the vehicle-consolidated report accurate
-        # without forcing every entry to pick a vehicle explicitly.
-        vehicle_id = form_int(request.form, 'vehicle_id', required=False) or driver.assigned_vehicle_id
+        driver_id = form_int(request.form, 'driver_id', required=False)
+        driver = None
+        vehicle_id = None
+        if driver_id:
+            driver = Driver.query.filter_by(id=driver_id).first()
+            if not driver:
+                raise ValueError('Select a valid driver.')
+            # Falls back to the driver's normally assigned vehicle when the form
+            # leaves it blank — keeps the vehicle-consolidated report accurate
+            # without forcing every entry to pick a vehicle explicitly.
+            vehicle_id = form_int(request.form, 'vehicle_id', required=False) or driver.assigned_vehicle_id
+        # driver_id left blank means a fleet-wide total — one combined cash
+        # figure for all vehicles that date, not attributed to a driver.
 
         deposit = DriverDeposit(
-            driver_id=driver.id,
+            driver_id=driver.id if driver else None,
             vehicle_id=vehicle_id,
             deposit_date=parse_date(request.form['deposit_date']),
             amount=form_float(request.form, 'amount', min_value=0),
@@ -3950,8 +3961,9 @@ def driver_deposit_add():
         )
         db.session.add(deposit)
         db.session.flush()
+        depositor = driver.name if driver else 'all vehicles (fleet total)'
         log_audit('CREATE', 'driver_deposits', deposit.id,
-                  f'Deposit of {deposit.amount} for {driver.name} on {deposit.deposit_date}')
+                  f'Deposit of {deposit.amount} for {depositor} on {deposit.deposit_date}')
         record_offline_sync(client_id, 'driver_deposit_add')
         touch_sync_fields(deposit)
         db.session.commit()
@@ -3971,7 +3983,8 @@ def driver_deposit_add():
 @admin_required
 def driver_deposit_delete(did):
     deposit = DriverDeposit.query.filter_by(id=did).first_or_404()
-    log_audit('DELETE', 'driver_deposits', did, f'Deleted deposit of {deposit.amount} for {deposit.driver.name}')
+    depositor = deposit.driver.name if deposit.driver else 'all vehicles (fleet total)'
+    log_audit('DELETE', 'driver_deposits', did, f'Deleted deposit of {deposit.amount} for {depositor}')
     deposit.deleted_at = datetime.now(timezone.utc)
     touch_sync_fields(deposit)
     db.session.commit()
@@ -10545,6 +10558,16 @@ def _fleet_driver_totals(df, dt):
         rows.append(dict(driver=d, income=income, expenses=expenses,
                           net_income=net_income, deposited=deposited, variance=deposited - net_income))
 
+    # Fleet-wide deposits (driver_id left blank on DriverDeposit) aren't
+    # attributable to one driver, so they can't join the per-driver rows
+    # above — surfaced as their own row instead of being silently dropped
+    # from the totals.
+    fleet_wide_deposited = db.session.query(func.sum(DriverDeposit.amount)).filter(
+        DriverDeposit.deposit_date.between(df, dt), DriverDeposit.driver_id.is_(None)).scalar() or 0.0
+    if fleet_wide_deposited:
+        rows.append(dict(driver=SimpleNamespace(name='Fleet-wide (all vehicles)'), income=0.0, expenses=0.0,
+                          net_income=0.0, deposited=fleet_wide_deposited, variance=fleet_wide_deposited))
+
     totals = dict(
         income=sum(r['income'] for r in rows), expenses=sum(r['expenses'] for r in rows),
         net_income=sum(r['net_income'] for r in rows), deposited=sum(r['deposited'] for r in rows),
@@ -10580,6 +10603,15 @@ def _fleet_vehicle_totals(df, dt):
         net_income = income - expenses
         rows.append(dict(vehicle=v, income=income, expenses=expenses,
                           net_income=net_income, deposited=deposited, variance=deposited - net_income))
+
+    # Fleet-wide deposits (no driver, no vehicle attribution) aren't
+    # attributable to one vehicle, so surface them as their own row rather
+    # than dropping them from the totals silently.
+    fleet_wide_deposited = db.session.query(func.sum(DriverDeposit.amount)).filter(
+        DriverDeposit.deposit_date.between(df, dt), DriverDeposit.vehicle_id.is_(None)).scalar() or 0.0
+    if fleet_wide_deposited:
+        rows.append(dict(vehicle=SimpleNamespace(registration='Fleet-wide (all vehicles)'), income=0.0, expenses=0.0,
+                          net_income=0.0, deposited=fleet_wide_deposited, variance=fleet_wide_deposited))
 
     totals = dict(
         income=sum(r['income'] for r in rows), expenses=sum(r['expenses'] for r in rows),
@@ -13035,6 +13067,45 @@ def migrate_db():
             expense_cols = [c['name'] for c in inspector.get_columns('expenses')]
             if 'driver_id' not in expense_cols:
                 conn.execute(text("ALTER TABLE expenses ADD COLUMN driver_id INTEGER REFERENCES drivers(id)"))
+
+        # driver_deposits.driver_id must become optional — a deposit can now
+        # be a fleet-wide total (all vehicles, no single driver) instead of
+        # always being attributed to one driver. SQLite can't relax a NOT
+        # NULL constraint with ALTER TABLE — rebuild the table.
+        if inspector.has_table('driver_deposits'):
+            deposit_driver_col = next(
+                (c for c in inspector.get_columns('driver_deposits') if c['name'] == 'driver_id'), None)
+            if deposit_driver_col is not None and not deposit_driver_col['nullable']:
+                conn.execute(text("""
+                    CREATE TABLE driver_deposits_new (
+                        id INTEGER PRIMARY KEY,
+                        driver_id INTEGER REFERENCES drivers(id),
+                        vehicle_id INTEGER REFERENCES vehicles(id),
+                        deposit_date DATE NOT NULL,
+                        amount FLOAT NOT NULL,
+                        notes TEXT,
+                        created_by INTEGER REFERENCES users(id),
+                        created_at DATETIME,
+                        updated_at DATETIME,
+                        sync_uuid VARCHAR(36) UNIQUE,
+                        pending_push BOOLEAN,
+                        last_modified_site VARCHAR(50),
+                        deleted_at DATETIME,
+                        last_synced_updated_at DATETIME,
+                        server_touched_at DATETIME
+                    )
+                """))
+                conn.execute(text("""
+                    INSERT INTO driver_deposits_new (id, driver_id, vehicle_id, deposit_date, amount,
+                        notes, created_by, created_at, updated_at, sync_uuid, pending_push,
+                        last_modified_site, deleted_at, last_synced_updated_at, server_touched_at)
+                    SELECT id, driver_id, vehicle_id, deposit_date, amount,
+                        notes, created_by, created_at, updated_at, sync_uuid, pending_push,
+                        last_modified_site, deleted_at, last_synced_updated_at, server_touched_at
+                    FROM driver_deposits
+                """))
+                conn.execute(text("DROP TABLE driver_deposits"))
+                conn.execute(text("ALTER TABLE driver_deposits_new RENAME TO driver_deposits"))
 
         # Multi-site sync columns (see touch_sync_fields()) — added to every
         # syncable table. sync_uuid/deleted_at go in nullable (SQLite can't
