@@ -91,6 +91,7 @@
         <tr><td>{{ name }}</td><td class="text-right">{{ amount|currency }}</td></tr>
         {% endfor %}
         <tr class="summary-row"><td>TOTAL OPERATIONAL EXPENSES</td><td class="text-right">{{ totals.operational_expenses|currency }}</td></tr>
+        <tr class="summary-row"><td>NET PROFIT (Total Income &minus; Total Expenditure &minus; Total Operational Expenses)</td><td class="text-right"><span class="{% if totals.net_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ totals.net_profit|currency }}</span></td></tr>
       </tbody>
     </table>
   </div>
