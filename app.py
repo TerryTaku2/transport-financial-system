@@ -12732,23 +12732,25 @@ def whatsapp_webhook():
 # ─────────────────────────────────────────────────────────────
 @app.template_filter('currency')
 def currency_filter(value):
-    """Formats a stored amount for display without rounding away any
-    decimal places beyond 2 — a figure entered as 15.455 (see the
-    step="any" amount inputs and driver_ledger_add's duplicate check,
-    which both preserve full precision) must still show as $15.455, not
-    get silently rounded back down to $15.46 or $15.45. Trailing zeros
-    past the 2nd decimal are trimmed so a plain whole-cents amount still
-    reads as $15.00, not $15.4500000000."""
+    """Formats a stored amount for display, rounded to at most 3 decimal
+    places — a figure entered as 15.455 (see the step="any" amount inputs
+    and driver_ledger_add's duplicate check, which both preserve full
+    precision) must still show as $15.455, not get silently rounded down
+    to $15.46 or $15.45. Anything beyond the 3rd decimal (float noise, or
+    a value with more precision than that) is rounded away. Trailing
+    zeros past the 2nd decimal are trimmed so a plain whole-cents amount
+    still reads as $15.00, not $15.4500000000."""
     if value is None:
         return '$0.00'
     value = float(value)
     neg = value < 0
+    value = round(abs(value), 3)
     # repr() gives the shortest decimal string that round-trips back to
     # this exact float — unlike f'{value:.Nf}', it can't introduce binary-
     # float noise (e.g. printing 15.455 as 15.454999999999998).
-    s = repr(abs(value))
+    s = repr(value)
     if 'e' in s or 'E' in s:  # absurdly large/small — not a real money value, but don't crash
-        s = f'{abs(value):.10f}'.rstrip('0').rstrip('.')
+        s = f'{value:.10f}'.rstrip('0').rstrip('.')
     int_part, _, dec_part = s.partition('.')
     dec_part = dec_part.rstrip('0').ljust(2, '0')
     return f'{"-" if neg else ""}${int(int_part):,}.{dec_part}'
