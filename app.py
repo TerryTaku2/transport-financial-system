@@ -5186,6 +5186,109 @@ def store_trading_account_export():
     return csv_export_response(f'store_trading_account_{df}_to_{dt}.csv', header, rows)
 
 
+def _stock_movement_summary(df, dt, part_id=None):
+    """Per-part opening/in/out/closing quantities for the period, run off
+    every purchase/sale ever recorded (not just ones in range) so the
+    opening balance as of df is exact rather than estimated."""
+    parts = SparePart.query.order_by(SparePart.name).all()
+    if part_id:
+        parts = [p for p in parts if str(p.id) == str(part_id)]
+
+    purchases = StorePurchase.query.filter(StorePurchase.purchase_date <= dt).all()
+    sales = StoreSale.query.filter(StoreSale.sale_date <= dt).all()
+
+    rows = []
+    for part in parts:
+        p_purchases = [p for p in purchases if p.part_id == part.id]
+        p_sales = [s for s in sales if s.part_id == part.id]
+        opening = (sum(p.quantity for p in p_purchases if p.purchase_date < df) -
+                   sum(s.quantity for s in p_sales if s.sale_date < df))
+        stock_in = sum(p.quantity for p in p_purchases if p.purchase_date >= df)
+        stock_out = sum(s.quantity for s in p_sales if s.sale_date >= df)
+        closing = opening + stock_in - stock_out
+        rows.append({'part': part, 'opening': opening, 'stock_in': stock_in,
+                     'stock_out': stock_out, 'closing': closing})
+    return rows
+
+
+def _stock_movement_ledger(part, df, dt):
+    """Chronological IN/OUT ledger for one part with a running balance,
+    seeded by the exact opening balance as of df."""
+    purchases = StorePurchase.query.filter(StorePurchase.part_id == part.id,
+                                            StorePurchase.purchase_date < df).all()
+    sales = StoreSale.query.filter(StoreSale.part_id == part.id,
+                                    StoreSale.sale_date < df).all()
+    balance = sum(p.quantity for p in purchases) - sum(s.quantity for s in sales)
+
+    entries = []
+    for p in StorePurchase.query.filter(StorePurchase.part_id == part.id,
+                                         StorePurchase.purchase_date.between(df, dt)).all():
+        entries.append({'date': p.purchase_date, 'type': 'IN', 'quantity': p.quantity,
+                        'reference': p.supplier or '—', 'notes': p.notes, '_seq': p.id})
+    for s in StoreSale.query.filter(StoreSale.part_id == part.id,
+                                     StoreSale.sale_date.between(df, dt)).all():
+        entries.append({'date': s.sale_date, 'type': 'OUT', 'quantity': s.quantity,
+                        'reference': s.vehicle.registration if s.vehicle else (s.customer_name or '—'),
+                        'notes': s.notes, '_seq': s.id})
+    entries.sort(key=lambda e: (e['date'], e['_seq']))
+
+    for e in entries:
+        balance += e['quantity'] if e['type'] == 'IN' else -e['quantity']
+        e['balance'] = balance
+    return entries
+
+
+@app.route('/store/movements')
+@login_required
+@permission_required('store')
+def store_movements():
+    """Stock movement report: opening/in/out/closing per part for the
+    period, with a chronological running-balance ledger when a single
+    part is selected — the spares-store equivalent of a stock card."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    part_id = request.args.get('part_id', '')
+
+    summary = _stock_movement_summary(df, dt, part_id)
+    ledger = None
+    ledger_part = None
+    if part_id:
+        ledger_part = SparePart.query.filter_by(id=part_id).first_or_404()
+        ledger = _stock_movement_ledger(ledger_part, df, dt)
+
+    all_parts = SparePart.query.order_by(SparePart.name).all()
+    return render_template('store/movements.html', summary=summary, ledger=ledger,
+                           ledger_part=ledger_part, parts=all_parts, part_id=part_id,
+                           date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/store/movements/export')
+@login_required
+@permission_required('store')
+def store_movements_export():
+    df, dt = query_date_range()
+    part_id = request.args.get('part_id', '')
+
+    if part_id:
+        part = SparePart.query.filter_by(id=part_id).first_or_404()
+        ledger = _stock_movement_ledger(part, df, dt)
+        rows = [[e['date'], e['type'], qty_filter(e['quantity']), e['reference'] or '',
+                 qty_filter(e['balance'])] for e in ledger]
+        header = ['Date', 'Type', 'Quantity', 'Reference', 'Balance']
+        title = f'Stock Movement — {part.name}'
+    else:
+        summary = _stock_movement_summary(df, dt)
+        rows = [[row['part'].name, qty_filter(row['opening']), qty_filter(row['stock_in']),
+                 qty_filter(row['stock_out']), qty_filter(row['closing'])] for row in summary]
+        header = ['Part', 'Opening', 'Stock In', 'Stock Out', 'Closing']
+        title = 'Stock Movement Summary'
+
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'store_movements_{df}_to_{dt}.pdf', title,
+            f'Period: {df} to {dt}', header, rows)
+    return csv_export_response(f'store_movements_{df}_to_{dt}.csv', header, rows)
+
+
 # ─────────────────────────────────────────────────────────────
 # Reports
 # ─────────────────────────────────────────────────────────────
