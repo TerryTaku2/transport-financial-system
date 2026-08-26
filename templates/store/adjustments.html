@@ -1,0 +1,88 @@
+{% extends 'base.html' %}
+{% block title %}Stock Adjustments{% endblock %}
+{% block page_title %}Spares Store — Adjustments{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Stock Adjustments</h1>
+    <div class="subtitle">Manual corrections to quantity on hand and unit cost — physical counts, write-offs &amp; revaluations</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('store_parts') }}" class="btn btn-outline"><i data-feather="package"></i> Inventory</a>
+    <a href="{{ url_for('store_movements') }}" class="btn btn-outline"><i data-feather="repeat"></i> Stock Movement</a>
+    {% if current_user.role == 'admin' %}
+    <a href="{{ url_for('store_adjustment_add') }}" class="btn btn-primary"><i data-feather="sliders"></i> Correct Stock</a>
+    {% endif %}
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>Part</label>
+    <select name="part_id">
+      <option value="">All Parts</option>
+      {% for p in parts %}
+      <option value="{{ p.id }}" {% if part_id|string == p.id|string %}selected{% endif %}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-outline"><i data-feather="filter"></i> Filter</button>
+  <a href="{{ url_for('store_adjustments') }}" class="btn btn-outline">Reset</a>
+  <a href="{{ url_for('store_adjustments_export', part_id=part_id) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+  <a href="{{ url_for('store_adjustments_export', part_id=part_id, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
+</form>
+
+<div class="card">
+  {% if adjustments.items %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th><th>Part</th><th class="text-right">Qty Before</th><th class="text-right">Qty After</th>
+          <th class="text-right">Change</th><th class="text-right">Cost Before</th><th class="text-right">Cost After</th>
+          <th>Reason</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in adjustments.items %}
+        <tr>
+          <td>{{ a.adjustment_date.strftime('%d %b %Y') }}</td>
+          <td>{{ a.part.name }}</td>
+          <td class="text-right">{{ a.quantity_before|qty }}</td>
+          <td class="text-right">{{ a.quantity_after|qty }}</td>
+          <td class="text-right" style="{% if a.quantity_delta > 0 %}color:var(--success);{% elif a.quantity_delta < 0 %}color:var(--danger);{% endif %}">
+            {{ '%+g'|format(a.quantity_delta) }}
+          </td>
+          <td class="text-right">{{ a.cost_price_before|currency }}</td>
+          <td class="text-right">{{ a.cost_price_after|currency }}</td>
+          <td>
+            <span class="badge badge-amber">{{ a.reason_label }}</span>
+            {% if a.notes %}<div style="font-size:11.5px;color:var(--text-muted);">{{ a.notes }}</div>{% endif %}
+          </td>
+          <td class="btn-group">
+            {% if current_user.role == 'admin' %}
+            <form method="POST" action="{{ url_for('store_adjustment_delete', aid=a.id) }}" data-confirm="Delete this correction? Stock will be reverted accordingly.">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Del</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="pagination">
+    {% if adjustments.has_prev %}<a href="?page={{ adjustments.prev_num }}&part_id={{ part_id }}">&laquo; Prev</a>{% endif %}
+    <span class="active">Page {{ adjustments.page }} of {{ adjustments.pages or 1 }}</span>
+    {% if adjustments.has_next %}<a href="?page={{ adjustments.next_num }}&part_id={{ part_id }}">Next &raquo;</a>{% endif %}
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">🛠️</div>
+    <p>No stock corrections recorded yet. {% if current_user.role == 'admin' %}<a href="{{ url_for('store_adjustment_add') }}">Record one now</a>.{% endif %}</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

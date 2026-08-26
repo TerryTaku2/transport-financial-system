@@ -197,6 +197,8 @@
         opt.textContent = item.label;
         if ('selling_price' in item) opt.dataset.price = item.selling_price;
         if ('quantity_on_hand' in item) opt.dataset.stock = item.quantity_on_hand;
+        if ('cost_price' in item) opt.dataset.cost = item.cost_price;
+        if ('unit' in item) opt.dataset.unit = item.unit;
         if (item.default_amount != null) opt.setAttribute('data-default-amount', item.default_amount);
         select.appendChild(opt);
       });

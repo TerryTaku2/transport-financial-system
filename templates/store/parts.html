@@ -11,6 +11,7 @@
   <div class="btn-group">
     <a href="{{ url_for('store_purchases') }}" class="btn btn-outline"><i data-feather="arrow-down-circle"></i> Purchases</a>
     <a href="{{ url_for('store_sales') }}" class="btn btn-outline"><i data-feather="arrow-up-circle"></i> Sales</a>
+    <a href="{{ url_for('store_adjustments') }}" class="btn btn-outline"><i data-feather="sliders"></i> Adjustments</a>
     <a href="{{ url_for('store_part_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Part</a>
   </div>
 </div>
@@ -69,6 +70,7 @@
             <div class="actions">
               <a href="{{ url_for('store_part_edit', pid=p.id) }}" class="btn btn-outline btn-xs">Edit</a>
               {% if current_user.role == 'admin' %}
+              <a href="{{ url_for('store_adjustment_add', part_id=p.id) }}" class="btn btn-outline btn-xs">Correct</a>
               <form method="POST" action="{{ url_for('store_part_delete', pid=p.id) }}" data-confirm="Delete this part and all its purchase/sale history?">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <button class="btn btn-danger btn-xs">Del</button>

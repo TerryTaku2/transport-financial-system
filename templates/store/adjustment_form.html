@@ -1,0 +1,98 @@
+{% extends 'base.html' %}
+{% block title %}Correct Stock{% endblock %}
+{% block page_title %}Correct Stock{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Correct Stock</h1>
+    <div class="subtitle">Set a part's quantity on hand and/or unit cost to match a physical count or write-off</div>
+  </div>
+  <a href="{{ url_for('store_adjustments') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+</div>
+
+{% if not parts %}
+<div class="alert alert-warning">No active parts on file yet. <a href="{{ url_for('store_part_add') }}">Add a part first</a>.</div>
+{% else %}
+<div class="card">
+  <div class="card-body">
+    <form method="POST" data-offline-form>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="adjustment_date" required value="{{ today }}">
+        </div>
+        <div class="form-group">
+          <label>Part<span class="req">*</span></label>
+          <select name="part_id" id="adj_part" required data-refdata="parts">
+            <option value="">Select part</option>
+            {% for p in parts %}
+            <option value="{{ p.id }}" data-stock="{{ p.quantity_on_hand }}" data-cost="{{ p.cost_price }}" data-unit="{{ p.unit }}"
+                    {% if preselect_part_id and preselect_part_id==p.id %}selected{% endif %}>
+              {{ p.name }}{% if p.part_number %} ({{ p.part_number }}){% endif %} — {{ p.quantity_on_hand|qty }} {{ p.unit }} on hand @ {{ p.cost_price|currency }}
+            </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Correct Quantity<span class="req">*</span></label>
+          <input type="number" id="adj_qty" name="quantity" min="0" step="any" required placeholder="New quantity on hand">
+          <div class="form-hint" id="adj_qty_hint"></div>
+        </div>
+        <div class="form-group">
+          <label>Correct Unit Cost (USD)<span class="req">*</span></label>
+          <input type="number" id="adj_cost" name="cost_price" min="0" step="any" required placeholder="New weighted-average cost">
+          <div class="form-hint" id="adj_cost_hint"></div>
+        </div>
+        <div class="form-group">
+          <label>Reason<span class="req">*</span></label>
+          <select name="reason" required>
+            {% for value, label in reasons %}
+            <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="form-group full">
+          <label>Notes</label>
+          <textarea name="notes" placeholder="e.g. Physical count on 2026-08-26 found 2 fewer units than the system"></textarea>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Correction</button>
+        <a href="{{ url_for('store_adjustments') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endif %}
+
+<script>
+(function () {
+  var partSelect = document.getElementById('adj_part');
+  var qtyInput = document.getElementById('adj_qty');
+  var costInput = document.getElementById('adj_cost');
+  var qtyHint = document.getElementById('adj_qty_hint');
+  var costHint = document.getElementById('adj_cost_hint');
+
+  function applyCurrent() {
+    var opt = partSelect.options[partSelect.selectedIndex];
+    if (!opt || !opt.value) {
+      qtyHint.textContent = '';
+      costHint.textContent = '';
+      return;
+    }
+    var qty = opt.dataset.stock;
+    var cost = opt.dataset.cost;
+    var unit = opt.dataset.unit;
+    qtyInput.value = qty;
+    costInput.value = cost;
+    qtyHint.textContent = 'System currently shows ' + qty + ' ' + unit + ' on hand.';
+    costHint.textContent = 'System currently values it at ' + cost + ' per ' + unit + '.';
+  }
+
+  partSelect.addEventListener('change', applyCurrent);
+  if (partSelect.value) { applyCurrent(); }
+})();
+</script>
+{% endblock %}

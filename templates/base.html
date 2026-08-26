@@ -224,6 +224,9 @@
       <a href="{{ url_for('store_movements') }}" class="nav-item {% if 'store_movement' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="repeat"></i> Stock Movement
       </a>
+      <a href="{{ url_for('store_adjustments') }}" class="nav-item {% if 'store_adjustment' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="sliders"></i> Adjustments
+      </a>
       <a href="{{ url_for('store_trading_account') }}" class="nav-item {% if request.endpoint == 'store_trading_account' %}active{% endif %}">
         <i data-feather="pie-chart"></i> Trading Account
       </a>

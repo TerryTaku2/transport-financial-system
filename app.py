@@ -1299,6 +1299,8 @@ class SparePart(db.Model):
                                 cascade='all, delete-orphan')
     sales = db.relationship('StoreSale', backref='part', lazy=True,
                             cascade='all, delete-orphan')
+    adjustments = db.relationship('StoreAdjustment', backref='part', lazy=True,
+                                  cascade='all, delete-orphan')
 
     @property
     def selling_price(self):
@@ -1377,6 +1379,57 @@ class StoreSale(db.Model):
     @property
     def customer_display(self):
         return self.vehicle.registration if self.vehicle else (self.customer_name or None)
+
+
+ADJUSTMENT_REASONS = [
+    ('physical_count', 'Physical Stock Count'),
+    ('damage', 'Damaged / Written Off'),
+    ('loss', 'Lost'),
+    ('theft', 'Theft'),
+    ('found', 'Found Surplus'),
+    ('revaluation', 'Cost Revaluation'),
+    ('other', 'Other'),
+]
+ADJUSTMENT_REASON_LABELS = dict(ADJUSTMENT_REASONS)
+
+
+class StoreAdjustment(db.Model):
+    """A manual correction to a part's quantity on hand and/or weighted-average
+    unit cost — e.g. reconciling a physical stock count, writing off
+    damage/loss/theft, recording found surplus, or revaluing stock. Unlike a
+    purchase/sale this has no supplier/customer and no direct revenue/cost-of-
+    sale impact; it just corrects the book figures to match reality, with the
+    before/after snapshotted so the correction is auditable rather than
+    silently overwriting history."""
+    __tablename__ = 'store_adjustments'
+    id = db.Column(db.Integer, primary_key=True)
+    part_id = db.Column(db.Integer, db.ForeignKey('spare_parts.id'), nullable=False)
+    adjustment_date = db.Column(db.Date, nullable=False, default=date.today)
+    quantity_before = db.Column(db.Float, nullable=False)
+    quantity_after = db.Column(db.Float, nullable=False)
+    cost_price_before = db.Column(db.Float, nullable=False)
+    cost_price_after = db.Column(db.Float, nullable=False)
+    reason = db.Column(db.String(20), nullable=False, default='other')
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
+
+    creator = db.relationship('User', foreign_keys=[created_by])
+
+    @property
+    def quantity_delta(self):
+        return self.quantity_after - self.quantity_before
+
+    @property
+    def reason_label(self):
+        return ADJUSTMENT_REASON_LABELS.get(self.reason, self.reason)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1481,6 +1534,8 @@ PRECACHE_PAGES = [
     ('store', 'store_parts'),
     ('store', 'store_purchases'),
     ('store', 'store_sales'),
+    ('store', 'store_movements'),
+    ('store', 'store_adjustments'),
     ('store', 'store_trading_account'),
     ('compliance', 'compliance'),
 ]
@@ -4705,6 +4760,9 @@ def store_part_delete(pid):
     for sale in part.sales:
         sale.deleted_at = now
         touch_sync_fields(sale)
+    for adjustment in part.adjustments:
+        adjustment.deleted_at = now
+        touch_sync_fields(adjustment)
     part.deleted_at = now
     touch_sync_fields(part)
     db.session.commit()
@@ -5100,6 +5158,113 @@ def store_sale_delete(sid):
     return redirect(url_for('store_sales'))
 
 
+@app.route('/store/adjustments')
+@login_required
+@permission_required('store')
+def store_adjustments():
+    page = request.args.get('page', 1, type=int)
+    part_id = request.args.get('part_id', '')
+    q = StoreAdjustment.query
+    if part_id:
+        q = q.filter(StoreAdjustment.part_id == part_id)
+    adjustments = q.order_by(StoreAdjustment.adjustment_date.desc(),
+                             StoreAdjustment.id.desc()).paginate(page=page, per_page=20)
+    all_parts = SparePart.query.order_by(SparePart.name).all()
+    return render_template('store/adjustments.html', adjustments=adjustments, parts=all_parts,
+                           part_id=part_id, reasons=ADJUSTMENT_REASONS)
+
+
+@app.route('/store/adjustments/export')
+@login_required
+@permission_required('store')
+def store_adjustments_export():
+    part_id = request.args.get('part_id', '')
+    q = StoreAdjustment.query
+    if part_id:
+        q = q.filter(StoreAdjustment.part_id == part_id)
+    adjustments = q.order_by(StoreAdjustment.adjustment_date.desc(), StoreAdjustment.id.desc()).all()
+    rows = [[a.adjustment_date, a.part.name, qty_filter(a.quantity_before), qty_filter(a.quantity_after),
+             qty_filter(a.quantity_delta), f'{a.cost_price_before:.2f}', f'{a.cost_price_after:.2f}',
+             a.reason_label, a.notes or ''] for a in adjustments]
+    header = ['Date', 'Part', 'Qty Before', 'Qty After', 'Qty Change', 'Cost Before', 'Cost After',
+              'Reason', 'Notes']
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'store_adjustments_{date.today()}.pdf', 'Spares Store Adjustments',
+            f'Generated {date.today()}', header, rows)
+    return csv_export_response(f'store_adjustments_{date.today()}.csv', header, rows)
+
+
+@app.route('/store/adjustments/add', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def store_adjustment_add():
+    """Corrects a part's quantity on hand and/or weighted-average unit cost
+    to match a physical count or a write-off/write-up — admin-only since,
+    unlike a purchase or sale, it overrides the book figures directly rather
+    than following the normal buy/sell trail."""
+    if request.method == 'POST':
+        client_id = request.form.get('_client_id')
+        if already_synced(client_id):
+            flash('Already recorded.', 'info')
+            return redirect(url_for('store_adjustments'))
+        part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
+        new_quantity = form_float(request.form, 'quantity', min_value=0)
+        new_cost_price = form_float(request.form, 'cost_price', min_value=0)
+
+        adjustment = StoreAdjustment(
+            part_id=part.id,
+            adjustment_date=parse_date(request.form['adjustment_date']),
+            quantity_before=part.quantity_on_hand,
+            quantity_after=new_quantity,
+            cost_price_before=part.cost_price,
+            cost_price_after=new_cost_price,
+            reason=request.form.get('reason', 'other'),
+            notes=request.form.get('notes', '').strip(),
+            created_by=current_user.id,
+        )
+        part.quantity_on_hand = new_quantity
+        part.cost_price = new_cost_price
+
+        db.session.add(adjustment)
+        db.session.flush()
+        log_audit('CREATE', 'store_adjustments', adjustment.id,
+                  f'Adjusted {part.name}: qty {adjustment.quantity_before} -> {new_quantity}, '
+                  f'cost {adjustment.cost_price_before} -> {new_cost_price} ({adjustment.reason_label})')
+        record_offline_sync(client_id, 'store_adjustment_add')
+        touch_sync_fields(adjustment)
+        touch_sync_fields(part)
+        db.session.commit()
+        flash('Stock corrected.', 'success')
+        return redirect(url_for('store_adjustments'))
+
+    all_parts = SparePart.query.filter_by(status='active').order_by(SparePart.name).all()
+    part_id = request.args.get('part_id', type=int)
+    return render_template('store/adjustment_form.html', parts=all_parts, reasons=ADJUSTMENT_REASONS,
+                           today=date.today().strftime('%Y-%m-%d'), preselect_part_id=part_id)
+
+
+@app.route('/store/adjustments/<int:aid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def store_adjustment_delete(aid):
+    adjustment = StoreAdjustment.query.filter_by(id=aid).first_or_404()
+    part = adjustment.part
+    # Reverses this adjustment's own delta rather than resetting to
+    # quantity_before/cost_price_before outright — same "undo just this
+    # record's effect" approach as store_purchase_delete, so it stays
+    # correct even if other transactions happened on the part since.
+    part.quantity_on_hand = max(0, part.quantity_on_hand - adjustment.quantity_delta)
+    log_audit('DELETE', 'store_adjustments', aid,
+              f'Deleted adjustment of {part.name} ({adjustment.reason_label})')
+    adjustment.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(adjustment)
+    touch_sync_fields(part)
+    db.session.commit()
+    flash('Adjustment deleted and stock reverted accordingly.', 'warning')
+    return redirect(url_for('store_adjustments'))
+
+
 @app.route('/store/trading-account')
 @login_required
 @permission_required('store')
@@ -5187,38 +5352,47 @@ def store_trading_account_export():
 
 
 def _stock_movement_summary(df, dt, part_id=None):
-    """Per-part opening/in/out/closing quantities for the period, run off
-    every purchase/sale ever recorded (not just ones in range) so the
-    opening balance as of df is exact rather than estimated."""
+    """Per-part opening/in/out/adjustments/closing quantities for the
+    period, run off every purchase/sale/adjustment ever recorded (not just
+    ones in range) so the opening balance as of df is exact rather than
+    estimated. Adjustments are tracked as a signed net delta rather than
+    split into in/out — a correction isn't a restock or a sale."""
     parts = SparePart.query.order_by(SparePart.name).all()
     if part_id:
         parts = [p for p in parts if str(p.id) == str(part_id)]
 
     purchases = StorePurchase.query.filter(StorePurchase.purchase_date <= dt).all()
     sales = StoreSale.query.filter(StoreSale.sale_date <= dt).all()
+    adjustments = StoreAdjustment.query.filter(StoreAdjustment.adjustment_date <= dt).all()
 
     rows = []
     for part in parts:
         p_purchases = [p for p in purchases if p.part_id == part.id]
         p_sales = [s for s in sales if s.part_id == part.id]
+        p_adjustments = [a for a in adjustments if a.part_id == part.id]
         opening = (sum(p.quantity for p in p_purchases if p.purchase_date < df) -
-                   sum(s.quantity for s in p_sales if s.sale_date < df))
+                   sum(s.quantity for s in p_sales if s.sale_date < df) +
+                   sum(a.quantity_delta for a in p_adjustments if a.adjustment_date < df))
         stock_in = sum(p.quantity for p in p_purchases if p.purchase_date >= df)
         stock_out = sum(s.quantity for s in p_sales if s.sale_date >= df)
-        closing = opening + stock_in - stock_out
+        net_adjustments = sum(a.quantity_delta for a in p_adjustments if a.adjustment_date >= df)
+        closing = opening + stock_in - stock_out + net_adjustments
         rows.append({'part': part, 'opening': opening, 'stock_in': stock_in,
-                     'stock_out': stock_out, 'closing': closing})
+                     'stock_out': stock_out, 'net_adjustments': net_adjustments, 'closing': closing})
     return rows
 
 
 def _stock_movement_ledger(part, df, dt):
-    """Chronological IN/OUT ledger for one part with a running balance,
+    """Chronological IN/OUT/ADJ ledger for one part with a running balance,
     seeded by the exact opening balance as of df."""
     purchases = StorePurchase.query.filter(StorePurchase.part_id == part.id,
                                             StorePurchase.purchase_date < df).all()
     sales = StoreSale.query.filter(StoreSale.part_id == part.id,
                                     StoreSale.sale_date < df).all()
-    balance = sum(p.quantity for p in purchases) - sum(s.quantity for s in sales)
+    adjustments = StoreAdjustment.query.filter(StoreAdjustment.part_id == part.id,
+                                               StoreAdjustment.adjustment_date < df).all()
+    balance = (sum(p.quantity for p in purchases) - sum(s.quantity for s in sales) +
+               sum(a.quantity_delta for a in adjustments))
 
     entries = []
     for p in StorePurchase.query.filter(StorePurchase.part_id == part.id,
@@ -5230,10 +5404,14 @@ def _stock_movement_ledger(part, df, dt):
         entries.append({'date': s.sale_date, 'type': 'OUT', 'quantity': s.quantity,
                         'reference': s.vehicle.registration if s.vehicle else (s.customer_name or '—'),
                         'notes': s.notes, '_seq': s.id})
+    for a in StoreAdjustment.query.filter(StoreAdjustment.part_id == part.id,
+                                          StoreAdjustment.adjustment_date.between(df, dt)).all():
+        entries.append({'date': a.adjustment_date, 'type': 'ADJ', 'quantity': a.quantity_delta,
+                        'reference': a.reason_label, 'notes': a.notes, '_seq': a.id})
     entries.sort(key=lambda e: (e['date'], e['_seq']))
 
     for e in entries:
-        balance += e['quantity'] if e['type'] == 'IN' else -e['quantity']
+        balance += e['quantity'] if e['type'] in ('IN', 'ADJ') else -e['quantity']
         e['balance'] = balance
     return entries
 
@@ -5279,8 +5457,9 @@ def store_movements_export():
     else:
         summary = _stock_movement_summary(df, dt)
         rows = [[row['part'].name, qty_filter(row['opening']), qty_filter(row['stock_in']),
-                 qty_filter(row['stock_out']), qty_filter(row['closing'])] for row in summary]
-        header = ['Part', 'Opening', 'Stock In', 'Stock Out', 'Closing']
+                 qty_filter(row['stock_out']), qty_filter(row['net_adjustments']),
+                 qty_filter(row['closing'])] for row in summary]
+        header = ['Part', 'Opening', 'Stock In', 'Stock Out', 'Adjustments', 'Closing']
         title = 'Stock Movement Summary'
 
     if request.args.get('format') == 'pdf':
@@ -11640,7 +11819,8 @@ def api_refdata():
         'vehicles': [{'id': v.id, 'label': f'{v.registration} — {v.make} {v.model}'} for v in vehicles],
         'drivers': [{'id': d.id, 'label': d.name} for d in drivers],
         'parts': [{'id': p.id, 'label': part_label(p), 'selling_price': p.selling_price,
-                   'quantity_on_hand': p.quantity_on_hand} for p in parts],
+                   'quantity_on_hand': p.quantity_on_hand, 'cost_price': p.cost_price, 'unit': p.unit}
+                  for p in parts],
         'franchise_vehicles': [{'id': v.id, 'label': f'{v.number_plate} — {v.franchisee_name}'}
                                for v in franchise_vehicles],
         'expense_categories': expense_categories,
@@ -11728,6 +11908,10 @@ SYNC_MODELS = {
         'sale_date', 'quantity', 'unit_cost', 'unit_price', 'total_amount', 'customer_name',
         'notes', 'created_by', 'created_at', 'deleted_at',
     ), {'part_id': 'spare_parts', 'vehicle_id': 'vehicles'}),
+    'store_adjustments': (StoreAdjustment, (
+        'adjustment_date', 'quantity_before', 'quantity_after', 'cost_price_before', 'cost_price_after',
+        'reason', 'notes', 'created_by', 'created_at', 'deleted_at',
+    ), {'part_id': 'spare_parts'}),
     # Phase 5 — franchise/compliance tables.
     'franchise_vehicles': (FranchiseVehicle, (
         'number_plate', 'franchisee_name', 'status', 'daily_fee', 'weekly_fee', 'amount_owed',
@@ -11802,7 +11986,7 @@ SYNC_TABLE_ORDER = [
     'franchise_daily_income', 'franchise_weekly_income', 'franchise_collections',
     'franchise_operational_expenses',
     'loan_payments', 'commission_payments', 'payroll_deductions',
-    'daily_logs', 'fuel_logs', 'maintenance_logs', 'store_sales',
+    'daily_logs', 'fuel_logs', 'maintenance_logs', 'store_sales', 'store_adjustments',
 ]
 
 # ─────────────────────────────────────────────────────────────
@@ -11820,7 +12004,7 @@ DANGER_ZONE_MODULES = [
     ('ledger', 'Daily Transactions (Crew Ledger)', ['daily_logs', 'driver_deposits']),
     ('operations', 'Operations (Fuel & Maintenance Logs)', ['fuel_logs', 'maintenance_logs']),
     ('finance', 'Finance Ledger', ['loans', 'loan_payments', 'payables', 'receivables', 'capital_contributions', 'owner_drawings', 'budgets', 'expenses', 'expense_categories', 'commission_payments', 'payroll_deductions']),
-    ('store', 'Spares Store', ['spare_parts', 'store_purchases', 'store_sales']),
+    ('store', 'Spares Store', ['spare_parts', 'store_purchases', 'store_sales', 'store_adjustments']),
 ]
 DANGER_ZONE_MODULES_BY_KEY = {key: (label, tables) for key, label, tables in DANGER_ZONE_MODULES}
 
@@ -11839,6 +12023,7 @@ DANGER_ZONE_TABLE_LABELS = {
     'expense_categories': 'Expense Categories', 'commission_payments': 'Commission Payments',
     'payroll_deductions': 'Payroll Deductions',
     'spare_parts': 'Spare Parts', 'store_purchases': 'Store Purchases', 'store_sales': 'Store Sales',
+    'store_adjustments': 'Store Adjustments',
 }
 
 
@@ -11857,6 +12042,7 @@ _DANGER_ZONE_LABEL_FIELDS = {
     'fuel_logs': ('log_date', 'total_cost'),
     'maintenance_logs': ('log_date', 'total_cost'),
     'store_sales': ('sale_date', 'customer_name', 'total_amount'),
+    'store_adjustments': ('adjustment_date', 'reason', 'quantity_after'),
     'franchise_vehicles': ('number_plate', 'franchisee_name'),
     'vehicle_documents': ('doc_type', 'reference_number'),
     'maintenance_schedules': ('description',),

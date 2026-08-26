@@ -10,6 +10,7 @@
   </div>
   <div class="btn-group">
     <a href="{{ url_for('store_parts') }}" class="btn btn-outline"><i data-feather="package"></i> Inventory</a>
+    <a href="{{ url_for('store_adjustment_add', part_id=part_id) }}" class="btn btn-outline"><i data-feather="sliders"></i> Correct Stock</a>
     <a href="{{ url_for('store_movements_export', part_id=part_id, date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
     <a href="{{ url_for('store_movements_export', part_id=part_id, date_from=date_from, date_to=date_to, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
   </div>
@@ -52,9 +53,13 @@
           <td>{{ e.date.strftime('%d %b %Y') }}</td>
           <td>
             {% if e.type == 'IN' %}<span class="badge badge-green">IN</span>
-            {% else %}<span class="badge badge-red">OUT</span>{% endif %}
+            {% elif e.type == 'OUT' %}<span class="badge badge-red">OUT</span>
+            {% else %}<span class="badge badge-amber">ADJ</span>{% endif %}
           </td>
-          <td class="text-right">{{ e.quantity|qty }} {{ ledger_part.unit }}</td>
+          <td class="text-right">
+            {% if e.type == 'ADJ' %}{{ '%+g'|format(e.quantity) }}{% else %}{{ e.quantity|qty }}{% endif %}
+            {{ ledger_part.unit }}
+          </td>
           <td>{{ e.reference }}</td>
           <td class="text-right"><strong>{{ e.balance|qty }}</strong></td>
         </tr>
@@ -75,7 +80,7 @@
   <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Part</th><th class="text-right">Opening</th><th class="text-right">Stock In</th><th class="text-right">Stock Out</th><th class="text-right">Closing</th></tr>
+        <tr><th>Part</th><th class="text-right">Opening</th><th class="text-right">Stock In</th><th class="text-right">Stock Out</th><th class="text-right">Adjustments</th><th class="text-right">Closing</th></tr>
       </thead>
       <tbody>
         {% for row in summary %}
@@ -86,6 +91,9 @@
           <td class="text-right">{{ row.opening|qty }}</td>
           <td class="text-right" style="color:var(--success);">+{{ row.stock_in|qty }}</td>
           <td class="text-right" style="color:var(--danger);">-{{ row.stock_out|qty }}</td>
+          <td class="text-right" style="{% if row.net_adjustments != 0 %}color:#b45309;{% endif %}">
+            {% if row.net_adjustments != 0 %}{{ '%+g'|format(row.net_adjustments) }}{% else %}0{% endif %}
+          </td>
           <td class="text-right"><strong>{{ row.closing|qty }}</strong></td>
         </tr>
         {% endfor %}
