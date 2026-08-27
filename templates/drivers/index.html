@@ -19,6 +19,7 @@
         <tr>
           <th>Name</th>
           <th>License No.</th>
+          <th>ID No.</th>
           <th>Role</th>
           <th>Vehicle</th>
           <th>Phone</th>
@@ -32,6 +33,7 @@
         <tr>
           <td><strong>{{ d.name }}</strong>{% if d.role == 'conductor' and d.paired_driver %}<div class="form-hint">under {{ d.paired_driver.name }}</div>{% endif %}</td>
           <td>{{ d.license_number or '—' }}</td>
+          <td>{{ d.id_number or '—' }}</td>
           <td><span class="badge badge-blue">{{ d.role|title }}</span></td>
           <td>{{ d.assigned_vehicle.registration if d.assigned_vehicle else '—' }}</td>
           <td>{{ d.phone or '—' }}</td>

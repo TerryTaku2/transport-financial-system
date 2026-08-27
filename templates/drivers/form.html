@@ -32,6 +32,11 @@
           <input type="text" name="license_number" id="license-input" value="{{ driver.license_number if driver else '' }}">
           <div class="form-hint">Optional.</div>
         </div>
+        <div class="form-group">
+          <label>ID Number</label>
+          <input type="text" name="id_number" value="{{ driver.id_number if driver else '' }}">
+          <div class="form-hint">National ID or passport number. Optional.</div>
+        </div>
         <div class="form-group" id="paired-driver-group">
           <label>Works Under Driver</label>
           <select name="paired_driver_id">

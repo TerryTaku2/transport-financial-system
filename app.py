@@ -335,6 +335,10 @@ class Driver(db.Model):
     # Only drivers need a license — conductors don't drive, so this is
     # optional and only enforced as required at the form level for role='driver'.
     license_number = db.Column(db.String(50), unique=True, nullable=True)
+    # National ID / passport number — not DB-unique (existing SQLite files
+    # can't gain a UNIQUE constraint via ALTER TABLE), so duplicates are
+    # caught with the same check_unique() friendly-error path as license_number.
+    id_number = db.Column(db.String(30))
     phone = db.Column(db.String(20))
     role = db.Column(db.String(20), default='driver')
     commission_rate = db.Column(db.Float)
@@ -3250,10 +3254,14 @@ def driver_add():
         license_number = request.form.get('license_number', '').strip() or None
         if license_number:
             check_unique(Driver, 'license_number', license_number, label='License number')
+        id_number = request.form.get('id_number', '').strip() or None
+        if id_number:
+            check_unique(Driver, 'id_number', id_number, label='ID number')
         paired_driver_id = form_int(request.form, 'paired_driver_id', required=False) if role == 'conductor' else None
         d = Driver(
             name=request.form['name'].strip(),
             license_number=license_number,
+            id_number=id_number,
             phone=request.form.get('phone', '').strip(),
             role=role,
             commission_rate=rate_input / 100 if rate_input is not None else None,
@@ -3289,11 +3297,15 @@ def driver_edit(did):
         license_number = request.form.get('license_number', '').strip() or None
         if license_number:
             check_unique(Driver, 'license_number', license_number, label='License number', exclude_id=d.id)
+        id_number = request.form.get('id_number', '').strip() or None
+        if id_number:
+            check_unique(Driver, 'id_number', id_number, label='ID number', exclude_id=d.id)
         paired_driver_id = form_int(request.form, 'paired_driver_id', required=False) if role == 'conductor' else None
         if paired_driver_id == d.id:
             raise ValueError('A conductor cannot be paired with themself.')
         d.name = request.form['name'].strip()
         d.license_number = license_number
+        d.id_number = id_number
         d.phone = request.form.get('phone', '').strip()
         d.role = role
         d.commission_rate = rate_input / 100 if rate_input is not None else None
@@ -11882,7 +11894,7 @@ SYNC_MODELS = {
         'name', 'default_amount', 'created_at', 'deleted_at',
     ), {'parent_id': 'expense_categories'}),
     'drivers': (Driver, (
-        'name', 'license_number', 'phone', 'role', 'commission_rate', 'status',
+        'name', 'license_number', 'id_number', 'phone', 'role', 'commission_rate', 'status',
         'next_of_kin_name', 'next_of_kin_phone', 'next_of_kin_relationship', 'created_at', 'deleted_at',
     ), {'paired_driver_id': 'drivers', 'assigned_vehicle_id': 'vehicles'}),
     'expenses': (Expense, (
@@ -13143,6 +13155,8 @@ def migrate_db():
         for col in ('next_of_kin_name', 'next_of_kin_phone', 'next_of_kin_relationship'):
             if col not in driver_col_names:
                 conn.execute(text(f"ALTER TABLE drivers ADD COLUMN {col} VARCHAR(100)"))
+        if 'id_number' not in driver_col_names:
+            conn.execute(text("ALTER TABLE drivers ADD COLUMN id_number VARCHAR(30)"))
 
         license_col = next((c for c in driver_cols if c['name'] == 'license_number'), None)
         if license_col is not None and not license_col['nullable']:
