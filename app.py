@@ -1990,7 +1990,7 @@ def import_ledger_rows(file_rows, vehicle, auto_register_drivers=False):
                 last_driver = driver
 
             if fare:
-                conductor = driver.paired_conductors[0] if driver.paired_conductors else None
+                conductor = resolve_conductor(driver, vehicle.id)
                 log = DailyLog(
                     vehicle_id=vehicle.id, driver_id=driver.id,
                     conductor_id=conductor.id if conductor else None,
@@ -2586,6 +2586,22 @@ def fuel_price_for(fuel_type):
     if not row:
         return None
     return row.petrol_price if fuel_type == 'petrol' else row.diesel_price
+
+
+def resolve_conductor(driver, vehicle_id):
+    """Auto-attaches a conductor to a trip being logged: prefers the
+    conductor paired directly to this driver (Driver.paired_driver_id),
+    falling back to a conductor assigned to this vehicle
+    (Driver.assigned_vehicle_id) — a conductor can be attached either way,
+    and either attachment should flow through to DailyLog.conductor_id (and
+    from there into payroll — see compute_payroll_earnings) without the
+    person logging the trip having to pick the conductor by hand."""
+    if driver and driver.paired_conductors:
+        return driver.paired_conductors[0]
+    if vehicle_id:
+        return Driver.query.filter_by(assigned_vehicle_id=vehicle_id, role='conductor',
+                                      status='active').first()
+    return None
 
 
 def check_unique(model, field_name, value, label=None, exclude_id=None):
@@ -3610,7 +3626,7 @@ def ledger_entry_edit(vehicle_id, log_date_str):
 
         if fare is not None:
             driver = Driver.query.filter_by(id=driver_id).first()
-            conductor = driver.paired_conductors[0] if driver and driver.paired_conductors else None
+            conductor = resolve_conductor(driver, vehicle_id)
             if log is None:
                 log = DailyLog(vehicle_id=vehicle_id, log_date=log_date, created_by=current_user.id)
                 db.session.add(log)
@@ -3864,7 +3880,7 @@ def driver_ledger_add():
                                   f'driver, fare and garnish already exists — this looks like a duplicate submission.')
 
             driver = Driver.query.filter_by(id=driver_id).first()
-            conductor = driver.paired_conductors[0] if driver and driver.paired_conductors else None
+            conductor = resolve_conductor(driver, vehicle_id)
             daily = DailyLog(
                 vehicle_id=vehicle_id, driver_id=driver_id, conductor_id=conductor.id if conductor else None,
                 log_date=log_date, gross_revenue=fare or 0.0,
