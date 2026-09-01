@@ -7202,12 +7202,7 @@ def driver_payslip_pdf(driver_id):
         flash(f'{driver.name} has no payroll activity for {date_from_str} to {date_to_str}.', 'warning')
         return redirect(url_for('report_payroll', date_from=date_from_str, date_to=date_to_str))
 
-    deduction_rows = PayrollDeduction.query.filter(
-        PayrollDeduction.driver_id == driver_id,
-        PayrollDeduction.deduction_date.between(df, dt)).order_by(PayrollDeduction.deduction_date).all()
-    payment_rows = CommissionPayment.query.filter(
-        CommissionPayment.driver_id == driver_id,
-        CommissionPayment.payment_date.between(df, dt)).order_by(CommissionPayment.payment_date).all()
+    deduction_rows, payment_rows = _crew_deduction_payment_rows(driver_id, df, dt)
 
     return _payslip_pdf_response(driver.name, driver.role.title(), e, deduction_rows, payment_rows,
                                   date_from_str, date_to_str)
@@ -7240,10 +7235,73 @@ def conductor_payslip_pdf(driver_id):
     return _payslip_pdf_response(display_name, 'Conductor', ce, [], [], date_from_str, date_to_str)
 
 
+def _crew_deduction_payment_rows(driver_id, df, dt):
+    deduction_rows = PayrollDeduction.query.filter(
+        PayrollDeduction.driver_id == driver_id,
+        PayrollDeduction.deduction_date.between(df, dt)).order_by(PayrollDeduction.deduction_date).all()
+    payment_rows = CommissionPayment.query.filter(
+        CommissionPayment.driver_id == driver_id,
+        CommissionPayment.payment_date.between(df, dt)).order_by(CommissionPayment.payment_date).all()
+    return deduction_rows, payment_rows
+
+
+@app.route('/reports/payroll/payslips/print-all.pdf')
+@login_required
+@permission_required('reports')
+def payroll_payslips_print_all():
+    """Every driver and conductor's payslip for the selected period, printed
+    as one combined PDF — same per-crew-member layout as the individual
+    Payslip downloads (including the signature line), one per page, so the
+    whole batch can be run off and handed out in one go instead of printing
+    each crew member's slip separately."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    earnings, *_ = compute_payroll_earnings(df, dt)
+
+    if not earnings:
+        flash(f'No payroll activity for {date_from_str} to {date_to_str}.', 'warning')
+        return redirect(url_for('report_payroll', date_from=date_from_str, date_to=date_to_str))
+
+    elements = []
+    for e in earnings:
+        deduction_rows, payment_rows = _crew_deduction_payment_rows(e['driver'].id, df, dt)
+        elements += _payslip_elements(e['driver'].name, e['driver'].role.title(), e,
+                                       deduction_rows, payment_rows, date_from_str, date_to_str)
+        elements.append(PageBreak())
+
+        for ce in e['conductors']:
+            if ce.get('is_placeholder'):
+                first_name = e['driver'].name.split()[0] if e['driver'].name else 'Conductor'
+                elements += _payslip_elements(f'{first_name} Conductor', 'Conductor', ce, [], [],
+                                               date_from_str, date_to_str)
+            else:
+                c_deduction_rows, c_payment_rows = _crew_deduction_payment_rows(ce['driver'].id, df, dt)
+                elements += _payslip_elements(ce['driver'].name, 'Conductor', ce,
+                                               c_deduction_rows, c_payment_rows, date_from_str, date_to_str)
+            elements.append(PageBreak())
+
+    if elements and isinstance(elements[-1], PageBreak):
+        elements.pop()
+
+    return _pdf_response(f'payslips_all_{date_from_str}_to_{date_to_str}.pdf', elements, margins=18 * mm)
+
+
 def _payslip_pdf_response(display_name, role_label, e, deduction_rows, payment_rows, date_from_str, date_to_str):
-    """Shared PDF body for driver_payslip_pdf/conductor_payslip_pdf — same
-    layout either way, just fed a display name/role and an earnings dict
-    (a real crew member's row, or a placeholder conductor's)."""
+    """Single-payslip download — driver_payslip_pdf/conductor_payslip_pdf's
+    response wrapper around the shared element builder below."""
+    elements = _payslip_elements(display_name, role_label, e, deduction_rows, payment_rows,
+                                  date_from_str, date_to_str)
+    safe_name = display_name.replace(' ', '_')
+    return _pdf_response(f'payslip_{safe_name}_{date_from_str}_to_{date_to_str}.pdf', elements, margins=18 * mm)
+
+
+def _payslip_elements(display_name, role_label, e, deduction_rows, payment_rows, date_from_str, date_to_str):
+    """One crew member's payslip as a list of flowables — shared by the
+    single-payslip download (_payslip_pdf_response) and the print-all-at-once
+    combined PDF (payroll_payslips_print_all), which concatenates one of
+    these per crew member with a PageBreak in between. Ends with a
+    signature line so the printed copy can be signed by the driver/
+    conductor and kept on file as proof of receipt."""
     styles = _pdf_styles()
     elements = [
         Paragraph('Payslip', styles['Title']),
@@ -7297,8 +7355,23 @@ def _payslip_pdf_response(display_name, role_label, e, deduction_rows, payment_r
             pay_data.append([p.payment_date.strftime('%Y-%m-%d'), f"${p.amount:,.2f}", p.method or '—', p.notes or '—'])
         elements.append(_pdf_table(pay_data, bold_last_row=False, col_widths=[75, 75, 90, 230]))
 
-    safe_name = display_name.replace(' ', '_')
-    return _pdf_response(f'payslip_{safe_name}_{date_from_str}_to_{date_to_str}.pdf', elements, margins=18 * mm)
+    # Signature line — this printed copy is signed by the driver/conductor
+    # acknowledging receipt of the net pay above, then kept on file.
+    elements.append(Spacer(1, 30))
+    elements.append(Paragraph(
+        'I acknowledge receipt of the net pay shown above for this period.', styles['Normal']))
+    elements.append(Spacer(1, 26))
+    sig_table = Table([['', '', ''], [f'{role_label} Signature', '', 'Date']], colWidths=[260, 40, 140])
+    sig_table.setStyle(TableStyle([
+        ('LINEABOVE', (0, 0), (0, 0), 0.75, colors.black),
+        ('LINEABOVE', (2, 0), (2, 0), 0.75, colors.black),
+        ('TOPPADDING', (0, 1), (-1, 1), 3),
+        ('FONTSIZE', (0, 1), (-1, 1), 8.5),
+        ('TEXTCOLOR', (0, 1), (-1, 1), colors.HexColor('#64748b')),
+    ]))
+    elements.append(sig_table)
+
+    return elements
 
 
 def compute_cash_flow(df, dt):
