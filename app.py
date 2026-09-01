@@ -5662,6 +5662,13 @@ def expense_breakdown_by_category(df, dt, vehicle_id=None):
     return rows
 
 
+# The 'Wages' ExpenseCategory keeps its DB name (imports/other reports key
+# off it), but the income statement displays it under the fuller label —
+# applied consistently wherever the statement's category names surface
+# (report page, PDF report pack, WhatsApp summary) via this shared map.
+INCOME_STATEMENT_LABELS = {'Wages': 'Salaries and Wages'}
+
+
 def statement_expense_line_items(df, dt, vehicle_id=None):
     """The actual source rows behind each Statement Summary category —
     MaintenanceLog entries and vehicle-tagged StoreSale spares under
@@ -5715,7 +5722,7 @@ def statement_expense_line_items(df, dt, vehicle_id=None):
 
     for rows in items.values():
         rows.sort(key=lambda r: r['date'], reverse=True)
-    return items
+    return {INCOME_STATEMENT_LABELS.get(name, name): rows for name, rows in items.items()}
 
 
 def statement_revenue_line_items(df, dt, vehicle_id=None):
@@ -5792,9 +5799,17 @@ def compute_income_statement(df, dt, vehicle_id=None):
             other_expenses += row['total']
     category_totals['Maintenance'] += maintenance_cost + spares_cost
 
-    statement_expenses = [(name, category_totals[name]) for name in statement_category_names]
+    statement_expenses = [(INCOME_STATEMENT_LABELS.get(name, name), category_totals[name])
+                           for name in statement_category_names]
     if other_expenses:
         statement_expenses.append(('Other', other_expenses))
+
+    # Relabel for display only, after the name-matching above (which relies
+    # on the raw ExpenseCategory.name) is done.
+    expense_breakdown = [
+        {**row, 'name': INCOME_STATEMENT_LABELS.get(row['name'], row['name'])}
+        for row in expense_breakdown
+    ]
 
     return dict(
         gross_revenue=gross_revenue,
