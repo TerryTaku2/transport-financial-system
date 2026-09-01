@@ -1,0 +1,127 @@
+{% extends 'base.html' %}
+{% block title %}Wages & Salaries{% endblock %}
+{% block page_title %}Finance — Wages &amp; Salaries Expense{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Wages &amp; Salaries Expense</h1>
+    <div class="subtitle">
+      {{ date_from }} to {{ date_to }}
+      {% if vehicle_id %}
+        {% for v in vehicles %}{% if v.id|string == vehicle_id|string %}&mdash; {{ v.registration }} ({{ v.make }} {{ v.model }}){% endif %}{% endfor %}
+      {% else %}
+        &mdash; All vehicles
+      {% endif %}
+    </div>
+  </div>
+  <div class="btn-group">
+    <button type="button" class="btn btn-outline no-print" onclick="window.print()">
+      <i data-feather="printer"></i> Print
+    </button>
+    <a href="{{ url_for('export_wages', date_from=date_from, date_to=date_to, vehicle_id=vehicle_id) }}" class="btn btn-outline">
+      <i data-feather="download"></i> Export CSV
+    </a>
+    <a href="{{ url_for('export_wages', date_from=date_from, date_to=date_to, vehicle_id=vehicle_id, format='pdf') }}" class="btn btn-outline">
+      <i data-feather="file-text"></i> Export PDF
+    </a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <div class="form-group">
+    <label>Vehicle</label>
+    <select name="vehicle_id">
+      <option value="">All Vehicles</option>
+      {% for v in vehicles %}
+      <option value="{{ v.id }}" {% if vehicle_id|string == v.id|string %}selected{% endif %}>{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-red">
+    <div class="kpi-label">Total Wages &amp; Salaries</div>
+    <div class="kpi-value">{{ total_wages|currency }}</div>
+    <div class="kpi-sub">{{ date_from }} to {{ date_to }}</div>
+  </div>
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Entries</div>
+    <div class="kpi-value">{{ entries|length }}</div>
+    <div class="kpi-sub">Wage/salary expense rows in period</div>
+  </div>
+</div>
+
+{% if not vehicle_id and vehicle_breakdown %}
+<div class="card mb-24">
+  <div class="card-header"><h3>By Vehicle</h3></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Vehicle</th><th class="text-right">Amount</th></tr>
+      </thead>
+      <tbody>
+        {% for label, amount in vehicle_breakdown %}
+        <tr>
+          <td>{{ label }}</td>
+          <td class="text-right">{{ amount|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+<div class="card">
+  <div class="card-header"><h3>Wage &amp; Salary Entries</h3></div>
+  {% if entries %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Date</th>
+          <th>Vehicle</th>
+          <th>Category</th>
+          <th>Description</th>
+          <th class="text-right">Amount</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td>{{ e.expense_date.strftime('%d %b %Y') }}</td>
+          <td>{{ e.vehicle.registration if e.vehicle else '(general)' }}</td>
+          <td>{{ e.category.display_name }}</td>
+          <td>{{ e.description or '—' }}</td>
+          <td class="text-right">{{ e.amount|currency }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr>
+          <td colspan="4"><strong>TOTAL</strong></td>
+          <td class="text-right"><strong>{{ total_wages|currency }}</strong></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="empty-icon">💵</div>
+    <p>No wage/salary expenses booked for this scope and period. Add one from
+      <a href="{{ url_for('expenses_list') }}">Expenses</a> under the "Wages" category.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -6051,6 +6051,75 @@ def export_payroll_pdf():
     return _pdf_response(f'payroll_{date_from_str}_to_{date_to_str}.pdf', elements, pagesize=landscape(A4))
 
 
+def wages_expense_query(df, dt, vehicle_id=None):
+    """Expense rows booked under the 'Wages' heading (or any sub-heading a
+    user has added under it) for [df, dt] — the same category the Income
+    Statement's Statement Summary rolls up into its Wages line, isolated
+    here into its own filterable report. Distinct from the Payroll report:
+    that one derives driver/conductor commission from DailyLog revenue,
+    this one is actual wage/salary amounts entered as Expense rows (e.g. a
+    fixed monthly salary), which may or may not be tagged to a vehicle."""
+    wages_heading = ExpenseCategory.query.filter_by(name='Wages', parent_id=None).first()
+    category_ids = [wages_heading.id] + [c.id for c in wages_heading.children] if wages_heading else []
+    q = Expense.query.filter(Expense.category_id.in_(category_ids), Expense.expense_date.between(df, dt))
+    if vehicle_id:
+        q = q.filter(Expense.vehicle_id == vehicle_id)
+    return q
+
+
+@app.route('/reports/wages')
+@login_required
+@permission_required('reports')
+def report_wages():
+    vehicle_id = request.args.get('vehicle_id', '')
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    entries = wages_expense_query(df, dt, vehicle_id or None).order_by(Expense.expense_date).all()
+    total_wages = sum(e.amount for e in entries)
+
+    by_vehicle = {}
+    for e in entries:
+        key = e.vehicle.registration if e.vehicle else '(general — not vehicle-specific)'
+        by_vehicle[key] = by_vehicle.get(key, 0) + e.amount
+    vehicle_breakdown = sorted(by_vehicle.items(), key=lambda kv: kv[1], reverse=True)
+
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    return render_template('reports/wages.html',
+        entries=entries, total_wages=total_wages, vehicle_breakdown=vehicle_breakdown,
+        vehicles=all_vehicles, vehicle_id=vehicle_id,
+        date_from=date_from_str, date_to=date_to_str)
+
+
+@app.route('/reports/wages/export')
+@login_required
+@permission_required('reports')
+def export_wages():
+    vehicle_id = request.args.get('vehicle_id', '')
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+
+    entries = wages_expense_query(df, dt, vehicle_id or None).order_by(Expense.expense_date).all()
+    total_wages = sum(e.amount for e in entries)
+
+    vehicle_label = 'All Vehicles'
+    if vehicle_id:
+        v = Vehicle.query.filter_by(id=vehicle_id).first()
+        vehicle_label = f'{v.registration} — {v.make} {v.model}' if v else f'Vehicle #{vehicle_id}'
+
+    header = ['Date', 'Vehicle', 'Category', 'Description', 'Amount (USD)']
+    rows = [[e.expense_date, e.vehicle.registration if e.vehicle else '(general)',
+             e.category.display_name, e.description or '', f'{e.amount:.2f}'] for e in entries]
+    rows.append(['', '', '', 'TOTAL WAGES & SALARIES', f'{total_wages:.2f}'])
+
+    scope_suffix = f'_vehicle{vehicle_id}' if vehicle_id else '_all_vehicles'
+    if request.args.get('format') == 'pdf':
+        return _table_pdf_response(f'wages{scope_suffix}_{date_from_str}_to_{date_to_str}.pdf',
+            'Wages & Salaries Expense', f'Scope: {vehicle_label} — Period: {date_from_str} to {date_to_str}',
+            header, rows)
+    return csv_export_response(f'wages{scope_suffix}_{date_from_str}_to_{date_to_str}.csv', header, rows)
+
+
 def compute_consolidated_overview(df, dt):
     """Company-wide P&L for [df, dt], combining the three standalone income
     statements (Fleet, Franchise, Spares Store) into one set of segment

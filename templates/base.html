@@ -107,6 +107,9 @@
       <a href="{{ url_for('report_payroll') }}" class="nav-item {% if request.endpoint == 'report_payroll' %}active{% endif %}">
         <i data-feather="dollar-sign"></i> Payroll
       </a>
+      <a href="{{ url_for('report_wages') }}" class="nav-item {% if request.endpoint == 'report_wages' %}active{% endif %}">
+        <i data-feather="credit-card"></i> Wages &amp; Salaries
+      </a>
       <a href="{{ url_for('report_shortfalls') }}" class="nav-item {% if request.endpoint == 'report_shortfalls' %}active{% endif %}">
         <i data-feather="alert-triangle"></i> Revenue Shortfalls
       </a>
