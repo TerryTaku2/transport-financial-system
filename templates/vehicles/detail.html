@@ -53,6 +53,10 @@
       <div>{{ vehicle.insurance_policy_number or '—' }}</div>
     </div>
     <div>
+      <div style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;">Class</div>
+      <div>{{ vehicle.insurance_type or '—' }}</div>
+    </div>
+    <div>
       <div style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;">Expiry Date</div>
       <div>{{ vehicle.insurance_expiry.strftime('%d %b %Y') if vehicle.insurance_expiry else '—' }}</div>
     </div>

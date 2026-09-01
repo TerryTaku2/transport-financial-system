@@ -5,6 +5,8 @@
 {% block scripts %}
 <script>
   window.REVENUE_7DAYS = {{ revenue_chart|safe }};
+  window.DASHBOARD_DATE_FROM = {{ date_from|tojson }};
+  window.DASHBOARD_DATE_TO = {{ date_to|tojson }};
 </script>
 {% endblock %}
 
@@ -19,7 +21,20 @@
   </a>
 </div>
 
-<!-- KPI Cards -->
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Apply</button>
+  <a href="{{ url_for('dashboard') }}" class="btn btn-outline">Reset to Month</a>
+</form>
+
+<!-- Financial Headline -->
 <div class="kpi-grid">
   <div class="kpi-card kpi-blue">
     <div class="kpi-icon">💵</div>
@@ -29,42 +44,92 @@
   </div>
   <div class="kpi-card kpi-green">
     <div class="kpi-icon">📈</div>
-    <div class="kpi-label">Month Revenue</div>
+    <div class="kpi-label">Period Revenue</div>
     <div class="kpi-value">{{ month_revenue|currency }}</div>
-    <div class="kpi-sub">{{ today.strftime('%B %Y') }}</div>
+    <div class="kpi-sub">{{ date_from }} to {{ date_to }}</div>
   </div>
   <div class="kpi-card kpi-amber">
     <div class="kpi-icon">📉</div>
-    <div class="kpi-label">Month Expenses</div>
+    <div class="kpi-label">Period Expenses</div>
     <div class="kpi-value">{{ month_expenses|currency }}</div>
-    <div class="kpi-sub">Maintenance</div>
+    <div class="kpi-sub">All fleet costs, excl. fuel</div>
   </div>
   <div class="kpi-card {% if month_profit >= 0 %}kpi-green{% else %}kpi-red{% endif %}">
     <div class="kpi-icon">💰</div>
-    <div class="kpi-label">Net Profit (Month)</div>
+    <div class="kpi-label">Net Profit (Period)</div>
     <div class="kpi-value">{{ month_profit|currency }}</div>
     <div class="kpi-sub">After all operational costs</div>
   </div>
-  <div class="kpi-card kpi-teal">
-    <div class="kpi-icon">🚌</div>
-    <div class="kpi-label">Active Vehicles</div>
-    <div class="kpi-value">{{ active_vehicles }}</div>
-    <div class="kpi-sub">In service today</div>
-  </div>
-  <div class="kpi-card kpi-blue">
-    <div class="kpi-icon">👤</div>
-    <div class="kpi-label">Active Crew</div>
-    <div class="kpi-value">{{ active_drivers }}</div>
-    <div class="kpi-sub">Drivers & conductors</div>
-  </div>
 </div>
 
-<!-- Module Summary -->
-<div class="chart-grid mb-24">
+<!-- Needs Attention: only takes up space when there's something to act on -->
+{% if expired_docs > 0 or expiring_docs > 0 or insurance_watch %}
+<h2 class="section-title">Needs Attention</h2>
+
+{% if expired_docs > 0 %}
+<div class="alert alert-danger mb-16">
+  <i data-feather="alert-circle" style="width:15px;height:15px;"></i>
+  <strong>{{ expired_docs }} compliance item(s) EXPIRED</strong> (documents/insurance) &mdash;
+  <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">Review now &rarr;</a>
+</div>
+{% endif %}
+{% if expiring_docs > 0 %}
+<div class="alert alert-warning mb-16">
+  <i data-feather="alert-triangle" style="width:15px;height:15px;"></i>
+  <strong>{{ expiring_docs }} compliance item(s)</strong> (documents/insurance) expiring within 30 days &mdash;
+  <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">View compliance &rarr;</a>
+</div>
+{% endif %}
+
+{% if insurance_watch %}
+<div class="card mb-24">
+  <div class="card-header">
+    <h3>Insurance — Expired &amp; Expiring Soon</h3>
+    <a href="{{ url_for('compliance') }}" class="btn btn-outline btn-sm">View all compliance</a>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Vehicle</th>
+          <th>Provider</th>
+          <th>Class</th>
+          <th>Policy Number</th>
+          <th>Expiry Date</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in insurance_watch %}
+        <tr>
+          <td><a href="{{ url_for('vehicle_detail', vid=v.id) }}">{{ v.registration }}</a></td>
+          <td>{{ v.insurance_provider or '—' }}</td>
+          <td>{{ v.insurance_type or '—' }}</td>
+          <td>{{ v.insurance_policy_number or '—' }}</td>
+          <td>{{ v.insurance_expiry.strftime('%d %b %Y') }}</td>
+          <td>
+            {% if v.insurance_status == 'expired' %}
+              <span class="badge badge-red">Expired {{ -v.insurance_days_to_expiry }}d ago</span>
+            {% else %}
+              <span class="badge badge-amber">{{ v.insurance_days_to_expiry }}d left</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- Fleet & Operations -->
+<h2 class="section-title">Fleet &amp; Operations</h2>
+<div class="grid-2col">
   <div class="card">
     <div class="card-header"><h3>Fleet Summary</h3></div>
     <div class="card-body">
-      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));">
+      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
         <div class="kpi-card kpi-teal">
           <div class="kpi-icon">🚌</div>
           <div class="kpi-label">Active Vehicles</div>
@@ -89,18 +154,18 @@
   <div class="card">
     <div class="card-header"><h3>Operations Summary</h3></div>
     <div class="card-body">
-      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));">
+      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
         <div class="kpi-card kpi-blue">
           <div class="kpi-icon">⛽</div>
-          <div class="kpi-label">Fuel Logs (MTD)</div>
+          <div class="kpi-label">Fuel Logs</div>
           <div class="kpi-value">{{ fuel_logs_mtd }}</div>
-          <div class="kpi-sub">Logs this month</div>
+          <div class="kpi-sub">Logs in selected period</div>
         </div>
         <div class="kpi-card kpi-amber">
           <div class="kpi-icon">🛠️</div>
-          <div class="kpi-label">Maintenance Logs (MTD)</div>
+          <div class="kpi-label">Maintenance Logs</div>
           <div class="kpi-value">{{ maintenance_logs_mtd }}</div>
-          <div class="kpi-sub">Work orders this month</div>
+          <div class="kpi-sub">Work orders in selected period</div>
         </div>
         <div class="kpi-card kpi-red">
           <div class="kpi-icon">📆</div>
@@ -113,11 +178,13 @@
   </div>
 </div>
 
-<div class="chart-grid mb-24">
+<!-- Finance & Store -->
+<h2 class="section-title">Finance &amp; Store</h2>
+<div class="grid-2col">
   <div class="card">
     <div class="card-header"><h3>Finance Summary</h3></div>
     <div class="card-body">
-      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));">
+      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
         <div class="kpi-card kpi-green">
           <div class="kpi-icon">💳</div>
           <div class="kpi-label">Unpaid Payables</div>
@@ -142,7 +209,7 @@
   <div class="card">
     <div class="card-header"><h3>Store Summary</h3></div>
     <div class="card-body">
-      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));">
+      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
         <div class="kpi-card kpi-blue">
           <div class="kpi-icon">📦</div>
           <div class="kpi-label">Parts in Inventory</div>
@@ -151,26 +218,28 @@
         </div>
         <div class="kpi-card kpi-green">
           <div class="kpi-icon">🛒</div>
-          <div class="kpi-label">Purchases (MTD)</div>
+          <div class="kpi-label">Purchases</div>
           <div class="kpi-value">{{ store_purchases_mtd }}</div>
-          <div class="kpi-sub">Restocks this month</div>
+          <div class="kpi-sub">Restocks in selected period</div>
         </div>
         <div class="kpi-card kpi-amber">
           <div class="kpi-icon">💰</div>
-          <div class="kpi-label">Sales (MTD)</div>
+          <div class="kpi-label">Sales</div>
           <div class="kpi-value">{{ store_sales_mtd }}</div>
-          <div class="kpi-sub">Store sales this month</div>
+          <div class="kpi-sub">Store sales in selected period</div>
         </div>
       </div>
     </div>
   </div>
 </div>
 
-<div class="chart-grid mb-24">
+<!-- Franchise & Compliance -->
+<h2 class="section-title">Franchise &amp; Compliance</h2>
+<div class="grid-2col">
   <div class="card">
     <div class="card-header"><h3>Franchise Summary</h3></div>
     <div class="card-body">
-      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));">
+      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
         <div class="kpi-card kpi-teal">
           <div class="kpi-icon">🚐</div>
           <div class="kpi-label">Franchise Vehicles</div>
@@ -181,13 +250,19 @@
           <div class="kpi-icon">📅</div>
           <div class="kpi-label">Daily Franchise Entries</div>
           <div class="kpi-value">{{ franchise_daily_entries }}</div>
-          <div class="kpi-sub">This month</div>
+          <div class="kpi-sub">Selected period</div>
         </div>
         <div class="kpi-card kpi-amber">
           <div class="kpi-icon">🗓️</div>
           <div class="kpi-label">Weekly Franchise Entries</div>
           <div class="kpi-value">{{ franchise_weekly_entries }}</div>
-          <div class="kpi-sub">This month</div>
+          <div class="kpi-sub">Selected period</div>
+        </div>
+        <div class="kpi-card kpi-green">
+          <div class="kpi-icon">🏧</div>
+          <div class="kpi-label">Franchise Deposits</div>
+          <div class="kpi-value">{{ franchise_deposited|currency }}</div>
+          <div class="kpi-sub">Cash deposited, selected period</div>
         </div>
       </div>
     </div>
@@ -195,7 +270,7 @@
   <div class="card">
     <div class="card-header"><h3>Compliance Summary</h3></div>
     <div class="card-body">
-      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));">
+      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
         <div class="kpi-card kpi-green">
           <div class="kpi-icon">✅</div>
           <div class="kpi-label">Valid Documents</div>
@@ -219,61 +294,45 @@
   </div>
 </div>
 
-<div class="chart-grid mb-24">
-  <div class="card">
-    <div class="card-header"><h3>Capital & Expenses Summary</h3></div>
-    <div class="card-body">
-      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));">
-        <div class="kpi-card kpi-green">
-          <div class="kpi-icon">💵</div>
-          <div class="kpi-label">Capital Contributed</div>
-          <div class="kpi-value">{{ month_capital|currency }}</div>
-          <div class="kpi-sub">{{ today.strftime('%B %Y') }}</div>
-        </div>
-        <div class="kpi-card kpi-amber">
-          <div class="kpi-icon">🏧</div>
-          <div class="kpi-label">Owner Drawings</div>
-          <div class="kpi-value">{{ month_drawings|currency }}</div>
-          <div class="kpi-sub">{{ today.strftime('%B %Y') }}</div>
-        </div>
-        <div class="kpi-card kpi-red">
-          <div class="kpi-icon">🧾</div>
-          <div class="kpi-label">Operating Expenses</div>
-          <div class="kpi-value">{{ month_operating_expenses|currency }}</div>
-          <div class="kpi-sub">{{ today.strftime('%B %Y') }}</div>
-        </div>
-        <div class="kpi-card kpi-blue">
-          <div class="kpi-icon">🏦</div>
-          <div class="kpi-label">Driver Deposits</div>
-          <div class="kpi-value">{{ month_deposits|currency }}</div>
-          <div class="kpi-sub">{{ today.strftime('%B %Y') }}</div>
-        </div>
+<!-- Capital & Owner Transactions -->
+<h2 class="section-title">Capital &amp; Owner Transactions</h2>
+<div class="card mb-24">
+  <div class="card-body">
+    <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
+      <div class="kpi-card kpi-green">
+        <div class="kpi-icon">💵</div>
+        <div class="kpi-label">Capital Contributed</div>
+        <div class="kpi-value">{{ month_capital|currency }}</div>
+        <div class="kpi-sub">{{ date_from }} to {{ date_to }}</div>
+      </div>
+      <div class="kpi-card kpi-amber">
+        <div class="kpi-icon">🏧</div>
+        <div class="kpi-label">Owner Drawings</div>
+        <div class="kpi-value">{{ month_drawings|currency }}</div>
+        <div class="kpi-sub">{{ date_from }} to {{ date_to }}</div>
+      </div>
+      <div class="kpi-card kpi-red">
+        <div class="kpi-icon">🧾</div>
+        <div class="kpi-label">Operating Expenses</div>
+        <div class="kpi-value">{{ month_operating_expenses|currency }}</div>
+        <div class="kpi-sub">{{ date_from }} to {{ date_to }}</div>
+      </div>
+      <div class="kpi-card kpi-blue">
+        <div class="kpi-icon">🏦</div>
+        <div class="kpi-label">Driver Deposits</div>
+        <div class="kpi-value">{{ month_deposits|currency }}</div>
+        <div class="kpi-sub">{{ date_from }} to {{ date_to }}</div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- Alerts -->
-{% if expired_docs > 0 %}
-<div class="alert alert-danger mb-16">
-  <i data-feather="alert-circle" style="width:15px;height:15px;"></i>
-  <strong>{{ expired_docs }} compliance item(s) EXPIRED</strong> (documents/insurance) &mdash;
-  <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">Review now &rarr;</a>
-</div>
-{% endif %}
-{% if expiring_docs > 0 %}
-<div class="alert alert-warning mb-16">
-  <i data-feather="alert-triangle" style="width:15px;height:15px;"></i>
-  <strong>{{ expiring_docs }} compliance item(s)</strong> (documents/insurance) expiring within 30 days &mdash;
-  <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">View compliance &rarr;</a>
-</div>
-{% endif %}
-
-<!-- Charts Row -->
-<div class="chart-grid mb-24">
+<!-- Trends & Analytics -->
+<h2 class="section-title">Trends &amp; Analytics</h2>
+<div class="chart-grid">
   <div class="card">
     <div class="card-header">
-      <h3>Revenue — Last 7 Days</h3>
+      <h3>Revenue — 7 Days to {{ date_to }}</h3>
     </div>
     <div class="card-body">
       <div class="chart-wrap"><canvas id="chart7Days"></canvas></div>
@@ -281,7 +340,7 @@
   </div>
   <div class="card">
     <div class="card-header">
-      <h3>Expense Breakdown (MTD)</h3>
+      <h3>Expense Breakdown (Selected Period)</h3>
     </div>
     <div class="card-body">
       <div class="chart-wrap"><canvas id="chartExpenses"></canvas></div>
@@ -289,7 +348,7 @@
   </div>
 </div>
 
-<div class="chart-grid mb-24">
+<div class="chart-grid">
   <div class="card">
     <div class="card-header">
       <h3>Revenue vs Expenses — 6 Months</h3>
@@ -300,7 +359,7 @@
   </div>
   <div class="card">
     <div class="card-header">
-      <h3>Vehicle Performance (MTD)</h3>
+      <h3>Vehicle Performance (Selected Period)</h3>
     </div>
     <div class="card-body">
       <div class="chart-wrap" style="height:260px;"><canvas id="chartVehicles"></canvas></div>
@@ -309,12 +368,14 @@
 </div>
 
 <!-- Recent Activity -->
+<h2 class="section-title">Recent Activity</h2>
 <div class="card">
   <div class="card-header">
     <h3>Recent Daily Transactions</h3>
     <a href="{{ url_for('driver_ledger') }}" class="btn btn-outline btn-sm">View all</a>
   </div>
   {% if recent_logs %}
+  <p class="subtitle" style="padding: 0 16px;">Latest entries within {{ date_from }} to {{ date_to }}</p>
   <div class="table-wrap">
     <table>
       <thead>
@@ -344,7 +405,7 @@
   {% else %}
   <div class="empty-state">
     <div class="empty-icon">📋</div>
-    <p>No daily transactions yet. <a href="{{ url_for('driver_ledger') }}">Record the first one</a>.</p>
+    <p>No daily transactions in {{ date_from }} to {{ date_to }}. <a href="{{ url_for('driver_ledger') }}">Record one</a>.</p>
   </div>
   {% endif %}
 </div>

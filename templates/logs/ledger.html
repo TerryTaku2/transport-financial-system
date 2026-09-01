@@ -26,7 +26,7 @@
   {% endif %}
   <div id="vehicle-tabs" style="display:flex;gap:6px;flex-wrap:wrap;">
     {% for v in vehicles %}
-    <a href="{{ url_for('driver_ledger', vehicle_id=v.id, period=period) }}"
+    <a href="{{ url_for('driver_ledger', vehicle_id=v.id, period=period, date_from=date_from, date_to=date_to) }}"
        data-vehicle-label="{{ v.registration|lower }}"
        class="btn btn-xs {% if vehicle and vehicle.id==v.id %}btn-primary{% else %}btn-outline{% endif %}">{{ v.registration }}</a>
     {% endfor %}
@@ -51,10 +51,10 @@
   <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;justify-content:space-between;">
     <div class="form-hint" style="margin:0;">Import or export {{ vehicle.registration }}'s transactions as CSV/Excel</div>
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-      <a href="{{ url_for('driver_ledger_export', vehicle_id=vehicle.id, period=period) }}" class="btn btn-xs btn-outline">
+      <a href="{{ url_for('driver_ledger_export', vehicle_id=vehicle.id, period=period, date_from=date_from, date_to=date_to) }}" class="btn btn-xs btn-outline">
         <i data-feather="download"></i> Export CSV
       </a>
-      <a href="{{ url_for('driver_ledger_export', vehicle_id=vehicle.id, period=period, format='pdf') }}" class="btn btn-xs btn-outline">
+      <a href="{{ url_for('driver_ledger_export', vehicle_id=vehicle.id, period=period, date_from=date_from, date_to=date_to, format='pdf') }}" class="btn btn-xs btn-outline">
         <i data-feather="file-text"></i> Export PDF
       </a>
       <a href="{{ url_for('export_daily_logs') }}" class="btn btn-xs btn-outline">
@@ -99,7 +99,16 @@
       <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period='week') }}" class="btn btn-xs {% if period=='week' %}btn-primary{% else %}btn-outline{% endif %}">This Week</a>
       <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period='month') }}" class="btn btn-xs {% if period=='month' %}btn-primary{% else %}btn-outline{% endif %}">This Month</a>
       <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period='all') }}" class="btn btn-xs {% if period=='all' %}btn-primary{% else %}btn-outline{% endif %}">All Time</a>
+      <button type="submit" name="period" value="custom" class="btn btn-xs {% if period=='custom' %}btn-primary{% else %}btn-outline{% endif %}">Custom</button>
     </div>
+  </div>
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
   </div>
 </form>
 
@@ -110,6 +119,8 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="vehicle_id" value="{{ vehicle.id }}">
       <input type="hidden" name="period" value="{{ period }}">
+      <input type="hidden" name="date_from" value="{{ date_from }}">
+      <input type="hidden" name="date_to" value="{{ date_to }}">
       <div class="form-grid mb-16">
         <div class="form-group">
           <label>Date<span class="req">*</span></label>
@@ -195,7 +206,7 @@
 
 <div class="card">
   <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-    <h3>{{ vehicle.registration }} — {{ {'today': 'Today', 'week': 'This Week', 'month': 'This Month', 'all': 'All Time'}[period] }} Transactions</h3>
+    <h3>{{ vehicle.registration }} — {{ {'today': 'Today', 'week': 'This Week', 'month': 'This Month', 'all': 'All Time', 'custom': date_from ~ ' to ' ~ date_to}[period] }} Transactions</h3>
     {% if vehicle.daily_target %}
     <div class="form-hint" style="margin:0;">Daily target: <strong>{{ vehicle.daily_target|currency }}</strong> — days below it are flagged automatically. <a href="{{ url_for('report_shortfalls') }}">See Revenue Shortfalls</a></div>
     {% endif %}
@@ -251,17 +262,21 @@
                     data-confirm="This day has multiple entries for {{ vehicle.registration }} — delete all of them?" style="display:inline;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="period" value="{{ period }}">
+                <input type="hidden" name="date_from" value="{{ date_from }}">
+                <input type="hidden" name="date_to" value="{{ date_to }}">
                 <button class="btn btn-danger btn-xs">Del All</button>
               </form>
             </span>
             {% else %}
             <div class="actions">
-              <a href="{{ url_for('ledger_entry_edit', vehicle_id=vehicle.id, log_date_str=row.date.isoformat(), period=period) }}"
+              <a href="{{ url_for('ledger_entry_edit', vehicle_id=vehicle.id, log_date_str=row.date.isoformat(), period=period, date_from=date_from, date_to=date_to) }}"
                  class="btn btn-outline btn-xs">Edit</a>
               <form method="POST" action="{{ url_for('ledger_entry_delete', vehicle_id=vehicle.id, log_date_str=row.date.isoformat()) }}"
                     data-confirm="Delete this entry for {{ vehicle.registration }} on {{ row.date }}?" style="display:inline;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="period" value="{{ period }}">
+                <input type="hidden" name="date_from" value="{{ date_from }}">
+                <input type="hidden" name="date_to" value="{{ date_to }}">
                 <button class="btn btn-danger btn-xs">Del</button>
               </form>
             </div>

@@ -472,10 +472,19 @@ function initDashboardCharts() {
       });
   }
 
+  // Dashboard KPIs and these two charts share the same date-range filter
+  // (set via window.DASHBOARD_DATE_FROM/TO in dashboard.html) so the
+  // breakdown and per-vehicle figures always match what's on screen.
+  var dashboardRangeQS = '';
+  if (window.DASHBOARD_DATE_FROM && window.DASHBOARD_DATE_TO) {
+    dashboardRangeQS = '?date_from=' + encodeURIComponent(window.DASHBOARD_DATE_FROM) +
+      '&date_to=' + encodeURIComponent(window.DASHBOARD_DATE_TO);
+  }
+
   // Expense breakdown doughnut
   var ctxDonut = document.getElementById('chartExpenses');
   if (ctxDonut && typeof Chart !== 'undefined') {
-    fetch('/api/expenses/breakdown')
+    fetch('/api/expenses/breakdown' + dashboardRangeQS)
       .then(r => r.json())
       .then(data => {
         new Chart(ctxDonut, {
@@ -508,7 +517,7 @@ function initDashboardCharts() {
   // Vehicle performance bar
   var ctxVeh = document.getElementById('chartVehicles');
   if (ctxVeh && typeof Chart !== 'undefined') {
-    fetch('/api/vehicles/performance')
+    fetch('/api/vehicles/performance' + dashboardRangeQS)
       .then(r => r.json())
       .then(data => {
         if (!data.length) return;

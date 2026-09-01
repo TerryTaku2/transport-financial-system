@@ -295,6 +295,23 @@ body.sidebar-locked { overflow: hidden; }
 .card-header h3 { font-size: 14px; font-weight: 600; }
 .card-body { padding: 20px; }
 
+/* ── Dashboard sections ── */
+/* Eyebrow label grouping related cards under one heading, e.g. on the
+   Dashboard — keeps a long page of summary cards scannable instead of one
+   undifferentiated stack. */
+.section-title {
+  font-size: 12px; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: .6px;
+  margin: 28px 0 12px;
+}
+.section-title:first-child { margin-top: 0; }
+/* Two equal-width cards side by side — distinct from .chart-grid's 2fr/1fr
+   split, which is for a main chart paired with a smaller side chart. */
+.grid-2col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+@media (max-width: 720px) {
+  .grid-2col { grid-template-columns: 1fr; }
+}
+
 /* ── Charts ── */
 .chart-grid { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; margin-bottom: 24px; }
 .chart-wrap { position: relative; height: 240px; }

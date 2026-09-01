@@ -77,6 +77,18 @@
                  value="{{ vehicle.insurance_policy_number if vehicle and vehicle.insurance_policy_number else '' }}">
         </div>
         <div class="form-group">
+          <label>Insurance Class</label>
+          <input type="text" name="insurance_type" list="insurance_type_options" placeholder="e.g. Comprehensive"
+                 value="{{ vehicle.insurance_type if vehicle and vehicle.insurance_type else '' }}">
+          <datalist id="insurance_type_options">
+            <option value="Comprehensive">
+            <option value="Third Party Only">
+            <option value="Third Party, Fire & Theft">
+            <option value="Passenger Liability">
+          </datalist>
+          <div class="form-hint">Pick a suggestion or type the class this policy covers.</div>
+        </div>
+        <div class="form-group">
           <label>Insurance Expiry Date</label>
           <input type="date" name="insurance_expiry"
                  value="{{ vehicle.insurance_expiry.strftime('%Y-%m-%d') if vehicle and vehicle.insurance_expiry else '' }}">

@@ -8,7 +8,7 @@
     <h1>Edit Transaction — {{ vehicle.registration }}</h1>
     <div class="subtitle">{{ log_date.strftime('%d %b %Y') }}</div>
   </div>
-  <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period=period) }}" class="btn btn-outline">
+  <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period=period, date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
     <i data-feather="arrow-left"></i> Back to Daily Transactions
   </a>
 </div>
@@ -18,6 +18,8 @@
     <form method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <input type="hidden" name="period" value="{{ period }}">
+      <input type="hidden" name="date_from" value="{{ date_from }}">
+      <input type="hidden" name="date_to" value="{{ date_to }}">
       <div class="form-grid mb-16">
         <div class="form-group">
           <label>Date</label>
@@ -63,7 +65,7 @@
       </div>
       <div class="btn-group">
         <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Changes</button>
-        <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period=period) }}" class="btn btn-outline">Cancel</a>
+        <a href="{{ url_for('driver_ledger', vehicle_id=vehicle.id, period=period, date_from=date_from, date_to=date_to) }}" class="btn btn-outline">Cancel</a>
       </div>
     </form>
   </div>

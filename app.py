@@ -252,6 +252,10 @@ class Vehicle(db.Model):
     # own alerting the same way documents do (see insurance_status below).
     insurance_provider = db.Column(db.String(100))
     insurance_policy_number = db.Column(db.String(100))
+    # Classification of cover held (Comprehensive, Third Party Only, etc.) —
+    # a free-text-backed field like VehicleDocument.doc_type rather than an
+    # enum, so a class specific to one insurer/market can still be entered.
+    insurance_type = db.Column(db.String(50))
     insurance_expiry = db.Column(db.Date, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
@@ -2992,18 +2996,20 @@ def no_access():
 def dashboard():
     today = date.today()
     month_start = today.replace(day=1)
+    df, dt = query_date_range(default_from=month_start, default_to=today)
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
 
     today_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
         DailyLog.log_date == today).scalar() or 0
 
-    month_revenue = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
-        DailyLog.log_date >= month_start).scalar() or 0
-
-    month_maintenance = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
-        MaintenanceLog.log_date >= month_start).scalar() or 0
-
-    month_expenses = month_maintenance
-    month_profit = month_revenue - month_expenses
+    # Same fleet-wide total used by the Income Statement report: maintenance
+    # + all Expense rows (vehicle-tagged and general overhead) + spares sold
+    # to company vehicles — everything except fuel, which the driver pays for
+    # out of the daily cash collected rather than it being a company expense.
+    stmt = compute_income_statement(df, dt)
+    month_revenue = stmt['gross_revenue']
+    month_expenses = stmt['total_expenses']
+    month_profit = stmt['net_profit']
 
     active_vehicles = Vehicle.query.filter_by(status='active').count()
     active_drivers = Driver.query.filter_by(status='active').count()
@@ -3020,20 +3026,32 @@ def dashboard():
     valid_docs = VehicleDocument.query.filter(VehicleDocument.expiry_date > expiry_threshold).count()
     valid_docs += Vehicle.query.filter(Vehicle.insurance_expiry > expiry_threshold).count()
 
-    fuel_logs_mtd = FuelLog.query.filter(FuelLog.log_date >= month_start).count()
-    maintenance_logs_mtd = MaintenanceLog.query.filter(MaintenanceLog.log_date >= month_start).count()
+    # Vehicles whose insurance is already expired or due within the same
+    # 30-day window as the compliance counts above, expired-first so the
+    # most urgent renewals are what the dashboard leads with.
+    insurance_watch = Vehicle.query.filter(
+        Vehicle.insurance_expiry.isnot(None),
+        Vehicle.insurance_expiry <= expiry_threshold
+    ).order_by(Vehicle.insurance_expiry).all()
+
+    fuel_logs_mtd = FuelLog.query.filter(FuelLog.log_date.between(df, dt)).count()
+    maintenance_logs_mtd = MaintenanceLog.query.filter(MaintenanceLog.log_date.between(df, dt)).count()
 
     unpaid_payables = Payable.query.filter(Payable.status != 'paid').count()
     outstanding_receivables = Receivable.query.filter(Receivable.status != 'collected').count()
     active_loans = Loan.query.filter(Loan.status == 'active').count()
 
     store_parts = SparePart.query.count()
-    store_purchases_mtd = StorePurchase.query.filter(StorePurchase.purchase_date >= month_start).count()
-    store_sales_mtd = StoreSale.query.filter(StoreSale.sale_date >= month_start).count()
+    store_purchases_mtd = StorePurchase.query.filter(StorePurchase.purchase_date.between(df, dt)).count()
+    store_sales_mtd = StoreSale.query.filter(StoreSale.sale_date.between(df, dt)).count()
 
     franchise_vehicles = FranchiseVehicle.query.count()
-    franchise_daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date >= month_start).count()
-    franchise_weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start >= month_start).count()
+    franchise_daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).count()
+    franchise_weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).count()
+    franchise_deposited = db.session.query(func.sum(FranchiseDailyIncome.deposited)).filter(
+        FranchiseDailyIncome.entry_date.between(df, dt)).scalar() or 0
+    franchise_deposited += db.session.query(func.sum(FranchiseWeeklyIncome.deposited)).filter(
+        FranchiseWeeklyIncome.week_start.between(df, dt)).scalar() or 0
 
     schedules_due = MaintenanceSchedule.query.filter(
         MaintenanceSchedule.next_due_date != None,
@@ -3041,19 +3059,20 @@ def dashboard():
     ).count()
 
     month_capital = db.session.query(func.sum(CapitalContribution.amount)).filter(
-        CapitalContribution.contribution_date >= month_start).scalar() or 0
+        CapitalContribution.contribution_date.between(df, dt)).scalar() or 0
     month_drawings = db.session.query(func.sum(OwnerDrawing.amount)).filter(
-        OwnerDrawing.drawing_date >= month_start).scalar() or 0
+        OwnerDrawing.drawing_date.between(df, dt)).scalar() or 0
     month_operating_expenses = db.session.query(func.sum(Expense.amount)).filter(
-        Expense.expense_date >= month_start).scalar() or 0
+        Expense.expense_date.between(df, dt)).scalar() or 0
     month_deposits = db.session.query(func.sum(DriverDeposit.amount)).filter(
-        DriverDeposit.deposit_date >= month_start).scalar() or 0
+        DriverDeposit.deposit_date.between(df, dt)).scalar() or 0
 
-    recent_logs = DailyLog.query.order_by(DailyLog.log_date.desc()).limit(6).all()
+    recent_logs = DailyLog.query.filter(DailyLog.log_date.between(df, dt)).order_by(
+        DailyLog.log_date.desc()).limit(6).all()
 
     rev_chart = []
     for i in range(6, -1, -1):
-        d = today - timedelta(days=i)
+        d = dt - timedelta(days=i)
         rev = db.session.query(func.sum(DailyLog.gross_revenue)).filter(
             DailyLog.log_date == d).scalar() or 0
         rev_chart.append({'date': d.strftime('%d %b'), 'revenue': float(rev)})
@@ -3064,16 +3083,18 @@ def dashboard():
         active_vehicles=active_vehicles, active_drivers=active_drivers,
         active_routes=active_routes,
         expiring_docs=expiring_docs, expired_docs=expired_docs, valid_docs=valid_docs,
+        insurance_watch=insurance_watch,
         fuel_logs_mtd=fuel_logs_mtd, maintenance_logs_mtd=maintenance_logs_mtd,
         unpaid_payables=unpaid_payables, outstanding_receivables=outstanding_receivables,
         active_loans=active_loans,
         store_parts=store_parts, store_purchases_mtd=store_purchases_mtd, store_sales_mtd=store_sales_mtd,
         franchise_vehicles=franchise_vehicles, franchise_daily_entries=franchise_daily_entries,
-        franchise_weekly_entries=franchise_weekly_entries,
+        franchise_weekly_entries=franchise_weekly_entries, franchise_deposited=franchise_deposited,
         schedules_due=schedules_due,
         month_capital=month_capital, month_drawings=month_drawings,
         month_operating_expenses=month_operating_expenses, month_deposits=month_deposits,
         recent_logs=recent_logs, revenue_chart=json.dumps(rev_chart),
+        date_from=date_from_str, date_to=date_to_str,
         today=today)
 
 
@@ -3110,6 +3131,7 @@ def vehicle_add():
             daily_target=form_float(request.form, 'daily_target', required=False, min_value=0),
             insurance_provider=request.form.get('insurance_provider', '').strip() or None,
             insurance_policy_number=request.form.get('insurance_policy_number', '').strip() or None,
+            insurance_type=request.form.get('insurance_type', '').strip() or None,
             insurance_expiry=parse_date(request.form.get('insurance_expiry')),
         )
         db.session.add(v)
@@ -3158,6 +3180,7 @@ def vehicle_edit(vid):
         v.daily_target = form_float(request.form, 'daily_target', required=False, min_value=0)
         v.insurance_provider = request.form.get('insurance_provider', '').strip() or None
         v.insurance_policy_number = request.form.get('insurance_policy_number', '').strip() or None
+        v.insurance_type = request.form.get('insurance_type', '').strip() or None
         v.insurance_expiry = parse_date(request.form.get('insurance_expiry'))
         log_audit('UPDATE', 'vehicles', v.id, f'Updated vehicle {v.registration}')
         touch_sync_fields(v)
@@ -3595,6 +3618,8 @@ def ledger_entry_edit(vehicle_id, log_date_str):
         return redirect(url_for('driver_ledger', vehicle_id=vehicle_id))
 
     period = request.values.get('period', 'month')
+    date_from = request.values.get('date_from', '')
+    date_to = request.values.get('date_to', '')
     daily_logs_for_date = DailyLog.query.filter_by(
         vehicle_id=vehicle_id, log_date=log_date).order_by(DailyLog.id).all()
     fuel_logs_for_date = FuelLog.query.filter_by(
@@ -3602,7 +3627,7 @@ def ledger_entry_edit(vehicle_id, log_date_str):
     if len(daily_logs_for_date) > 1 or len(fuel_logs_for_date) > 1:
         flash('This day has more than one entry for this vehicle and can\'t be edited '
               'as a single row — delete it and re-enter instead.', 'warning')
-        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period, date_from=date_from, date_to=date_to))
 
     log = daily_logs_for_date[0] if daily_logs_for_date else None
     fuel = fuel_logs_for_date[0] if fuel_logs_for_date else None
@@ -3657,11 +3682,12 @@ def ledger_entry_edit(vehicle_id, log_date_str):
                   f'Edited ledger entry for {vehicle.registration} on {log_date}')
         db.session.commit()
         flash('Entry updated.', 'success')
-        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period, date_from=date_from, date_to=date_to))
 
     all_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
     return render_template('logs/ledger_entry_form.html', vehicle=vehicle, log=log, fuel=fuel,
-                           log_date=log_date, drivers=all_drivers, period=period)
+                           log_date=log_date, drivers=all_drivers, period=period,
+                           date_from=date_from, date_to=date_to)
 
 
 @app.route('/logs/ledger/<int:vehicle_id>/<log_date_str>/delete', methods=['POST'])
@@ -3676,6 +3702,8 @@ def ledger_entry_delete(vehicle_id, log_date_str):
         return redirect(url_for('driver_ledger', vehicle_id=vehicle_id))
 
     period = request.form.get('period', 'month')
+    date_from = request.form.get('date_from', '')
+    date_to = request.form.get('date_to', '')
     # Soft-delete via a per-row loop, not a bulk .delete() — bulk deletes
     # issue a raw DELETE and bypass touch_sync_fields entirely, so the
     # tombstone would never propagate to other instances.
@@ -3689,7 +3717,7 @@ def ledger_entry_delete(vehicle_id, log_date_str):
     log_audit('DELETE', 'daily_logs', None, f'Deleted ledger entry for {vehicle.registration} on {log_date}')
     db.session.commit()
     flash('Entry deleted.', 'warning')
-    return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+    return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period, date_from=date_from, date_to=date_to))
 
 
 # ─────────────────────────────────────────────────────────────
@@ -3789,6 +3817,21 @@ def resolve_ledger_period(period, today):
         df, dt = today - timedelta(days=today.weekday()), today
     elif period == 'all':
         df = dt = None
+    elif period == 'custom':
+        from_str = request.args.get('date_from', '').strip()
+        to_str = request.args.get('date_to', '').strip()
+        try:
+            df = parse_date(from_str) if from_str else today.replace(day=1)
+        except ValueError:
+            flash(f'"{from_str}" is not a valid start date — showing {today.replace(day=1)} instead.', 'warning')
+            df = today.replace(day=1)
+        try:
+            dt = parse_date(to_str) if to_str else today
+        except ValueError:
+            flash(f'"{to_str}" is not a valid end date — showing {today} instead.', 'warning')
+            dt = today
+        if df > dt:
+            df, dt = dt, df
     else:
         period = 'month'
         df, dt = today.replace(day=1), today
@@ -3837,11 +3880,13 @@ def driver_ledger_add():
     # request.url — that would GET this same POST-only URL and 405. Errors
     # are handled locally here and always redirect to the GET ledger page.
     period = request.form.get('period', 'month')
+    date_from = request.form.get('date_from', '')
+    date_to = request.form.get('date_to', '')
     vehicle_id = form_int(request.form, 'vehicle_id', required=False)
     client_id = request.form.get('_client_id')
     if already_synced(client_id):
         flash('Already recorded.', 'info')
-        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+        return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period, date_from=date_from, date_to=date_to))
     try:
         vehicle = Vehicle.query.filter_by(id=vehicle_id).first() if vehicle_id else None
         if not vehicle:
@@ -3947,7 +3992,7 @@ def driver_ledger_add():
         db.session.rollback()
         flash(str(e), 'danger')
 
-    return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period))
+    return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period, date_from=date_from, date_to=date_to))
 
 
 @app.route('/logs/ledger/export')
@@ -6697,7 +6742,8 @@ def _compliance_pdf():
     expiring = VehicleDocument.query.filter(VehicleDocument.expiry_date.between(today, threshold)).order_by(
         VehicleDocument.expiry_date).all()
     for v in Vehicle.query.filter(Vehicle.insurance_expiry.isnot(None)).all():
-        entry = {'vehicle': v, 'doc_type': 'Insurance', 'expiry_date': v.insurance_expiry}
+        doc_type = f'Insurance ({v.insurance_type})' if v.insurance_type else 'Insurance'
+        entry = {'vehicle': v, 'doc_type': doc_type, 'expiry_date': v.insurance_expiry}
         if v.insurance_status == 'expired':
             expired.append(entry)
         elif v.insurance_status == 'warning':
@@ -11007,7 +11053,8 @@ def compliance():
     # shape the template already expects: vehicle/doc_type/expiry_date/
     # days_to_expiry) so it sorts and displays alongside real documents.
     for v in Vehicle.query.filter(Vehicle.insurance_expiry.isnot(None)).all():
-        entry = {'vehicle': v, 'doc_type': 'Insurance', 'expiry_date': v.insurance_expiry,
+        doc_type = f'Insurance ({v.insurance_type})' if v.insurance_type else 'Insurance'
+        entry = {'vehicle': v, 'doc_type': doc_type, 'expiry_date': v.insurance_expiry,
                   'days_to_expiry': v.insurance_days_to_expiry}
         if v.insurance_status == 'expired':
             expired.append(entry)
@@ -11036,7 +11083,8 @@ def compliance_export():
     entries = [{'vehicle': d.vehicle, 'doc_type': d.doc_type, 'reference_number': d.reference_number,
                 'issue_date': d.issue_date, 'expiry_date': d.expiry_date} for d in docs]
     for v in Vehicle.query.filter(Vehicle.insurance_expiry.isnot(None)).all():
-        entries.append({'vehicle': v, 'doc_type': 'Insurance', 'reference_number': v.insurance_policy_number,
+        doc_type = f'Insurance ({v.insurance_type})' if v.insurance_type else 'Insurance'
+        entries.append({'vehicle': v, 'doc_type': doc_type, 'reference_number': v.insurance_policy_number,
                         'issue_date': None, 'expiry_date': v.insurance_expiry})
     entries.sort(key=lambda e: e['expiry_date'])
 
@@ -11769,13 +11817,13 @@ def api_revenue_monthly():
 @permission_required('dashboard')
 def api_vehicle_performance():
     today = date.today()
-    month_start = today.replace(day=1)
+    df, dt = query_date_range(default_from=today.replace(day=1), default_to=today)
     result = db.session.query(
         Vehicle.registration,
         func.sum(DailyLog.gross_revenue).label('revenue'),
         func.count(DailyLog.id).label('days'),
     ).join(DailyLog, Vehicle.id == DailyLog.vehicle_id).filter(
-        DailyLog.log_date >= month_start
+        DailyLog.log_date.between(df, dt)
     ).group_by(Vehicle.id).all()
     return jsonify([{'vehicle': r.registration, 'revenue': float(r.revenue or 0),
                      'days': r.days} for r in result])
@@ -11786,9 +11834,9 @@ def api_vehicle_performance():
 @permission_required('dashboard')
 def api_expenses_breakdown():
     today = date.today()
-    m_start = today.replace(day=1)
+    df, dt = query_date_range(default_from=today.replace(day=1), default_to=today)
     maint = db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
-        MaintenanceLog.log_date >= m_start).scalar() or 0
+        MaintenanceLog.log_date.between(df, dt)).scalar() or 0
     return jsonify({'maintenance': float(maint)})
 
 
@@ -11897,7 +11945,7 @@ SYNC_MODELS = {
     'vehicles': (Vehicle, (
         'registration', 'make', 'model', 'year', 'acquisition_cost', 'status',
         'fuel_type', 'daily_target', 'insurance_provider', 'insurance_policy_number',
-        'insurance_expiry', 'created_at', 'deleted_at',
+        'insurance_type', 'insurance_expiry', 'created_at', 'deleted_at',
     ), {}),
     'routes': (Route, (
         'name', 'start_point', 'end_point', 'distance_km', 'fare_rate', 'status', 'created_at', 'deleted_at',
@@ -13130,6 +13178,8 @@ def migrate_db():
             conn.execute(text("ALTER TABLE vehicles ADD COLUMN insurance_provider VARCHAR(100)"))
         if 'insurance_policy_number' not in vehicle_cols:
             conn.execute(text("ALTER TABLE vehicles ADD COLUMN insurance_policy_number VARCHAR(100)"))
+        if 'insurance_type' not in vehicle_cols:
+            conn.execute(text("ALTER TABLE vehicles ADD COLUMN insurance_type VARCHAR(50)"))
         if 'insurance_expiry' not in vehicle_cols:
             conn.execute(text("ALTER TABLE vehicles ADD COLUMN insurance_expiry DATE"))
         if inspector.has_table('depots'):
