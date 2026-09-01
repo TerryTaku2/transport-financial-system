@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1>Vehicle Efficiency &amp; Profitability</h1>
-    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; income vs. fuel, maintenance &amp; other expenses per vehicle</div>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; income vs. maintenance &amp; other expenses per vehicle</div>
   </div>
   <a href="{{ url_for('report_vehicle_efficiency_export', date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
   <a href="{{ url_for('report_vehicle_efficiency_export', date_from=date_from, date_to=date_to, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
@@ -51,7 +51,6 @@
         <tr>
           <th>Vehicle</th>
           <th class="text-right">Revenue</th>
-          <th class="text-right">Fuel Cost</th>
           <th class="text-right">Maintenance</th>
           <th class="text-right">Other Exp.</th>
           <th class="text-right">Total Cost</th>
@@ -69,7 +68,6 @@
             <div class="form-hint">{{ row.vehicle.make }} {{ row.vehicle.model }}</div>
           </td>
           <td class="text-right">{{ row.revenue|currency }}</td>
-          <td class="text-right">{{ row.fuel_cost|currency }}</td>
           <td class="text-right">{{ row.maintenance_cost|currency }}</td>
           <td class="text-right">{{ row.other_expenses|currency }}</td>
           <td class="text-right text-warning">({{ row.total_cost|currency }})</td>
@@ -84,7 +82,7 @@
         <tr class="summary-row">
           <td>TOTAL</td>
           <td class="text-right">{{ fleet_revenue|currency }}</td>
-          <td class="text-right" colspan="3"></td>
+          <td class="text-right" colspan="2"></td>
           <td class="text-right">({{ fleet_cost|currency }})</td>
           <td class="text-right">{{ fleet_profit|currency }}</td>
           <td colspan="3"></td>

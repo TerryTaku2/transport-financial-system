@@ -6714,18 +6714,17 @@ def _vehicle_efficiency_pdf(df, dt):
     if not rows:
         return _pdf_section('Vehicle Efficiency & Profitability', f'Period: {df} to {dt}', [],
                             note='No revenue, cost or fuel/odometer data in this period.')
-    headers = ['Vehicle', 'Revenue', 'Fuel Cost', 'Maintenance', 'Other Exp.', 'Total Cost', 'Net Profit', 'Km/Liter']
+    headers = ['Vehicle', 'Revenue', 'Maintenance', 'Other Exp.', 'Total Cost', 'Net Profit', 'Km/Liter']
     data = [headers] + [[
-        r['vehicle'].registration, f"${r['revenue']:,.2f}", f"${r['fuel_cost']:,.2f}",
+        r['vehicle'].registration, f"${r['revenue']:,.2f}",
         f"${r['maintenance_cost']:,.2f}", f"${r['other_expenses']:,.2f}", f"${r['total_cost']:,.2f}",
         f"${r['net_profit']:,.2f}", f"{r['km_per_liter']:.1f}" if r['distance'] else '—',
     ] for r in rows]
     fleet_revenue = sum(r['revenue'] for r in rows)
-    fleet_fuel = sum(r['fuel_cost'] for r in rows)
     fleet_maint = sum(r['maintenance_cost'] for r in rows)
     fleet_other = sum(r['other_expenses'] for r in rows)
     fleet_cost = sum(r['total_cost'] for r in rows)
-    data.append(['TOTAL', f"${fleet_revenue:,.2f}", f"${fleet_fuel:,.2f}", f"${fleet_maint:,.2f}",
+    data.append(['TOTAL', f"${fleet_revenue:,.2f}", f"${fleet_maint:,.2f}",
                  f"${fleet_other:,.2f}", f"${fleet_cost:,.2f}", f"${fleet_revenue - fleet_cost:,.2f}", ''])
     return _pdf_section('Vehicle Efficiency & Profitability', f'Period: {df} to {dt}', [_pdf_table(data)])
 
@@ -7676,21 +7675,20 @@ def _compute_route_profitability(df, dt):
 
 
 def _compute_vehicle_efficiency_rows(df, dt):
-    """Per-vehicle profitability: revenue and every tracked cost (fuel,
-    maintenance, other expenses) set against fuel efficiency and distance
-    covered, so a vehicle burning fuel faster than its earnings can cover
-    shows up here rather than only as a low km/L figure on its own. Every
-    active vehicle gets a row, even an all-zero one — this reads as a fleet
-    roster (which vehicles logged nothing this period is itself useful to
-    see), not just a list of whichever vehicles happened to have activity."""
+    """Per-vehicle profitability: revenue and tracked costs (maintenance,
+    other expenses) set against fuel efficiency and distance covered.
+    Fuel isn't counted as a cost here — like on the Income Statement, it's
+    paid by the driver out of the daily cash collected rather than being a
+    company expense; km/L and L/100km still show fuel efficiency itself.
+    Every active vehicle gets a row, even an all-zero one — this reads as a
+    fleet roster (which vehicles logged nothing this period is itself
+    useful to see), not just a list of whichever vehicles happened to have
+    activity."""
     efficiency_by_vehicle = {r['vehicle'].id: r for r in _compute_fuel_efficiency_rows(df, dt)}
 
     revenue_by_vehicle = dict(
         db.session.query(DailyLog.vehicle_id, func.sum(DailyLog.gross_revenue))
         .filter(DailyLog.log_date.between(df, dt)).group_by(DailyLog.vehicle_id).all())
-    fuel_cost_by_vehicle = dict(
-        db.session.query(FuelLog.vehicle_id, func.sum(FuelLog.total_cost))
-        .filter(FuelLog.log_date.between(df, dt)).group_by(FuelLog.vehicle_id).all())
     maintenance_by_vehicle = dict(
         db.session.query(MaintenanceLog.vehicle_id, func.sum(MaintenanceLog.total_cost))
         .filter(MaintenanceLog.log_date.between(df, dt)).group_by(MaintenanceLog.vehicle_id).all())
@@ -7702,10 +7700,9 @@ def _compute_vehicle_efficiency_rows(df, dt):
     rows = []
     for v in Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all():
         revenue = revenue_by_vehicle.get(v.id) or 0.0
-        fuel_cost = fuel_cost_by_vehicle.get(v.id) or 0.0
         maintenance_cost = maintenance_by_vehicle.get(v.id) or 0.0
         other_expenses = expenses_by_vehicle.get(v.id) or 0.0
-        total_cost = fuel_cost + maintenance_cost + other_expenses
+        total_cost = maintenance_cost + other_expenses
         net_profit = revenue - total_cost
 
         eff = efficiency_by_vehicle.get(v.id)
@@ -7713,7 +7710,7 @@ def _compute_vehicle_efficiency_rows(df, dt):
         liters = eff['total_liters'] if eff else 0
 
         rows.append({
-            'vehicle': v, 'revenue': revenue, 'fuel_cost': fuel_cost,
+            'vehicle': v, 'revenue': revenue,
             'maintenance_cost': maintenance_cost, 'other_expenses': other_expenses,
             'total_cost': total_cost, 'net_profit': net_profit,
             'distance': distance, 'liters': liters,
@@ -7721,7 +7718,6 @@ def _compute_vehicle_efficiency_rows(df, dt):
             'l_per_100km': eff['avg_l_per_100km'] if eff else 0,
             'cost_per_km': (total_cost / distance) if distance else None,
             'revenue_per_km': (revenue / distance) if distance else None,
-            'fuel_cost_per_km': (fuel_cost / distance) if distance else None,
             'profit_margin': (net_profit / revenue * 100) if revenue else None,
         })
     rows.sort(key=lambda r: r['net_profit'], reverse=True)
@@ -7751,14 +7747,14 @@ def report_vehicle_efficiency_export():
     df, dt = query_date_range()
     rows = _compute_vehicle_efficiency_rows(df, dt)
     out_rows = [[
-        r['vehicle'].registration, f"{r['revenue']:.2f}", f"{r['fuel_cost']:.2f}",
+        r['vehicle'].registration, f"{r['revenue']:.2f}",
         f"{r['maintenance_cost']:.2f}", f"{r['other_expenses']:.2f}", f"{r['total_cost']:.2f}",
         f"{r['net_profit']:.2f}", f"{r['distance']:.1f}", f"{r['liters']:.2f}",
         f"{r['km_per_liter']:.2f}",
         f"{r['cost_per_km']:.2f}" if r['cost_per_km'] is not None else '',
         f"{r['revenue_per_km']:.2f}" if r['revenue_per_km'] is not None else '',
     ] for r in rows]
-    header = ['Vehicle', 'Revenue', 'Fuel Cost', 'Maintenance Cost', 'Other Expenses', 'Total Cost',
+    header = ['Vehicle', 'Revenue', 'Maintenance Cost', 'Other Expenses', 'Total Cost',
               'Net Profit', 'Distance (km)', 'Liters', 'Km/Liter', 'Cost/km', 'Revenue/km']
     if request.args.get('format') == 'pdf':
         return _table_pdf_response(f'vehicle_efficiency_{df}_to_{dt}.pdf', 'Vehicle Efficiency & Profitability',
