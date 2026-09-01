@@ -7179,6 +7179,52 @@ def payroll_deduction_delete(did):
     return redirect(request.referrer or url_for('report_payroll'))
 
 
+@app.route('/reports/payroll/pay-sheet.pdf')
+@login_required
+@permission_required('reports')
+def payroll_pay_sheet_pdf():
+    """One-page roster of every driver/conductor with their net pay for the
+    period and a blank Signature/Date cell each — the physical sheet crew
+    sign as they're handed their cash, as opposed to the individual
+    Payslip PDFs (see _payslip_elements) which are each person's own
+    itemized copy. Net Pay here (not gross Accrued) is what's actually
+    being handed over and signed for."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    earnings, *_ = compute_payroll_earnings(df, dt)
+    crew_rows = _flatten_wages_earnings(earnings)
+
+    if not crew_rows:
+        flash(f'No payroll activity for {date_from_str} to {date_to_str}.', 'warning')
+        return redirect(url_for('report_payroll', date_from=date_from_str, date_to=date_to_str))
+
+    styles = _pdf_styles()
+    elements = [
+        Paragraph('Payroll Pay Sheet', styles['Title']),
+        Paragraph(f'Period: {date_from_str} to {date_to_str}', styles['Normal']),
+        Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}', styles['Normal']),
+        Spacer(1, 10),
+    ]
+
+    data = [['#', 'Crew Member', 'Role', 'Net Pay (USD)', 'Signature', 'Date']]
+    total_net_pay = 0.0
+    for i, (name, role, row) in enumerate(crew_rows, start=1):
+        data.append([str(i), name, role, f"${row['net_pay']:,.2f}", '', ''])
+        total_net_pay += row['net_pay']
+    data.append(['', '', 'TOTAL', f"${total_net_pay:,.2f}", '', ''])
+
+    table = _pdf_table(data, bold_last_row=True, col_widths=[24, 170, 80, 90, 220, 90])
+    # Extra vertical padding on every data row so the blank Signature/Date
+    # cells are tall enough to actually sign in, not just wide.
+    table.setStyle(TableStyle([
+        ('TOPPADDING', (0, 1), (-1, -1), 12),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 12),
+    ]))
+    elements.append(table)
+
+    return _pdf_response(f'payroll_pay_sheet_{date_from_str}_to_{date_to_str}.pdf', elements, pagesize=landscape(A4))
+
+
 @app.route('/reports/payroll/payslip/<int:driver_id>.pdf')
 @login_required
 @permission_required('reports')

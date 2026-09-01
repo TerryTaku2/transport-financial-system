@@ -55,6 +55,9 @@
       <i data-feather="download"></i> Export PDF
     </a>
     {% if earnings %}
+    <a href="{{ url_for('payroll_pay_sheet_pdf', date_from=date_from, date_to=date_to) }}" class="btn btn-outline" target="_blank">
+      <i data-feather="clipboard"></i> Print Pay Sheet
+    </a>
     <a href="{{ url_for('payroll_payslips_print_all', date_from=date_from, date_to=date_to) }}" class="btn btn-primary" target="_blank">
       <i data-feather="printer"></i> Print All Payslips
     </a>
