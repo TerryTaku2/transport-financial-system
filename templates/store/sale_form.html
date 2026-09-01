@@ -40,8 +40,13 @@
           <input type="number" id="sale_qty" name="quantity" min="0.01" step="any" required value="{{ sale.quantity|qty if sale }}">
         </div>
         <div class="form-group">
-          <label>Unit Price (USD)<span class="req">*</span></label>
+          <label>Unit Price (USD)<span class="req" id="sale_price_req">*</span></label>
           <input type="number" id="sale_price" name="unit_price" step="any" min="0" required value="{{ sale.unit_price if sale }}">
+        </div>
+        <div class="form-group">
+          <label>Total Selling Price (USD)</label>
+          <input type="number" id="sale_total_price" name="total_price" step="any" min="0" placeholder="Optional — overrides Unit Price">
+          <div class="form-hint">Enter the total directly instead of a unit price — Unit Price will be calculated as Total &divide; Quantity.</div>
         </div>
         <div class="form-group">
           <label>Sold To Vehicle (internal)</label>
@@ -58,7 +63,7 @@
           <input type="text" name="customer_name" id="sale_customer" value="{{ sale.customer_name or '' if sale }}">
         </div>
         <div class="form-group">
-          <label>Total (auto-calculated)</label>
+          <label>Total</label>
           <div style="font-size:20px;font-weight:700;color:var(--success);padding-top:6px;" id="sale_total_preview">{{ (sale.total_amount if sale else 0)|currency }}</div>
         </div>
         <div class="form-group full">

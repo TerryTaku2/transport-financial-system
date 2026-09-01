@@ -125,12 +125,31 @@ document.addEventListener('DOMContentLoaded', function () {
   var saleQty   = document.getElementById('sale_qty');
   var salePrice = document.getElementById('sale_price');
   var saleTotal = document.getElementById('sale_total_preview');
+  var saleTotalPrice = document.getElementById('sale_total_price');
+  var salePriceReq = document.getElementById('sale_price_req');
   var saleStockHint = document.getElementById('sale_stock_hint');
   function updateSaleTotal() {
     if (!saleQty || !salePrice || !saleTotal) return;
+    // A manually entered Total Price overrides Unit Price x Quantity — the
+    // preview just mirrors it directly, matching what the backend will do.
+    if (saleTotalPrice && saleTotalPrice.value.trim() !== '') {
+      saleTotal.textContent = '$' + (parseFloat(saleTotalPrice.value) || 0).toFixed(2);
+      return;
+    }
     var q = parseFloat(saleQty.value) || 0;
     var p = parseFloat(salePrice.value) || 0;
     saleTotal.textContent = '$' + (q * p).toFixed(2);
+  }
+  // Total Price and Unit Price are mutually exclusive — entering a Total
+  // Price disables Unit Price (so it's neither required nor submitted,
+  // and can't be left stale) until Total Price is cleared again.
+  function onSaleTotalPriceChange() {
+    if (!saleTotalPrice || !salePrice) return;
+    var overriding = saleTotalPrice.value.trim() !== '';
+    salePrice.disabled = overriding;
+    salePrice.required = !overriding;
+    if (salePriceReq) salePriceReq.style.display = overriding ? 'none' : '';
+    updateSaleTotal();
   }
   function onSalePartChange() {
     if (!salePart) return;
@@ -145,6 +164,7 @@ document.addEventListener('DOMContentLoaded', function () {
   if (salePart)  salePart.addEventListener('change', onSalePartChange);
   if (saleQty)   saleQty.addEventListener('input', updateSaleTotal);
   if (salePrice) salePrice.addEventListener('input', updateSaleTotal);
+  if (saleTotalPrice) saleTotalPrice.addEventListener('input', onSaleTotalPriceChange);
 
   // ── Store sale: hide the free-text Customer field once a company vehicle is picked ──
   var saleVehicle = document.getElementById('sale_vehicle');

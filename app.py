@@ -5126,8 +5126,18 @@ def store_sale_add():
         quantity = form_float(request.form, 'quantity', min_value=0.01)
         if quantity > part.quantity_on_hand:
             raise ValueError(f'Only {part.quantity_on_hand} {part.unit}(s) of {part.name} in stock.')
-        unit_price = form_float(request.form, 'unit_price', required=False,
-                                default=part.selling_price, min_value=0)
+        # Total Price lets the total be entered directly (e.g. a negotiated
+        # round figure) instead of via a per-unit price — when given, it's
+        # the authoritative amount and unit_price is only backed out from it
+        # for the per-unit records; otherwise unit_price x quantity governs.
+        total_price = form_float(request.form, 'total_price', required=False, min_value=0)
+        if total_price is not None:
+            unit_price = total_price / quantity
+            total_amount = total_price
+        else:
+            unit_price = form_float(request.form, 'unit_price', required=False,
+                                    default=part.selling_price, min_value=0)
+            total_amount = quantity * unit_price
         vehicle_id = form_int(request.form, 'vehicle_id', required=False)
 
         sale = StoreSale(
@@ -5137,7 +5147,7 @@ def store_sale_add():
             quantity=quantity,
             unit_cost=part.cost_price,
             unit_price=unit_price,
-            total_amount=quantity * unit_price,
+            total_amount=total_amount,
             customer_name=request.form.get('customer_name', '').strip() if not vehicle_id else None,
             notes=request.form.get('notes', '').strip(),
             created_by=current_user.id,
@@ -5181,8 +5191,14 @@ def store_sale_edit(sid):
         available = part.quantity_on_hand + (sale.quantity if part.id == old_part.id else 0)
         if quantity > available:
             raise ValueError(f'Only {available} {part.unit}(s) of {part.name} in stock.')
-        unit_price = form_float(request.form, 'unit_price', required=False,
-                                default=part.selling_price, min_value=0)
+        total_price = form_float(request.form, 'total_price', required=False, min_value=0)
+        if total_price is not None:
+            unit_price = total_price / quantity
+            total_amount = total_price
+        else:
+            unit_price = form_float(request.form, 'unit_price', required=False,
+                                    default=part.selling_price, min_value=0)
+            total_amount = quantity * unit_price
         vehicle_id = form_int(request.form, 'vehicle_id', required=False)
 
         if part.id == old_part.id:
@@ -5200,7 +5216,7 @@ def store_sale_edit(sid):
         sale.quantity = quantity
         sale.unit_cost = part.cost_price
         sale.unit_price = unit_price
-        sale.total_amount = quantity * unit_price
+        sale.total_amount = total_amount
         sale.customer_name = request.form.get('customer_name', '').strip() if not vehicle_id else None
         sale.notes = request.form.get('notes', '').strip()
         log_audit('UPDATE', 'store_sales', sale.id, f'Updated sale to {quantity} x {part.name} @ {unit_price}')
@@ -7213,16 +7229,19 @@ def payroll_pay_sheet_pdf():
         total_net_pay += row['net_pay']
     data.append(['', '', 'TOTAL', f"${total_net_pay:,.2f}", '', ''])
 
-    table = _pdf_table(data, bold_last_row=True, col_widths=[24, 170, 80, 90, 220, 90])
-    # Extra vertical padding on every data row so the blank Signature/Date
-    # cells are tall enough to actually sign in, not just wide.
+    table = _pdf_table(data, bold_last_row=True, col_widths=[24, 140, 60, 70, 140, 70])
+    # Bold black grid (over _pdf_table's default light-gray one) so the row/
+    # column lines are actually visible on a printed copy, plus extra
+    # vertical padding so the blank Signature/Date cells are tall enough to
+    # sign in, not just wide.
     table.setStyle(TableStyle([
+        ('GRID', (0, 0), (-1, -1), 0.75, colors.black),
         ('TOPPADDING', (0, 1), (-1, -1), 12),
         ('BOTTOMPADDING', (0, 1), (-1, -1), 12),
     ]))
     elements.append(table)
 
-    return _pdf_response(f'payroll_pay_sheet_{date_from_str}_to_{date_to_str}.pdf', elements, pagesize=landscape(A4))
+    return _pdf_response(f'payroll_pay_sheet_{date_from_str}_to_{date_to_str}.pdf', elements)
 
 
 @app.route('/reports/payroll/payslip/<int:driver_id>.pdf')
