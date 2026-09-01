@@ -5827,29 +5827,43 @@ def report_income():
         **stmt)
 
 
-def compute_payroll_earnings(df, dt):
+def compute_payroll_earnings(df, dt, vehicle_id=None):
     """Crew commission breakdown for [df, dt] — shared by the payroll report
-    page and its Excel/PDF exports so the three surfaces can't drift apart
-    on the commission math."""
+    page, its Excel/PDF exports, and the vehicle-scoped Wages & Salaries
+    report (see wages_expense_for_vehicle) so none of them can drift apart
+    on the commission math. vehicle_id narrows every DailyLog-based figure
+    to that one vehicle's rows; CommissionPayment/PayrollDeduction (paid,
+    deductions) stay driver-level regardless, since a payment isn't tied to
+    which vehicle earned it."""
     dr_rate = app.config['COMMISSION_DRIVER_RATE']
     co_rate = app.config['COMMISSION_CONDUCTOR_RATE']
 
     earnings = []
     for d in Driver.query.filter_by(status='active').order_by(Driver.name).all():
-        driven = db.session.query(func.sum(DailyLog.gross_revenue),
-                                  func.count(DailyLog.id)).filter(
+        driven_q = db.session.query(func.sum(DailyLog.gross_revenue),
+                                    func.count(DailyLog.id)).filter(
             DailyLog.driver_id == d.id,
-            DailyLog.log_date.between(df, dt)).first()
-        conducted = db.session.query(func.sum(DailyLog.gross_revenue),
-                                     func.count(DailyLog.id)).filter(
+            DailyLog.log_date.between(df, dt))
+        conducted_q = db.session.query(func.sum(DailyLog.gross_revenue),
+                                       func.count(DailyLog.id)).filter(
             DailyLog.conductor_id == d.id,
-            DailyLog.log_date.between(df, dt)).first()
-        garnish_driven = db.session.query(func.sum(DailyLog.garnish)).filter(
+            DailyLog.log_date.between(df, dt))
+        garnish_driven_q = db.session.query(func.sum(DailyLog.garnish)).filter(
             DailyLog.driver_id == d.id,
-            DailyLog.log_date.between(df, dt)).scalar() or 0
-        garnish_conducted = db.session.query(func.sum(DailyLog.garnish)).filter(
+            DailyLog.log_date.between(df, dt))
+        garnish_conducted_q = db.session.query(func.sum(DailyLog.garnish)).filter(
             DailyLog.conductor_id == d.id,
-            DailyLog.log_date.between(df, dt)).scalar() or 0
+            DailyLog.log_date.between(df, dt))
+        if vehicle_id:
+            driven_q = driven_q.filter(DailyLog.vehicle_id == vehicle_id)
+            conducted_q = conducted_q.filter(DailyLog.vehicle_id == vehicle_id)
+            garnish_driven_q = garnish_driven_q.filter(DailyLog.vehicle_id == vehicle_id)
+            garnish_conducted_q = garnish_conducted_q.filter(DailyLog.vehicle_id == vehicle_id)
+
+        driven = driven_q.first()
+        conducted = conducted_q.first()
+        garnish_driven = garnish_driven_q.scalar() or 0
+        garnish_conducted = garnish_conducted_q.scalar() or 0
 
         rev = (driven[0] or 0) + (conducted[0] or 0)
         days = (driven[1] or 0) + (conducted[1] or 0)
@@ -6051,42 +6065,40 @@ def export_payroll_pdf():
     return _pdf_response(f'payroll_{date_from_str}_to_{date_to_str}.pdf', elements, pagesize=landscape(A4))
 
 
-def wages_expense_query(df, dt, vehicle_id=None):
-    """Expense rows booked under the 'Wages' heading (or any sub-heading a
-    user has added under it) for [df, dt] — the same category the Income
-    Statement's Statement Summary rolls up into its Wages line, isolated
-    here into its own filterable report. Distinct from the Payroll report:
-    that one derives driver/conductor commission from DailyLog revenue,
-    this one is actual wage/salary amounts entered as Expense rows (e.g. a
-    fixed monthly salary), which may or may not be tagged to a vehicle."""
-    wages_heading = ExpenseCategory.query.filter_by(name='Wages', parent_id=None).first()
-    category_ids = [wages_heading.id] + [c.id for c in wages_heading.children] if wages_heading else []
-    q = Expense.query.filter(Expense.category_id.in_(category_ids), Expense.expense_date.between(df, dt))
-    if vehicle_id:
-        q = q.filter(Expense.vehicle_id == vehicle_id)
-    return q
+def _flatten_wages_earnings(earnings):
+    """Flatten compute_payroll_earnings' driver-with-nested-conductors
+    structure into one ordered list of (name, role, row) for a simple
+    per-crew-member table — the Wages & Salaries report doesn't need the
+    Payroll page's Pay/Deduct actions, just the accrued figures."""
+    flat = []
+    for e in earnings:
+        flat.append((e['driver'].name, e['driver'].role.title(), e))
+        for ce in e['conductors']:
+            name = ce['driver'].name if ce['driver'] else f"{e['driver'].name.split(' ')[0]} Conductor"
+            flat.append((name, 'Conductor', ce))
+    return flat
 
 
 @app.route('/reports/wages')
 @login_required
 @permission_required('reports')
 def report_wages():
+    """Wages & salaries expense for one vehicle (or the whole fleet) over a
+    period — deliberately the *same* driver/conductor commission math as
+    the Payroll report (see compute_payroll_earnings), just scoped to a
+    vehicle's own DailyLog rows, so this always reconciles with what
+    Payroll shows rather than depending on wage amounts being separately
+    booked as Expense rows (which in practice are rarely entered)."""
     vehicle_id = request.args.get('vehicle_id', '')
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
 
-    entries = wages_expense_query(df, dt, vehicle_id or None).order_by(Expense.expense_date).all()
-    total_wages = sum(e.amount for e in entries)
-
-    by_vehicle = {}
-    for e in entries:
-        key = e.vehicle.registration if e.vehicle else '(general — not vehicle-specific)'
-        by_vehicle[key] = by_vehicle.get(key, 0) + e.amount
-    vehicle_breakdown = sorted(by_vehicle.items(), key=lambda kv: kv[1], reverse=True)
+    earnings, total_commissions, total_garnish, _, _, _ = compute_payroll_earnings(df, dt, vehicle_id or None)
+    crew_rows = _flatten_wages_earnings(earnings)
 
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     return render_template('reports/wages.html',
-        entries=entries, total_wages=total_wages, vehicle_breakdown=vehicle_breakdown,
+        crew_rows=crew_rows, total_wages=total_commissions, total_garnish=total_garnish,
         vehicles=all_vehicles, vehicle_id=vehicle_id,
         date_from=date_from_str, date_to=date_to_str)
 
@@ -6099,18 +6111,19 @@ def export_wages():
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
 
-    entries = wages_expense_query(df, dt, vehicle_id or None).order_by(Expense.expense_date).all()
-    total_wages = sum(e.amount for e in entries)
+    earnings, total_commissions, total_garnish, _, _, _ = compute_payroll_earnings(df, dt, vehicle_id or None)
+    crew_rows = _flatten_wages_earnings(earnings)
 
     vehicle_label = 'All Vehicles'
     if vehicle_id:
         v = Vehicle.query.filter_by(id=vehicle_id).first()
         vehicle_label = f'{v.registration} — {v.make} {v.model}' if v else f'Vehicle #{vehicle_id}'
 
-    header = ['Date', 'Vehicle', 'Category', 'Description', 'Amount (USD)']
-    rows = [[e.expense_date, e.vehicle.registration if e.vehicle else '(general)',
-             e.category.display_name, e.description or '', f'{e.amount:.2f}'] for e in entries]
-    rows.append(['', '', '', 'TOTAL WAGES & SALARIES', f'{total_wages:.2f}'])
+    header = ['Crew Member', 'Role', 'Days Worked', 'Revenue Generated (USD)', 'Garnish (USD)',
+               'Rate %', 'Wages / Commission (USD)']
+    rows = [[name, role, r['days_worked'], f"{r['total_revenue']:.2f}", f"{r['garnish']:.2f}",
+             f"{r['rate_pct']:.1f}", f"{r['commission']:.2f}"] for name, role, r in crew_rows]
+    rows.append(['', '', '', '', f'{total_garnish:.2f}', 'TOTAL WAGES & SALARIES', f'{total_commissions:.2f}'])
 
     scope_suffix = f'_vehicle{vehicle_id}' if vehicle_id else '_all_vehicles'
     if request.args.get('format') == 'pdf':
