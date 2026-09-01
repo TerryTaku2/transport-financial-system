@@ -5666,7 +5666,7 @@ def expense_breakdown_by_category(df, dt, vehicle_id=None):
 # off it), but the income statement displays it under the fuller label —
 # applied consistently wherever the statement's category names surface
 # (report page, PDF report pack, WhatsApp summary) via this shared map.
-INCOME_STATEMENT_LABELS = {'Wages': 'Salaries and Wages'}
+INCOME_STATEMENT_LABELS = {'Wages': 'Wages and Salaries'}
 
 
 def statement_expense_line_items(df, dt, vehicle_id=None):
@@ -5761,7 +5761,15 @@ def compute_income_statement(df, dt, vehicle_id=None):
         vehicle_expenses = db.session.query(func.sum(Expense.amount)).filter(
             Expense.expense_date.between(df, dt), Expense.vehicle_id.isnot(None)).scalar() or 0
 
-    total_expenses = maintenance_cost + vehicle_expenses + general_expenses + spares_cost
+    # Wages and Salaries is driven by the actual crew commission payroll —
+    # same math as the Payroll/Wages & Salaries reports (see
+    # compute_payroll_earnings) — rather than manually-booked 'Wages'
+    # Expense rows, which in practice are rarely entered (see report_wages).
+    # Any Wages-category Expense rows that do exist still count too, added
+    # to this below once the category breakdown is built.
+    _, payroll_commissions, _, _, _, _ = compute_payroll_earnings(df, dt, vehicle_id or None)
+
+    total_expenses = maintenance_cost + vehicle_expenses + general_expenses + spares_cost + payroll_commissions
     net_profit = gross_revenue - total_expenses
     profit_margin = (net_profit / gross_revenue * 100) if gross_revenue else 0
 
@@ -5798,6 +5806,7 @@ def compute_income_statement(df, dt, vehicle_id=None):
         else:
             other_expenses += row['total']
     category_totals['Maintenance'] += maintenance_cost + spares_cost
+    category_totals['Wages'] += payroll_commissions
 
     statement_expenses = [(INCOME_STATEMENT_LABELS.get(name, name), category_totals[name])
                            for name in statement_category_names]
@@ -6164,7 +6173,10 @@ def compute_consolidated_overview(df, dt):
     gross_revenue, maintenance_cost, general_expenses, spares_cost = vehicle_income_totals(df, dt, None)
     vehicle_expenses = db.session.query(func.sum(Expense.amount)).filter(
         Expense.expense_date.between(df, dt), Expense.vehicle_id.isnot(None)).scalar() or 0
-    fleet_expenses = maintenance_cost + vehicle_expenses + general_expenses + spares_cost
+    # Crew commission payroll, same as the Fleet income statement — see
+    # compute_income_statement.
+    _, payroll_commissions, _, _, _, _ = compute_payroll_earnings(df, dt)
+    fleet_expenses = maintenance_cost + vehicle_expenses + general_expenses + spares_cost + payroll_commissions
 
     daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
