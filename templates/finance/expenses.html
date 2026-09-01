@@ -9,11 +9,31 @@
     <div class="subtitle">Overhead not covered by fuel or maintenance logs — insurance, licensing, salaries, rent, etc.</div>
   </div>
   <div class="btn-group">
-    <a href="{{ url_for('expenses_export') }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
-    <a href="{{ url_for('expenses_export', format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
+    <a href="{{ url_for('expenses_export', vehicle_id=vehicle_id, q=q) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+    <a href="{{ url_for('expenses_export', vehicle_id=vehicle_id, q=q, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
     <a href="{{ url_for('expense_add') }}" class="btn btn-primary"><i data-feather="plus"></i> Add Expense</a>
   </div>
 </div>
+
+<form method="GET" class="filter-bar mb-16">
+  <div class="form-group">
+    <label>Vehicle</label>
+    <select name="vehicle_id">
+      <option value="">All Vehicles</option>
+      {% for v in vehicles %}
+      <option value="{{ v.id }}" {% if vehicle_id|string == v.id|string %}selected{% endif %}>{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="form-group">
+    <label>Search</label>
+    <input type="text" name="q" value="{{ q }}" placeholder="Description or vehicle registration…">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="search"></i> Search</button>
+  {% if vehicle_id or q %}
+  <a href="{{ url_for('expenses_list') }}" class="btn btn-outline">Clear</a>
+  {% endif %}
+</form>
 
 <div class="card mb-24">
   <div class="card-header"><h3>Headings &amp; Sub-headings</h3></div>
@@ -105,15 +125,19 @@
   </div>
   {% if expenses.pages > 1 %}
   <div class="pagination">
-    {% if expenses.has_prev %}<a href="{{ url_for('expenses_list', page=expenses.prev_num) }}">&laquo; Prev</a>{% endif %}
+    {% if expenses.has_prev %}<a href="{{ url_for('expenses_list', page=expenses.prev_num, vehicle_id=vehicle_id, q=q) }}">&laquo; Prev</a>{% endif %}
     <span>Page {{ expenses.page }} of {{ expenses.pages }}</span>
-    {% if expenses.has_next %}<a href="{{ url_for('expenses_list', page=expenses.next_num) }}">Next &raquo;</a>{% endif %}
+    {% if expenses.has_next %}<a href="{{ url_for('expenses_list', page=expenses.next_num, vehicle_id=vehicle_id, q=q) }}">Next &raquo;</a>{% endif %}
   </div>
   {% endif %}
   {% else %}
   <div class="empty-state">
     <div class="empty-icon">🧾</div>
+    {% if vehicle_id or q %}
+    <p>No expenses match this search. <a href="{{ url_for('expenses_list') }}">Clear the filters</a>.</p>
+    {% else %}
     <p>No expenses recorded yet. <a href="{{ url_for('expense_add') }}">Add the first one</a>.</p>
+    {% endif %}
   </div>
   {% endif %}
 </div>

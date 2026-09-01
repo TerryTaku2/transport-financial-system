@@ -8551,16 +8551,40 @@ def owner_drawing_delete(did):
 @permission_required('finance')
 def expenses_list():
     page = request.args.get('page', 1, type=int)
-    expenses = Expense.query.order_by(Expense.expense_date.desc()).paginate(page=page, per_page=20)
+    vehicle_id = request.args.get('vehicle_id', '')
+    q = request.args.get('q', '').strip()
+
+    query = Expense.query
+    if vehicle_id:
+        query = query.filter(Expense.vehicle_id == vehicle_id)
+    if q:
+        like = f'%{q}%'
+        query = query.join(Expense.vehicle, isouter=True).filter(
+            db.or_(Expense.description.ilike(like), Vehicle.registration.ilike(like)))
+
+    expenses = query.order_by(Expense.expense_date.desc()).paginate(page=page, per_page=20)
     headings = ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all()
-    return render_template('finance/expenses.html', expenses=expenses, headings=headings)
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    return render_template('finance/expenses.html', expenses=expenses, headings=headings,
+                           vehicles=all_vehicles, vehicle_id=vehicle_id, q=q)
 
 
 @app.route('/finance/expenses/export')
 @login_required
 @permission_required('finance')
 def expenses_export():
-    all_expenses = Expense.query.order_by(Expense.expense_date.desc()).all()
+    vehicle_id = request.args.get('vehicle_id', '')
+    q = request.args.get('q', '').strip()
+
+    query = Expense.query
+    if vehicle_id:
+        query = query.filter(Expense.vehicle_id == vehicle_id)
+    if q:
+        like = f'%{q}%'
+        query = query.join(Expense.vehicle, isouter=True).filter(
+            db.or_(Expense.description.ilike(like), Vehicle.registration.ilike(like)))
+
+    all_expenses = query.order_by(Expense.expense_date.desc()).all()
     rows = [[e.expense_date, e.category.display_name, e.vehicle.registration if e.vehicle else '',
              e.driver.name if e.driver else '', e.description or '', f'{e.amount:.2f}'] for e in all_expenses]
     header = ['Date', 'Category', 'Vehicle', 'Driver', 'Description', 'Amount']
