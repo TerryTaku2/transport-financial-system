@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block title %}{{ action }} Owner{% endblock %}
+{% block page_title %}{{ action }} Owner{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ action }} Owner</h1>
+    <div class="subtitle">Partner details</div>
+  </div>
+  <a href="{{ url_for('owners') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Owners</a>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Name<span class="req">*</span></label>
+          <input type="text" name="name" required placeholder="e.g. John Moyo"
+                 value="{{ owner.name if owner else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Phone</label>
+          <input type="text" name="phone" placeholder="e.g. 077 123 4567"
+                 value="{{ owner.phone if owner and owner.phone else '' }}">
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="email" name="email" placeholder="e.g. john@example.com"
+                 value="{{ owner.email if owner and owner.email else '' }}">
+        </div>
+      </div>
+      <div class="form-group mb-16">
+        <label>Notes</label>
+        <textarea name="notes" rows="3" placeholder="Optional notes">{{ owner.notes if owner and owner.notes else '' }}</textarea>
+      </div>
+
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Owner</button>
+        <a href="{{ url_for('owners') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

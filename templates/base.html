@@ -51,6 +51,9 @@
       <a href="{{ url_for('vehicles') }}" class="nav-item {% if 'vehicle' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="truck"></i> Vehicles
       </a>
+      <a href="{{ url_for('owners') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('owner') %}active{% endif %}">
+        <i data-feather="users"></i> Owners
+      </a>
       {% endif %}
       {% if current_user.has_permission('drivers') %}
       <a href="{{ url_for('drivers') }}" class="nav-item {% if request.endpoint and request.endpoint.startswith('driver') and request.endpoint != 'driver_roster' %}active{% endif %}">
@@ -100,6 +103,9 @@
       </a>
       <a href="{{ url_for('report_income') }}" class="nav-item {% if request.endpoint == 'report_income' %}active{% endif %}">
         <i data-feather="bar-chart-2"></i> Income Statement
+      </a>
+      <a href="{{ url_for('report_income_by_owner') }}" class="nav-item {% if request.endpoint == 'report_income_by_owner' %}active{% endif %}">
+        <i data-feather="users"></i> Income Statement by Owner
       </a>
       <a href="{{ url_for('report_cash_flow') }}" class="nav-item {% if request.endpoint == 'report_cash_flow' %}active{% endif %}">
         <i data-feather="repeat"></i> Cash Flow

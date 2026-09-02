@@ -1,0 +1,100 @@
+{% extends 'base.html' %}
+{% block title %}Income Statement by Owner{% endblock %}
+{% block page_title %}Finance — Income Statement by Owner{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Income Statement by Owner</h1>
+    <div class="subtitle">{{ date_from }} to {{ date_to }} &mdash; each vehicle's profit/loss, rolled up by the partner who owns it</div>
+  </div>
+  <a href="{{ url_for('export_income_by_owner', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
+    <i data-feather="download"></i> Export CSV
+  </a>
+  <a href="{{ url_for('export_income_by_owner', date_from=date_from, date_to=date_to, format='pdf') }}" class="btn btn-outline">
+    <i data-feather="file-text"></i> Export PDF
+  </a>
+</div>
+
+<form method="GET" class="filter-bar">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Generate</button>
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue">
+    <div class="kpi-label">Gross Revenue (Fleet-wide)</div>
+    <div class="kpi-value">{{ gross_revenue|currency }}</div>
+  </div>
+  <div class="kpi-card {% if net_profit >= 0 %}kpi-green{% else %}kpi-red{% endif %}">
+    <div class="kpi-label">Net Profit (Fleet-wide)</div>
+    <div class="kpi-value">{{ net_profit|currency }}</div>
+    <div class="kpi-sub">Margin: {{ profit_margin|pct }}</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-label">Owners with Vehicles</div>
+    <div class="kpi-value">{{ owner_breakdown|rejectattr('owner', 'none')|list|length }}</div>
+  </div>
+</div>
+
+<div class="form-hint mb-16">
+  Owner totals below are vehicle-attributable profit only &mdash; fleet-wide payroll and general overhead
+  (shown in the Net Profit figure above) aren't split across owners.
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Income Statement by Owner</h3></div>
+  {% if owner_breakdown %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Owner / Vehicle</th>
+          <th class="text-right">Revenue</th>
+          <th class="text-right">Maintenance</th>
+          <th class="text-right">Expenses</th>
+          <th class="text-right">Net Profit</th>
+          <th class="text-right">Margin</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for g in owner_breakdown %}
+        <tr class="summary-row">
+          <td>
+            {% if g.owner %}<a href="{{ url_for('owner_detail', oid=g.owner.id) }}">{{ g.owner.name }}</a>{% else %}Unassigned (Company-owned){% endif %}
+            <span class="form-hint">({{ g.vehicle_count }} vehicle{{ 's' if g.vehicle_count != 1 else '' }})</span>
+          </td>
+          <td class="text-right">{{ g.revenue|currency }}</td>
+          <td class="text-right">({{ g.maintenance|currency }})</td>
+          <td class="text-right">({{ g.expenses|currency }})</td>
+          <td class="text-right {% if g.net_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ g.net_profit|currency }}</strong></td>
+          <td class="text-right">{{ g.margin|pct }}</td>
+        </tr>
+        {% for row in g.vehicles %}
+        <tr>
+          <td style="padding-left:28px;">
+            {{ row.vehicle.registration }} <span class="form-hint">{{ row.vehicle.make }} {{ row.vehicle.model }}</span>
+          </td>
+          <td class="text-right">{{ row.revenue|currency }}</td>
+          <td class="text-right">({{ row.maintenance|currency }})</td>
+          <td class="text-right">({{ row.expenses|currency }})</td>
+          <td class="text-right {% if row.net_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ row.net_profit|currency }}</td>
+          <td class="text-right">{{ row.margin|pct }}</td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No revenue or cost data for the selected period.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

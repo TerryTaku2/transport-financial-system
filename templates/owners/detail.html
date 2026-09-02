@@ -1,0 +1,77 @@
+{% extends 'base.html' %}
+{% block title %}{{ owner.name }}{% endblock %}
+{% block page_title %}Owner — {{ owner.name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ owner.name }}</h1>
+    <div class="subtitle">{{ vehicles|length }} vehicle(s) owned</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('owner_edit', oid=owner.id) }}" class="btn btn-outline"><i data-feather="edit-2"></i> Edit</a>
+    <a href="{{ url_for('owners') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Contact Details</h3></div>
+  <div style="padding:12px 16px;display:flex;gap:32px;flex-wrap:wrap;">
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;">Phone</div>
+      <div>{{ owner.phone or '—' }}</div>
+    </div>
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;">Email</div>
+      <div>{{ owner.email or '—' }}</div>
+    </div>
+    {% if owner.notes %}
+    <div>
+      <div style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;">Notes</div>
+      <div>{{ owner.notes }}</div>
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;">
+    <h3>Vehicles Owned</h3>
+    <a href="{{ url_for('report_income_by_owner') }}" class="btn btn-outline btn-xs">Income Statement by Owner</a>
+  </div>
+  {% if vehicles %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Registration</th>
+          <th>Vehicle</th>
+          <th>Status</th>
+          <th class="text-right">Lifetime Revenue</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in vehicles %}
+        <tr>
+          <td><a href="{{ url_for('vehicle_detail', vid=v.id) }}"><strong>{{ v.registration }}</strong></a></td>
+          <td>{{ v.make }} {{ v.model }} ({{ v.year }})</td>
+          <td>
+            {% if v.status == 'active' %}
+              <span class="badge badge-green"><span class="dot dot-green"></span>Active</span>
+            {% elif v.status == 'maintenance' %}
+              <span class="badge badge-amber"><span class="dot dot-amber"></span>Maintenance</span>
+            {% else %}
+              <span class="badge badge-gray"><span class="dot dot-gray"></span>Inactive</span>
+            {% endif %}
+          </td>
+          <td class="text-right"><strong class="text-success">{{ v.total_revenue|currency }}</strong></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>No vehicles assigned to this owner yet. <a href="{{ url_for('vehicles') }}">Assign one</a>.</p></div>
+  {% endif %}
+</div>
+{% endblock %}

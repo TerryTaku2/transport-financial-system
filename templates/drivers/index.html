@@ -5,7 +5,7 @@
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Drivers & Conductors</h1>
+    <h1>Drivers, Conductors & Other Staff</h1>
     <div class="subtitle">{{ drivers|length }} crew member(s) registered</div>
   </div>
   <a href="{{ url_for('driver_add') }}" class="btn btn-primary"><i data-feather="user-plus"></i> Register Crew Member</a>
@@ -21,6 +21,7 @@
           <th>License No.</th>
           <th>ID No.</th>
           <th>Role</th>
+          <th>Position</th>
           <th>Vehicle</th>
           <th>Phone</th>
           <th>Commission Rate</th>
@@ -35,9 +36,10 @@
           <td>{{ d.license_number or '—' }}</td>
           <td>{{ d.id_number or '—' }}</td>
           <td><span class="badge badge-blue">{{ d.role|title }}</span></td>
+          <td>{{ d.position or '—' }}</td>
           <td>{{ d.assigned_vehicle.registration if d.assigned_vehicle else '—' }}</td>
           <td>{{ d.phone or '—' }}</td>
-          <td>{% if d.commission_rate %}{{ (d.commission_rate*100)|round(1) }}% (custom){% else %}Default{% endif %}</td>
+          <td>{% if d.role == 'other' %}—{% elif d.commission_rate %}{{ (d.commission_rate*100)|round(1) }}% (custom){% else %}Default{% endif %}</td>
           <td>
             {% if d.status == 'active' %}<span class="badge badge-green"><span class="dot dot-green"></span>Active</span>
             {% else %}<span class="badge badge-gray"><span class="dot dot-gray"></span>Inactive</span>{% endif %}

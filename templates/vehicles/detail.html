@@ -6,7 +6,11 @@
 <div class="page-header">
   <div>
     <h1>{{ vehicle.registration }}</h1>
-    <div class="subtitle">{{ vehicle.make }} {{ vehicle.model }} ({{ vehicle.year }}) &mdash; {{ vehicle.fuel_type|capitalize }}</div>
+    <div class="subtitle">
+      {{ vehicle.make }} {{ vehicle.model }} ({{ vehicle.year }}) &mdash; {{ vehicle.fuel_type|capitalize }}
+      &mdash; Owner:
+      {% if vehicle.owner %}<a href="{{ url_for('owner_detail', oid=vehicle.owner.id) }}">{{ vehicle.owner.name }}</a>{% else %}Unassigned (Company-owned){% endif %}
+    </div>
   </div>
   <div class="btn-group">
     <a href="{{ url_for('vehicle_edit', vid=vehicle.id) }}" class="btn btn-outline"><i data-feather="edit-2"></i> Edit</a>

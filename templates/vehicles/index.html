@@ -23,6 +23,7 @@
           <th>Vehicle</th>
           <th>Year</th>
           <th>Fuel</th>
+          <th>Owner</th>
           <th>Acquisition Cost</th>
           <th>Total Revenue</th>
           <th>Status</th>
@@ -38,6 +39,7 @@
           <td>{{ v.make }} {{ v.model }}</td>
           <td>{{ v.year }}</td>
           <td>{{ v.fuel_type|capitalize }}</td>
+          <td>{% if v.owner %}<a href="{{ url_for('owner_detail', oid=v.owner.id) }}">{{ v.owner.name }}</a>{% else %}<span class="form-hint">Unassigned</span>{% endif %}</td>
           <td>{{ v.acquisition_cost|currency }}</td>
           <td><strong class="text-success">{{ revenue_by_vehicle.get(v.id, 0)|currency }}</strong></td>
           <td>

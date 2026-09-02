@@ -319,6 +319,11 @@ class Vehicle(db.Model):
     last_synced_updated_at = db.Column(db.DateTime, nullable=True)
     server_touched_at = db.Column(db.DateTime, nullable=True)
 
+    # Which partner personally owns this vehicle in the partnership — null
+    # means company-owned/unassigned. Drives the Income Statement by Owner
+    # report (see compute_income_statement_by_owner).
+    owner_id = db.Column(db.Integer, db.ForeignKey('owners.id'), nullable=True)
+
     documents = db.relationship('VehicleDocument', backref='vehicle',
                                 lazy=True, cascade='all, delete-orphan')
     daily_logs = db.relationship('DailyLog', backref='vehicle', lazy=True)
@@ -359,6 +364,28 @@ class Vehicle(db.Model):
         if d <= 30:
             return 'warning'
         return 'valid'
+
+
+class Owner(db.Model):
+    """A partner in the business who personally owns one or more vehicles —
+    distinct from OwnerDrawing, which tracks the company's own equity
+    drawings and has no per-vehicle link."""
+    __tablename__ = 'owners'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    phone = db.Column(db.String(20))
+    email = db.Column(db.String(100))
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
+
+    vehicles = db.relationship('Vehicle', backref='owner', lazy=True)
 
 
 class VehicleDocument(db.Model):
@@ -406,6 +433,9 @@ class Driver(db.Model):
     id_number = db.Column(db.String(30))
     phone = db.Column(db.String(20))
     role = db.Column(db.String(20), default='driver')
+    # Free-text job title, e.g. "Mechanic" or "Cleaner" — only meaningful
+    # for role='other' (drivers/conductors are self-describing via role).
+    position = db.Column(db.String(100))
     commission_rate = db.Column(db.Float)
     status = db.Column(db.String(20), default='active')
     # For a conductor, the driver they normally work under — informational,
@@ -1554,7 +1584,7 @@ PERMISSIONS = {
     'dashboard':    'Dashboard — overview stats, charts & recent activity',
     'crew_portal':  'Crew Portal — log daily income & view team performance leaderboard',
     'vehicles':     'Vehicles — view, add & edit vehicles',
-    'drivers':      'Crew — view, add & edit drivers/conductors',
+    'drivers':      'Crew — view, add & edit drivers/conductors/other staff',
     'routes':       'Routes — view, add & edit routes',
     'daily_logs':   'Daily Transactions — view, record & edit vehicle transactions',
     'fuel_logs':    'Fuel Logs — view & record fuel entries',
@@ -3255,6 +3285,7 @@ def vehicle_add():
             insurance_policy_number=request.form.get('insurance_policy_number', '').strip() or None,
             insurance_type=request.form.get('insurance_type', '').strip() or None,
             insurance_expiry=parse_date(request.form.get('insurance_expiry')),
+            owner_id=form_int(request.form, 'owner_id', required=False, default=None),
         )
         db.session.add(v)
         db.session.flush()
@@ -3263,7 +3294,8 @@ def vehicle_add():
         db.session.commit()
         flash(f'Vehicle {v.registration} registered successfully.', 'success')
         return redirect(url_for('vehicles'))
-    return render_template('vehicles/form.html', vehicle=None, action='Register')
+    owners = Owner.query.order_by(Owner.name).all()
+    return render_template('vehicles/form.html', vehicle=None, action='Register', owners=owners)
 
 
 @app.route('/vehicles/<int:vid>')
@@ -3304,12 +3336,14 @@ def vehicle_edit(vid):
         v.insurance_policy_number = request.form.get('insurance_policy_number', '').strip() or None
         v.insurance_type = request.form.get('insurance_type', '').strip() or None
         v.insurance_expiry = parse_date(request.form.get('insurance_expiry'))
+        v.owner_id = form_int(request.form, 'owner_id', required=False, default=None)
         log_audit('UPDATE', 'vehicles', v.id, f'Updated vehicle {v.registration}')
         touch_sync_fields(v)
         db.session.commit()
         flash(f'Vehicle {v.registration} updated.', 'success')
         return redirect(url_for('vehicle_detail', vid=vid))
-    return render_template('vehicles/form.html', vehicle=v, action='Edit')
+    owners = Owner.query.order_by(Owner.name).all()
+    return render_template('vehicles/form.html', vehicle=v, action='Edit', owners=owners)
 
 
 @app.route('/vehicles/<int:vid>/delete', methods=['POST'])
@@ -3331,6 +3365,85 @@ def vehicle_delete(vid):
     db.session.commit()
     flash(f'Vehicle {reg} removed.', 'warning')
     return redirect(url_for('vehicles'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Owners — partners in the business who personally own specific vehicles.
+# Drives the Income Statement by Owner report (see report_income_by_owner).
+# ─────────────────────────────────────────────────────────────
+@app.route('/owners')
+@login_required
+@permission_required('vehicles')
+def owners():
+    all_owners = Owner.query.order_by(Owner.name).all()
+    vehicle_count = dict(
+        db.session.query(Vehicle.owner_id, func.count(Vehicle.id))
+        .filter(Vehicle.owner_id.isnot(None)).group_by(Vehicle.owner_id).all())
+    return render_template('owners/index.html', owners=all_owners, vehicle_count=vehicle_count)
+
+
+@app.route('/owners/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('vehicles')
+@handle_form_errors
+def owner_add():
+    if request.method == 'POST':
+        o = Owner(
+            name=request.form['name'].strip(),
+            phone=request.form.get('phone', '').strip() or None,
+            email=request.form.get('email', '').strip() or None,
+            notes=request.form.get('notes', '').strip() or None,
+        )
+        db.session.add(o)
+        db.session.flush()
+        log_audit('CREATE', 'owners', o.id, f'Added owner {o.name}')
+        touch_sync_fields(o)
+        db.session.commit()
+        flash(f'Owner {o.name} added successfully.', 'success')
+        return redirect(url_for('owners'))
+    return render_template('owners/form.html', owner=None, action='Add')
+
+
+@app.route('/owners/<int:oid>')
+@login_required
+@permission_required('vehicles')
+def owner_detail(oid):
+    o = Owner.query.filter_by(id=oid).first_or_404()
+    vehicles = Vehicle.query.filter_by(owner_id=oid).order_by(Vehicle.registration).all()
+    return render_template('owners/detail.html', owner=o, vehicles=vehicles)
+
+
+@app.route('/owners/<int:oid>/edit', methods=['GET', 'POST'])
+@login_required
+@permission_required('vehicles')
+@handle_form_errors
+def owner_edit(oid):
+    o = Owner.query.filter_by(id=oid).first_or_404()
+    if request.method == 'POST':
+        o.name = request.form['name'].strip()
+        o.phone = request.form.get('phone', '').strip() or None
+        o.email = request.form.get('email', '').strip() or None
+        o.notes = request.form.get('notes', '').strip() or None
+        log_audit('UPDATE', 'owners', o.id, f'Updated owner {o.name}')
+        touch_sync_fields(o)
+        db.session.commit()
+        flash(f'Owner {o.name} updated.', 'success')
+        return redirect(url_for('owner_detail', oid=oid))
+    return render_template('owners/form.html', owner=o, action='Edit')
+
+
+@app.route('/owners/<int:oid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def owner_delete(oid):
+    o = Owner.query.filter_by(id=oid).first_or_404()
+    name = o.name
+    log_audit('DELETE', 'owners', oid, f'Deleted owner {name}')
+    o.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(o)
+    db.session.commit()
+    flash(f'Owner {name} removed.', 'warning')
+    return redirect(url_for('owners'))
 
 
 @app.route('/vehicles/<int:vehicle_id>/documents/add', methods=['GET', 'POST'])
@@ -3425,6 +3538,7 @@ def driver_add():
             id_number=id_number,
             phone=request.form.get('phone', '').strip(),
             role=role,
+            position=request.form.get('position', '').strip() if role == 'other' else None,
             commission_rate=rate_input / 100 if rate_input is not None else None,
             status=request.form.get('status', 'active'),
             paired_driver_id=paired_driver_id,
@@ -3469,6 +3583,7 @@ def driver_edit(did):
         d.id_number = id_number
         d.phone = request.form.get('phone', '').strip()
         d.role = role
+        d.position = request.form.get('position', '').strip() if role == 'other' else None
         d.commission_rate = rate_input / 100 if rate_input is not None else None
         d.status = request.form.get('status', 'active')
         d.paired_driver_id = paired_driver_id
@@ -6019,6 +6134,47 @@ def report_income():
         **stmt)
 
 
+def compute_income_statement_by_owner(df, dt):
+    """Regroups compute_income_statement's per-vehicle breakdown by
+    Vehicle.owner_id — one row per owner (vehicles with no owner assigned
+    land under a None/"Unassigned" group), each with its own vehicle list
+    and revenue/maintenance/expenses/net_profit/margin totals. Like the
+    per-vehicle breakdown it's built from, this only sums costs directly
+    attributable to a vehicle — fleet-wide payroll and general overhead
+    aren't split across owners, so owner totals won't add up to the
+    fleet-wide net_profit also returned here."""
+    stmt = compute_income_statement(df, dt)
+    groups = {}
+    for row in stmt['vehicle_breakdown']:
+        owner = row['vehicle'].owner
+        key = owner.id if owner else None
+        g = groups.setdefault(key, {
+            'owner': owner, 'vehicles': [],
+            'revenue': 0, 'maintenance': 0, 'expenses': 0, 'net_profit': 0,
+        })
+        g['vehicles'].append(row)
+        g['revenue'] += row['revenue']
+        g['maintenance'] += row['maintenance']
+        g['expenses'] += row['expenses']
+        g['net_profit'] += row['net_profit']
+    owner_breakdown = list(groups.values())
+    for g in owner_breakdown:
+        g['margin'] = (g['net_profit'] / g['revenue'] * 100) if g['revenue'] else 0
+        g['vehicle_count'] = len(g['vehicles'])
+    owner_breakdown.sort(key=lambda g: g['net_profit'], reverse=True)
+    return dict(stmt, owner_breakdown=owner_breakdown)
+
+
+@app.route('/reports/income-by-owner')
+@login_required
+@permission_required('reports')
+def report_income_by_owner():
+    df, dt = query_date_range()
+    stmt = compute_income_statement_by_owner(df, dt)
+    return render_template('reports/income_by_owner.html',
+        date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'), **stmt)
+
+
 def compute_payroll_earnings(df, dt, vehicle_id=None):
     """Crew commission breakdown for [df, dt] — shared by the payroll report
     page, its Excel/PDF exports, and the vehicle-scoped Wages & Salaries
@@ -6834,6 +6990,32 @@ def _income_statement_pdf(df, dt):
         ] for v in s['vehicle_breakdown']]
         flowables.append(_pdf_table(vdata, bold_last_row=False))
     return _pdf_section('Income Statement', f'Period: {df} to {dt} — fleet-wide', flowables)
+
+
+def _income_statement_by_owner_pdf(df, dt):
+    s = compute_income_statement_by_owner(df, dt)
+    styles = _pdf_styles()
+    flowables = []
+    headers = ['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Net Profit', 'Margin']
+    grand_net = 0
+    for g in s['owner_breakdown']:
+        owner_label = g['owner'].name if g['owner'] else 'Unassigned (Company-owned)'
+        flowables.append(Paragraph(f'{owner_label} — {g["vehicle_count"]} vehicle(s)', styles['Heading3']))
+        flowables.append(Spacer(1, 4))
+        vdata = [headers] + [[
+            v['vehicle'].registration, f"${v['revenue']:,.2f}", f"${v['maintenance']:,.2f}",
+            f"${v['expenses']:,.2f}", f"${v['net_profit']:,.2f}", f"{v['margin']:.1f}%",
+        ] for v in g['vehicles']]
+        vdata.append(['TOTAL', f"${g['revenue']:,.2f}", f"${g['maintenance']:,.2f}",
+                      f"${g['expenses']:,.2f}", f"${g['net_profit']:,.2f}", f"{g['margin']:.1f}%"])
+        flowables.append(_pdf_table(vdata))
+        flowables.append(Spacer(1, 14))
+        grand_net += g['net_profit']
+    flowables.append(_pdf_statement_table(
+        [['GRAND TOTAL (vehicle-attributable, all owners)', f"${grand_net:,.2f}"]], bold_indices=(0,)))
+    note = ('Vehicle-attributable profit only — fleet-wide payroll and general overhead are not '
+            'split across owners; see the fleet-wide Income Statement for those totals.')
+    return _pdf_section('Income Statement by Owner', f'Period: {df} to {dt}', flowables, note=note)
 
 
 def _cash_flow_pdf(df, dt):
@@ -8447,6 +8629,48 @@ def export_income():
     resp.headers['Content-Type'] = 'text/csv'
     scope_suffix = f'_vehicle{vehicle_id}' if vehicle_id else '_consolidated'
     resp.headers['Content-Disposition'] = f'attachment; filename=income{scope_suffix}_{df_str}_to_{dt_str}.csv'
+    return resp
+
+
+@app.route('/reports/export/income-by-owner')
+@login_required
+@permission_required('reports')
+def export_income_by_owner():
+    df, dt = query_date_range()
+    df_str, dt_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    s = compute_income_statement_by_owner(df, dt)
+
+    if request.args.get('format') == 'pdf':
+        elements = _income_statement_by_owner_pdf(df, dt)
+        return _pdf_response(f'income_by_owner_{df_str}_to_{dt_str}.pdf', elements, pagesize=landscape(A4))
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(['INCOME STATEMENT BY OWNER'])
+    w.writerow([f'Period: {df_str} to {dt_str}'])
+    w.writerow([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
+    w.writerow(['Note: vehicle-attributable profit only — fleet-wide payroll and general overhead',
+                'are not split across owners; see the fleet-wide Income Statement for those totals.'])
+    w.writerow([])
+
+    grand_net = 0
+    for g in s['owner_breakdown']:
+        owner_label = g['owner'].name if g['owner'] else 'Unassigned (Company-owned)'
+        w.writerow([f'OWNER: {owner_label}', f'{g["vehicle_count"]} vehicle(s)'])
+        w.writerow(['Vehicle', 'Revenue (USD)', 'Maintenance (USD)', 'Expenses (USD)', 'Net Profit (USD)', 'Margin'])
+        for v in g['vehicles']:
+            w.writerow([v['vehicle'].registration, f"{v['revenue']:.2f}", f"{v['maintenance']:.2f}",
+                        f"{v['expenses']:.2f}", f"{v['net_profit']:.2f}", f"{v['margin']:.1f}%"])
+        w.writerow(['', '', '', 'TOTAL', f"{g['net_profit']:.2f}", f"{g['margin']:.1f}%"])
+        w.writerow([])
+        grand_net += g['net_profit']
+
+    w.writerow(['GRAND TOTAL (vehicle-attributable, all owners)', f'{grand_net:.2f}'])
+
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'text/csv'
+    resp.headers['Content-Disposition'] = f'attachment; filename=income_by_owner_{df_str}_to_{dt_str}.csv'
     return resp
 
 
@@ -12568,11 +12792,14 @@ def api_precache_urls():
 # exception — they reference Users, which are pull-only mirrored with the
 # same id everywhere, so those integers are safe to sync as plain values.
 SYNC_MODELS = {
+    'owners': (Owner, (
+        'name', 'phone', 'email', 'notes', 'created_at', 'deleted_at',
+    ), {}),
     'vehicles': (Vehicle, (
         'registration', 'make', 'model', 'year', 'acquisition_cost', 'status',
         'fuel_type', 'daily_target', 'insurance_provider', 'insurance_policy_number',
         'insurance_type', 'insurance_expiry', 'created_at', 'deleted_at',
-    ), {}),
+    ), {'owner_id': 'owners'}),
     'routes': (Route, (
         'name', 'start_point', 'end_point', 'distance_km', 'fare_rate', 'status', 'created_at', 'deleted_at',
     ), {}),
@@ -12684,7 +12911,7 @@ SYNC_MODELS = {
 
 # Dependency order for apply — parents before children (see FK maps above).
 SYNC_TABLE_ORDER = [
-    'vehicles', 'routes', 'spare_parts', 'expense_categories', 'franchise_vehicles',
+    'owners', 'vehicles', 'routes', 'spare_parts', 'expense_categories', 'franchise_vehicles',
     'franchise_expense_categories',
     'loans', 'payables', 'receivables', 'capital_contributions', 'owner_drawings', 'budgets',
     'drivers', 'expenses', 'store_purchases', 'vehicle_documents', 'maintenance_schedules',
@@ -12705,7 +12932,7 @@ SYNC_TABLE_ORDER = [
 # a spoke that hasn't synced yet.
 DANGER_ZONE_MODULES = [
     ('franchise', 'Franchise', ['franchise_daily_income', 'franchise_weekly_income', 'franchise_collections', 'franchise_vehicles', 'franchise_operational_expenses', 'franchise_expense_categories']),
-    ('fleet', 'Fleet & Compliance', ['vehicles', 'drivers', 'routes', 'vehicle_documents', 'maintenance_schedules']),
+    ('fleet', 'Fleet & Compliance', ['vehicles', 'owners', 'drivers', 'routes', 'vehicle_documents', 'maintenance_schedules']),
     ('ledger', 'Daily Transactions (Crew Ledger)', ['daily_logs', 'driver_deposits']),
     ('operations', 'Operations (Fuel & Maintenance Logs)', ['fuel_logs', 'maintenance_logs']),
     ('finance', 'Finance Ledger', ['loans', 'loan_payments', 'payables', 'receivables', 'capital_contributions', 'owner_drawings', 'budgets', 'expenses', 'expense_categories', 'commission_payments', 'payroll_deductions']),
@@ -12719,7 +12946,7 @@ DANGER_ZONE_TABLE_LABELS = {
     'franchise_daily_income': 'Daily Income', 'franchise_weekly_income': 'Weekly Income',
     'franchise_collections': 'Collections (legacy)', 'franchise_vehicles': 'Franchise Vehicles',
     'franchise_operational_expenses': 'Operational Expenses', 'franchise_expense_categories': 'Operational Expense Sub-headings',
-    'vehicles': 'Vehicles', 'drivers': 'Drivers', 'routes': 'Routes',
+    'vehicles': 'Vehicles', 'owners': 'Owners', 'drivers': 'Drivers', 'routes': 'Routes',
     'vehicle_documents': 'Vehicle Documents', 'maintenance_schedules': 'Maintenance Schedules',
     'daily_logs': 'Daily Logs', 'fuel_logs': 'Fuel Logs', 'maintenance_logs': 'Maintenance Logs',
     'loans': 'Loans', 'loan_payments': 'Loan Payments', 'payables': 'Payables',
@@ -13811,6 +14038,8 @@ def migrate_db():
             conn.execute(text("ALTER TABLE vehicles ADD COLUMN insurance_type VARCHAR(50)"))
         if 'insurance_expiry' not in vehicle_cols:
             conn.execute(text("ALTER TABLE vehicles ADD COLUMN insurance_expiry DATE"))
+        if 'owner_id' not in vehicle_cols:
+            conn.execute(text("ALTER TABLE vehicles ADD COLUMN owner_id INTEGER REFERENCES owners(id)"))
         if inspector.has_table('depots'):
             conn.execute(text("DROP TABLE depots"))
 
@@ -13852,6 +14081,8 @@ def migrate_db():
                 conn.execute(text(f"ALTER TABLE drivers ADD COLUMN {col} VARCHAR(100)"))
         if 'id_number' not in driver_col_names:
             conn.execute(text("ALTER TABLE drivers ADD COLUMN id_number VARCHAR(30)"))
+        if 'position' not in driver_col_names:
+            conn.execute(text("ALTER TABLE drivers ADD COLUMN position VARCHAR(100)"))
 
         license_col = next((c for c in driver_cols if c['name'] == 'license_number'), None)
         if license_col is not None and not license_col['nullable']:

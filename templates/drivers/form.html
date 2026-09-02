@@ -6,7 +6,7 @@
 <div class="page-header">
   <div>
     <h1>{{ action }} Crew Member</h1>
-    <div class="subtitle">Driver or conductor profile</div>
+    <div class="subtitle">Driver, conductor, or other staff profile</div>
   </div>
   <a href="{{ url_for('drivers') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back to Crew</a>
 </div>
@@ -25,7 +25,14 @@
           <select name="role" id="role-select" onchange="toggleCrewFields()">
             <option value="driver" {% if driver and driver.role=='driver' %}selected{% endif %}>Driver</option>
             <option value="conductor" {% if driver and driver.role=='conductor' %}selected{% endif %}>Conductor</option>
+            <option value="other" {% if driver and driver.role=='other' %}selected{% endif %}>Other</option>
           </select>
+        </div>
+        <div class="form-group" id="position-group">
+          <label>Position</label>
+          <input type="text" name="position" placeholder="e.g. Mechanic, Cleaner, Office Clerk"
+                 value="{{ driver.position if driver else '' }}">
+          <div class="form-hint">Job title for staff who aren't a driver or conductor.</div>
         </div>
         <div class="form-group" id="license-group">
           <label>License Number</label>
@@ -53,7 +60,7 @@
           <label>Phone</label>
           <input type="text" name="phone" value="{{ driver.phone if driver else '' }}">
         </div>
-        <div class="form-group">
+        <div class="form-group" id="commission-rate-group">
           <label>Commission Rate Override (%)</label>
           <input type="number" name="commission_rate" step="0.1" min="0" max="100"
                  placeholder="Leave blank for system default"
@@ -110,8 +117,11 @@
 
 <script>
 function toggleCrewFields() {
-  var isDriver = document.getElementById('role-select').value === 'driver';
-  document.getElementById('paired-driver-group').style.display = isDriver ? 'none' : '';
+  var role = document.getElementById('role-select').value;
+  document.getElementById('paired-driver-group').style.display = role === 'conductor' ? '' : 'none';
+  document.getElementById('position-group').style.display = role === 'other' ? '' : 'none';
+  document.getElementById('license-group').style.display = role === 'other' ? 'none' : '';
+  document.getElementById('commission-rate-group').style.display = role === 'other' ? 'none' : '';
 }
 toggleCrewFields();
 </script>

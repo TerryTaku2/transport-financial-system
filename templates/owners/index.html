@@ -1,0 +1,61 @@
+{% extends 'base.html' %}
+{% block title %}Owners{% endblock %}
+{% block page_title %}Fleet Owners{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Owners</h1>
+    <div class="subtitle">{{ owners|length }} partner(s) with vehicles in the fleet</div>
+  </div>
+  <a href="{{ url_for('owner_add') }}" class="btn btn-primary">
+    <i data-feather="plus"></i> Add Owner
+  </a>
+</div>
+
+<div class="card">
+  <div class="table-wrap">
+    {% if owners %}
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Phone</th>
+          <th>Email</th>
+          <th>Vehicles</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for o in owners %}
+        <tr>
+          <td><a href="{{ url_for('owner_detail', oid=o.id) }}"><strong>{{ o.name }}</strong></a></td>
+          <td>{{ o.phone or '—' }}</td>
+          <td>{{ o.email or '—' }}</td>
+          <td>{{ vehicle_count.get(o.id, 0) }}</td>
+          <td>
+            <div class="actions">
+              <a href="{{ url_for('owner_detail', oid=o.id) }}" class="btn btn-outline btn-xs">View</a>
+              <a href="{{ url_for('owner_edit', oid=o.id) }}" class="btn btn-outline btn-xs">Edit</a>
+              {% if current_user.role == 'admin' %}
+              <form method="POST" action="{{ url_for('owner_delete', oid=o.id) }}"
+                    data-confirm="Remove owner {{ o.name }}? Vehicles assigned to them will become unassigned.">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-danger btn-xs">Del</button>
+              </form>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state">
+      <div class="empty-icon">🤝</div>
+      <p>No owners added yet. <a href="{{ url_for('owner_add') }}">Add the first owner</a>.</p>
+    </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
