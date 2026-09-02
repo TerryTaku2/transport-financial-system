@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import io
 import json
+import logging
 import re
 import secrets
 import shutil
@@ -22,6 +23,7 @@ import time
 import uuid
 import webbrowser
 import zipfile
+from logging.handlers import RotatingFileHandler
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 from types import SimpleNamespace
@@ -36,7 +38,7 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, PageBreak, SimpleDocTemplate, Spacer, Table, TableStyle
 from dotenv import load_dotenv
-from flask import (Flask, render_template, request, redirect, url_for,
+from flask import (Flask, render_template, render_template_string, request, redirect, url_for,
                    flash, jsonify, make_response, session, send_from_directory, send_file, abort)
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import (LoginManager, UserMixin, login_user, logout_user,
@@ -44,6 +46,7 @@ from flask_login import (LoginManager, UserMixin, login_user, logout_user,
 from flask_wtf.csrf import CSRFProtect, generate_csrf
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.exceptions import HTTPException
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from sqlalchemy import event, func
@@ -176,6 +179,56 @@ csrf = CSRFProtect(app)
 limiter = Limiter(get_remote_address, app=app, storage_uri='memory://',
                   default_limits=[])
 
+# Durable error/warning log, next to the .exe for a spoke install (same
+# BASE_DIR as .env/VERSION/spoke_releases — see FROZEN handling above) or
+# next to app.py for a dev checkout/Render. Without this, app.logger calls
+# (sync failures, WhatsApp errors, the unhandled-exception handler below)
+# go to stderr only — which for a windowed spoke .exe with no console
+# (see _disable_console_quick_edit) and nothing redirecting its output is
+# nowhere at all: a spoke could fail silently for weeks with zero trace on
+# that machine. Rotated so an unattended install can't fill its disk.
+_log_dir = os.path.join(BASE_DIR, 'logs')
+os.makedirs(_log_dir, exist_ok=True)
+_file_handler = RotatingFileHandler(
+    os.path.join(_log_dir, 'app.log'), maxBytes=2_000_000, backupCount=5, encoding='utf-8')
+_file_handler.setFormatter(logging.Formatter('%(asctime)s %(levelname)s: %(message)s'))
+_file_handler.setLevel(logging.INFO)
+app.logger.addHandler(_file_handler)
+app.logger.setLevel(logging.INFO)
+
+_ERROR_PAGE_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Something went wrong</title>
+<style>
+  body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;background:#f4f5f3;color:#20241f;
+       display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px;}
+  .box{max-width:420px;text-align:center;}
+  h1{font-size:1.3rem;margin:0 0 8px;}
+  p{color:#5a625a;line-height:1.5;}
+  a{display:inline-block;margin-top:16px;padding:10px 20px;background:#20241f;color:#fff;
+    text-decoration:none;border-radius:6px;}
+</style></head>
+<body><div class="box">
+  <h1>Something went wrong on our end</h1>
+  <p>The error has been logged. Try again in a moment — if it keeps happening, tell an admin what you were doing.</p>
+  <a href="{{ url_for('dashboard') }}">Back to dashboard</a>
+</div></body></html>"""
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(e):
+    """Last-resort catch for anything handle_form_errors doesn't (a POST's
+    KeyError/ValueError, or literally any exception on a GET) — without
+    this, an unexpected error was a raw unstyled 500 with no record of what
+    happened anywhere (see _file_handler above). HTTPException (404, 403,
+    the abort()s scattered through the app, etc.) is deliberately passed
+    through unchanged so Flask's normal handling of those still applies."""
+    if isinstance(e, HTTPException):
+        return e
+    db.session.rollback()
+    app.logger.exception('Unhandled exception on %s %s', request.method, request.path)
+    return render_template_string(_ERROR_PAGE_HTML), 500
+
 
 @app.template_global()
 def asset_v(rel_path):
@@ -274,15 +327,23 @@ class Vehicle(db.Model):
 
     @property
     def total_revenue(self):
-        return sum(l.gross_revenue for l in self.daily_logs)
+        # SQL-side sum, not sum(l.x for l in self.daily_logs) — that loaded
+        # this vehicle's entire lifetime of logs into Python on every call,
+        # which is fine for one vehicle here on the detail page but was ruinous
+        # when called per-vehicle in a fleet list (see vehicles() below, which
+        # now precomputes these in bulk instead of touching this property at all).
+        return db.session.query(func.sum(DailyLog.gross_revenue)).filter(
+            DailyLog.vehicle_id == self.id).scalar() or 0
 
     @property
     def total_fuel_liters(self):
-        return sum(l.liters for l in self.fuel_logs)
+        return db.session.query(func.sum(FuelLog.liters)).filter(
+            FuelLog.vehicle_id == self.id).scalar() or 0
 
     @property
     def total_maintenance_cost(self):
-        return sum(l.total_cost for l in self.maintenance_logs)
+        return db.session.query(func.sum(MaintenanceLog.total_cost)).filter(
+            MaintenanceLog.vehicle_id == self.id).scalar() or 0
 
     @property
     def insurance_days_to_expiry(self):
@@ -396,6 +457,10 @@ class Route(db.Model):
 
 class DailyLog(db.Model):
     __tablename__ = 'daily_logs'
+    __table_args__ = (
+        db.Index('ix_daily_logs_vehicle_date', 'vehicle_id', 'log_date'),
+        db.Index('ix_daily_logs_date', 'log_date'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
     # Nullable so an activity/fare can be logged before a driver is known or
@@ -436,6 +501,10 @@ class DailyLog(db.Model):
 
 class FuelLog(db.Model):
     __tablename__ = 'fuel_logs'
+    __table_args__ = (
+        db.Index('ix_fuel_logs_vehicle_date', 'vehicle_id', 'log_date'),
+        db.Index('ix_fuel_logs_date', 'log_date'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
     log_date = db.Column(db.Date, nullable=False, default=date.today)
@@ -484,6 +553,10 @@ class FuelPrice(db.Model):
 
 class MaintenanceLog(db.Model):
     __tablename__ = 'maintenance_logs'
+    __table_args__ = (
+        db.Index('ix_maintenance_logs_vehicle_date', 'vehicle_id', 'log_date'),
+        db.Index('ix_maintenance_logs_date', 'log_date'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=False)
     log_date = db.Column(db.Date, nullable=False, default=date.today)
@@ -789,6 +862,10 @@ class CommissionPayment(db.Model):
     payroll report already does) so the two can be reconciled — accrued
     minus paid is the outstanding commission liability."""
     __tablename__ = 'commission_payments'
+    __table_args__ = (
+        db.Index('ix_commission_payments_driver_date', 'driver_id', 'payment_date'),
+        db.Index('ix_commission_payments_date', 'payment_date'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=False)
     payment_date = db.Column(db.Date, nullable=False, default=date.today)
@@ -823,6 +900,10 @@ class PayrollDeduction(db.Model):
     list — the deduction's date determines which payslip period it lands
     in, same as CommissionPayment.payment_date."""
     __tablename__ = 'payroll_deductions'
+    __table_args__ = (
+        db.Index('ix_payroll_deductions_driver_date', 'driver_id', 'deduction_date'),
+        db.Index('ix_payroll_deductions_date', 'deduction_date'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=False)
     deduction_date = db.Column(db.Date, nullable=False, default=date.today)
@@ -910,6 +991,10 @@ class ExpenseCategory(db.Model):
 
 class Expense(db.Model):
     __tablename__ = 'expenses'
+    __table_args__ = (
+        db.Index('ix_expenses_vehicle_date', 'vehicle_id', 'expense_date'),
+        db.Index('ix_expenses_date', 'expense_date'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     category_id = db.Column(db.Integer, db.ForeignKey('expense_categories.id'), nullable=False)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=True)
@@ -967,6 +1052,9 @@ class DriverDeposit(db.Model):
     into the totals/variance on the reconciliation reports without being
     attributed to any single driver or vehicle row."""
     __tablename__ = 'driver_deposits'
+    __table_args__ = (
+        db.Index('ix_driver_deposits_date', 'deposit_date'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     driver_id = db.Column(db.Integer, db.ForeignKey('drivers.id'), nullable=True)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('vehicles.id'), nullable=True)
@@ -1052,6 +1140,10 @@ class FranchiseWeeklyIncome(db.Model):
     (e.g. several partial payments through the week), so a repeat Add isn't
     blocked the way a repeat daily entry still is."""
     __tablename__ = 'franchise_weekly_income'
+    __table_args__ = (
+        db.Index('ix_franchise_weekly_income_vehicle_week', 'vehicle_id', 'week_start'),
+        db.Index('ix_franchise_weekly_income_week', 'week_start'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     week_start = db.Column(db.Date, nullable=False)
     vehicle_id = db.Column(db.Integer, db.ForeignKey('franchise_vehicles.id'), nullable=True)
@@ -1327,6 +1419,9 @@ class StorePurchase(db.Model):
     """A restock — adds quantity to the part and rolls the new cost into
     the part's weighted-average cost_price."""
     __tablename__ = 'store_purchases'
+    __table_args__ = (
+        db.Index('ix_store_purchases_date', 'purchase_date'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     part_id = db.Column(db.Integer, db.ForeignKey('spare_parts.id'), nullable=False)
     purchase_date = db.Column(db.Date, nullable=False, default=date.today)
@@ -1353,6 +1448,10 @@ class StoreSale(db.Model):
     snapshotted at sale time so historical profit doesn't shift when the
     part's cost or markup later changes."""
     __tablename__ = 'store_sales'
+    __table_args__ = (
+        db.Index('ix_store_sales_vehicle_date', 'vehicle_id', 'sale_date'),
+        db.Index('ix_store_sales_date', 'sale_date'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     part_id = db.Column(db.Integer, db.ForeignKey('spare_parts.id'), nullable=False)
     # Set when this sale is to one of the fleet's own vehicles rather than an
@@ -1410,6 +1509,9 @@ class StoreAdjustment(db.Model):
     before/after snapshotted so the correction is auditable rather than
     silently overwriting history."""
     __tablename__ = 'store_adjustments'
+    __table_args__ = (
+        db.Index('ix_store_adjustments_date', 'adjustment_date'),
+    )
     id = db.Column(db.Integer, primary_key=True)
     part_id = db.Column(db.Integer, db.ForeignKey('spare_parts.id'), nullable=False)
     adjustment_date = db.Column(db.Date, nullable=False, default=date.today)
@@ -3106,7 +3208,15 @@ def dashboard():
 @permission_required('vehicles')
 def vehicles():
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
-    return render_template('vehicles/index.html', vehicles=all_vehicles)
+    # One grouped query for every vehicle's lifetime revenue, instead of the
+    # template calling v.total_revenue per row — that property (even now
+    # that it's a SQL sum rather than a Python loop) would still be one
+    # query per vehicle; this is one query total regardless of fleet size.
+    revenue_by_vehicle = dict(
+        db.session.query(DailyLog.vehicle_id, func.sum(DailyLog.gross_revenue))
+        .group_by(DailyLog.vehicle_id).all())
+    return render_template('vehicles/index.html', vehicles=all_vehicles,
+                           revenue_by_vehicle=revenue_by_vehicle)
 
 
 @app.route('/vehicles/add', methods=['GET', 'POST'])
@@ -5800,9 +5910,28 @@ def compute_income_statement(df, dt, vehicle_id=None):
     net_profit = gross_revenue - total_expenses
     profit_margin = (net_profit / gross_revenue * 100) if gross_revenue else 0
 
+    # Same four totals as vehicle_income_totals(df, dt, v.id), but grouped
+    # by vehicle in one query each instead of four queries PER vehicle —
+    # this used to be 4×(fleet size) round-trips on every call (including
+    # the dashboard, which doesn't even use vehicle_breakdown and was
+    # paying that cost for nothing on its every single load).
+    rev_by_vehicle = dict(db.session.query(DailyLog.vehicle_id, func.sum(DailyLog.gross_revenue))
+                          .filter(DailyLog.log_date.between(df, dt)).group_by(DailyLog.vehicle_id).all())
+    maint_by_vehicle = dict(db.session.query(MaintenanceLog.vehicle_id, func.sum(MaintenanceLog.total_cost))
+                            .filter(MaintenanceLog.log_date.between(df, dt)).group_by(MaintenanceLog.vehicle_id).all())
+    exp_by_vehicle = dict(db.session.query(Expense.vehicle_id, func.sum(Expense.amount))
+                          .filter(Expense.expense_date.between(df, dt), Expense.vehicle_id.isnot(None))
+                          .group_by(Expense.vehicle_id).all())
+    spares_by_vehicle = dict(db.session.query(StoreSale.vehicle_id, func.sum(StoreSale.total_amount))
+                             .filter(StoreSale.sale_date.between(df, dt), StoreSale.vehicle_id.isnot(None))
+                             .group_by(StoreSale.vehicle_id).all())
+
     vehicle_breakdown = []
     for v in Vehicle.query.order_by(Vehicle.registration).all():
-        v_rev, v_maint, v_exp, v_spares = vehicle_income_totals(df, dt, v.id)
+        v_rev = rev_by_vehicle.get(v.id) or 0
+        v_maint = maint_by_vehicle.get(v.id) or 0
+        v_exp = exp_by_vehicle.get(v.id) or 0
+        v_spares = spares_by_vehicle.get(v.id) or 0
         if v_rev == 0 and v_maint == 0 and v_exp == 0 and v_spares == 0:
             continue
         v_total_cost = v_maint + v_exp + v_spares
@@ -5927,9 +6056,10 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
         # deducted from the commission afterwards — the commission percentage
         # applies to what the crew member actually brought in after garnish.
         commission = max(rev - garnish, 0) * rate
-        paid = db.session.query(func.sum(CommissionPayment.amount)).filter(
+        payment_rows = CommissionPayment.query.filter(
             CommissionPayment.driver_id == d.id,
-            CommissionPayment.payment_date.between(df, dt)).scalar() or 0
+            CommissionPayment.payment_date.between(df, dt)).order_by(CommissionPayment.payment_date).all()
+        paid = sum(p.amount for p in payment_rows)
         deductions = db.session.query(func.sum(PayrollDeduction.amount)).filter(
             PayrollDeduction.driver_id == d.id,
             PayrollDeduction.deduction_date.between(df, dt)).scalar() or 0
@@ -5944,6 +6074,7 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
             'deductions': deductions,
             'net_pay': net_pay,
             'paid': paid,
+            'payments': payment_rows,
             'outstanding': net_pay - paid,
             'conductors': [],
         })
@@ -5982,7 +6113,7 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
                 'total_revenue': e['total_revenue'], 'days_worked': e['days_worked'],
                 'rate_pct': co_rate * 100,
                 'commission': placeholder_commission, 'garnish': e['garnish'],
-                'deductions': 0, 'net_pay': placeholder_commission, 'paid': 0,
+                'deductions': 0, 'net_pay': placeholder_commission, 'paid': 0, 'payments': [],
                 'outstanding': placeholder_commission,
             })
             placeholder_total += placeholder_commission
@@ -6114,6 +6245,48 @@ def export_payroll_pdf():
     elements.append(_pdf_table(data))
 
     return _pdf_response(f'payroll_{date_from_str}_to_{date_to_str}.pdf', elements, pagesize=landscape(A4))
+
+
+@app.route('/reports/payroll/export-paid.pdf')
+@login_required
+@permission_required('reports')
+def export_payroll_paid_pdf():
+    """Crew who actually received a commission payment this period (paid >
+    0 — see compute_payroll_earnings' CommissionPayment sum), with their
+    deductions and amount paid — as opposed to export_payroll_pdf, which
+    lists everyone with accrued commission whether or not they've been
+    paid yet."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    earnings, *_ = compute_payroll_earnings(df, dt)
+    paid_rows = [(name, role, e) for name, role, e in _flatten_wages_earnings(earnings) if e['paid'] > 0]
+
+    if not paid_rows:
+        flash(f'No paid crew for {date_from_str} to {date_to_str}.', 'warning')
+        return redirect(url_for('report_payroll', date_from=date_from_str, date_to=date_to_str))
+
+    styles = _pdf_styles()
+    elements = [
+        Paragraph('Payroll — Paid Crew', styles['Title']),
+        Paragraph(f'Period: {date_from_str} to {date_to_str}', styles['Normal']),
+        Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}', styles['Normal']),
+        Spacer(1, 10),
+    ]
+
+    data = [['Crew Member', 'Role', 'Deductions', 'Net Pay', 'Paid', 'Outstanding']]
+    total_deductions = total_net_pay = total_paid = total_outstanding = 0.0
+    for name, role, e in paid_rows:
+        data.append([name, role, f"${e['deductions']:,.2f}", f"${e['net_pay']:,.2f}",
+                     f"${e['paid']:,.2f}", f"${e['outstanding']:,.2f}"])
+        total_deductions += e['deductions']
+        total_net_pay += e['net_pay']
+        total_paid += e['paid']
+        total_outstanding += e['outstanding']
+    data.append(['TOTAL', '', f'${total_deductions:,.2f}', f'${total_net_pay:,.2f}',
+                 f'${total_paid:,.2f}', f'${total_outstanding:,.2f}'])
+    elements.append(_pdf_table(data))
+
+    return _pdf_response(f'payroll_paid_{date_from_str}_to_{date_to_str}.pdf', elements)
 
 
 def _flatten_wages_earnings(earnings):
@@ -12250,6 +12423,9 @@ SYNC_MODELS = {
         'log_date', 'trips_completed', 'gross_revenue', 'garnish', 'reason_for_shortfall',
         'notes', 'created_by', 'updated_by', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'vehicles', 'driver_id': 'drivers', 'conductor_id': 'drivers', 'route_id': 'routes'}),
+    'driver_deposits': (DriverDeposit, (
+        'deposit_date', 'amount', 'notes', 'created_by', 'created_at', 'deleted_at',
+    ), {'driver_id': 'drivers', 'vehicle_id': 'vehicles'}),
     'fuel_logs': (FuelLog, (
         'log_date', 'liters', 'cost_per_liter', 'total_cost', 'odometer', 'supplier', 'notes',
         'created_by', 'created_at', 'deleted_at',
@@ -12340,7 +12516,7 @@ SYNC_TABLE_ORDER = [
     'franchise_daily_income', 'franchise_weekly_income', 'franchise_collections',
     'franchise_operational_expenses',
     'loan_payments', 'commission_payments', 'payroll_deductions',
-    'daily_logs', 'fuel_logs', 'maintenance_logs', 'store_sales', 'store_adjustments',
+    'daily_logs', 'driver_deposits', 'fuel_logs', 'maintenance_logs', 'store_sales', 'store_adjustments',
 ]
 
 # ─────────────────────────────────────────────────────────────
@@ -13802,6 +13978,39 @@ def migrate_db():
                 conn.execute(text("ALTER TABLE sync_sites ADD COLUMN last_push_at DATETIME"))
             if 'last_pull_at' not in site_cols:
                 conn.execute(text("ALTER TABLE sync_sites ADD COLUMN last_pull_at DATETIME"))
+
+        # Every one of these tables is filtered by vehicle/driver + a date
+        # range on essentially every ledger view, dashboard load and report
+        # in the app, but until now the only indexed column anywhere in the
+        # schema was sync_uuid — every one of those queries was a full table
+        # scan. db.create_all() only creates indexes for brand-new tables, so
+        # a table that already exists (i.e. every real install) needs these
+        # added explicitly here. IF NOT EXISTS makes this a no-op after the
+        # first run — cheap to leave in permanently rather than versioning it.
+        for index_name, table, columns in (
+            ('ix_daily_logs_vehicle_date', 'daily_logs', ('vehicle_id', 'log_date')),
+            ('ix_daily_logs_date', 'daily_logs', ('log_date',)),
+            ('ix_fuel_logs_vehicle_date', 'fuel_logs', ('vehicle_id', 'log_date')),
+            ('ix_fuel_logs_date', 'fuel_logs', ('log_date',)),
+            ('ix_maintenance_logs_vehicle_date', 'maintenance_logs', ('vehicle_id', 'log_date')),
+            ('ix_maintenance_logs_date', 'maintenance_logs', ('log_date',)),
+            ('ix_commission_payments_driver_date', 'commission_payments', ('driver_id', 'payment_date')),
+            ('ix_commission_payments_date', 'commission_payments', ('payment_date',)),
+            ('ix_payroll_deductions_driver_date', 'payroll_deductions', ('driver_id', 'deduction_date')),
+            ('ix_payroll_deductions_date', 'payroll_deductions', ('deduction_date',)),
+            ('ix_expenses_vehicle_date', 'expenses', ('vehicle_id', 'expense_date')),
+            ('ix_expenses_date', 'expenses', ('expense_date',)),
+            ('ix_driver_deposits_date', 'driver_deposits', ('deposit_date',)),
+            ('ix_franchise_weekly_income_vehicle_week', 'franchise_weekly_income', ('vehicle_id', 'week_start')),
+            ('ix_franchise_weekly_income_week', 'franchise_weekly_income', ('week_start',)),
+            ('ix_store_purchases_date', 'store_purchases', ('purchase_date',)),
+            ('ix_store_sales_vehicle_date', 'store_sales', ('vehicle_id', 'sale_date')),
+            ('ix_store_sales_date', 'store_sales', ('sale_date',)),
+            ('ix_store_adjustments_date', 'store_adjustments', ('adjustment_date',)),
+        ):
+            if inspector.has_table(table):
+                conn.execute(text(
+                    f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({', '.join(columns)})"))
 
         conn.commit()
 

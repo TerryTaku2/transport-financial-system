@@ -3,7 +3,7 @@
 {% block page_title %}Finance — Payroll{% endblock %}
 
 {% block content %}
-{% macro crew_actions(driver_id, outstanding, payslip_url) %}
+{% macro crew_actions(driver_id, outstanding, payslip_url, payments=[]) %}
 <div style="display:flex;flex-direction:column;gap:4px;min-width:150px;">
   <form method="POST" action="{{ url_for('commission_payment_add') }}" style="display:flex;gap:4px;align-items:center;">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
@@ -15,6 +15,22 @@
            value="{{ '%.2f'|format(outstanding) if outstanding > 0 else '' }}" style="width:90px;padding:4px;">
     <button class="btn btn-outline btn-xs">Pay</button>
   </form>
+  {% if payments %}
+  <div style="display:flex;flex-direction:column;gap:2px;">
+    {% for p in payments %}
+    <div style="display:flex;align-items:center;gap:4px;">
+      <span class="form-hint">Paid {{ p.amount|currency }} on {{ p.payment_date }}</span>
+      {% if current_user.role == 'admin' %}
+      <form method="POST" action="{{ url_for('commission_payment_delete', pid=p.id) }}"
+            data-confirm="Cancel this payment of {{ p.amount|currency }} to {{ p.driver.name }}? This undoes it if it was marked paid by mistake.">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <button class="btn btn-danger btn-xs" title="Cancel this payment">Cancel</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
   <details>
     <summary class="form-hint" style="cursor:pointer;">Deduct</summary>
     <form method="POST" action="{{ url_for('payroll_deduction_add') }}" style="margin-top:4px;">
@@ -53,6 +69,9 @@
     </a>
     <a href="{{ url_for('export_payroll_pdf', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
       <i data-feather="download"></i> Export PDF
+    </a>
+    <a href="{{ url_for('export_payroll_paid_pdf', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
+      <i data-feather="check-circle"></i> Export Paid PDF
     </a>
     {% if earnings %}
     <a href="{{ url_for('payroll_pay_sheet_pdf', date_from=date_from, date_to=date_to) }}" class="btn btn-outline" target="_blank">
@@ -127,7 +146,8 @@
           <td class="text-right {% if e.outstanding > 0 %}text-warning{% endif %}"><strong>{{ e.outstanding|currency }}</strong></td>
           <td>
             {{ crew_actions(e.driver.id, e.outstanding,
-                             url_for('driver_payslip_pdf', driver_id=e.driver.id, date_from=date_from, date_to=date_to)) }}
+                             url_for('driver_payslip_pdf', driver_id=e.driver.id, date_from=date_from, date_to=date_to),
+                             e.payments) }}
           </td>
         </tr>
         {% for ce in e.conductors %}
@@ -163,7 +183,8 @@
           <td class="text-right {% if ce.outstanding > 0 %}text-warning{% endif %}"><strong>{{ ce.outstanding|currency }}</strong></td>
           <td>
             {{ crew_actions(ce.driver.id, ce.outstanding,
-                             url_for('driver_payslip_pdf', driver_id=ce.driver.id, date_from=date_from, date_to=date_to)) }}
+                             url_for('driver_payslip_pdf', driver_id=ce.driver.id, date_from=date_from, date_to=date_to),
+                             ce.payments) }}
           </td>
           {% endif %}
         </tr>

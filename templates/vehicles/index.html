@@ -39,7 +39,7 @@
           <td>{{ v.year }}</td>
           <td>{{ v.fuel_type|capitalize }}</td>
           <td>{{ v.acquisition_cost|currency }}</td>
-          <td><strong class="text-success">{{ v.total_revenue|currency }}</strong></td>
+          <td><strong class="text-success">{{ revenue_by_vehicle.get(v.id, 0)|currency }}</strong></td>
           <td>
             {% if v.status == 'active' %}
               <span class="badge badge-green"><span class="dot dot-green"></span>Active</span>
