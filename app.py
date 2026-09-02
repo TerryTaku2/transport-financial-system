@@ -3160,6 +3160,18 @@ def dashboard():
         MaintenanceSchedule.next_due_date <= expiry_threshold
     ).count()
 
+    # Same overdue/due_soon/ok classification the Maintenance Schedules page
+    # itself uses (schedule_status — date OR odometer, whichever is closer),
+    # not just the date-only count above, so the dashboard banner and table
+    # agree with what Preventive Maintenance actually shows as overdue.
+    maintenance_watch = []
+    for s in MaintenanceSchedule.query.filter_by(status='active').join(Vehicle).order_by(Vehicle.registration).all():
+        st = schedule_status(s)
+        if st in ('overdue', 'due_soon'):
+            maintenance_watch.append({'schedule': s, 'status': st, 'odometer': latest_odometer(s.vehicle_id)})
+    maintenance_watch.sort(key=lambda r: 0 if r['status'] == 'overdue' else 1)
+    maintenance_overdue = sum(1 for r in maintenance_watch if r['status'] == 'overdue')
+
     month_capital = db.session.query(func.sum(CapitalContribution.amount)).filter(
         CapitalContribution.contribution_date.between(df, dt)).scalar() or 0
     month_drawings = db.session.query(func.sum(OwnerDrawing.amount)).filter(
@@ -3192,7 +3204,7 @@ def dashboard():
         store_parts=store_parts, store_purchases_mtd=store_purchases_mtd, store_sales_mtd=store_sales_mtd,
         franchise_vehicles=franchise_vehicles, franchise_daily_entries=franchise_daily_entries,
         franchise_weekly_entries=franchise_weekly_entries, franchise_deposited=franchise_deposited,
-        schedules_due=schedules_due,
+        schedules_due=schedules_due, maintenance_watch=maintenance_watch, maintenance_overdue=maintenance_overdue,
         month_capital=month_capital, month_drawings=month_drawings,
         month_operating_expenses=month_operating_expenses, month_deposits=month_deposits,
         recent_logs=recent_logs, revenue_chart=json.dumps(rev_chart),
