@@ -62,175 +62,6 @@
   </div>
 </div>
 
-<!-- Needs Attention: only takes up space when there's something to act on -->
-{% if expired_docs > 0 or expiring_docs > 0 or insurance_watch or maintenance_watch %}
-<h2 class="section-title">Needs Attention</h2>
-
-{% if expired_docs > 0 %}
-<div class="alert alert-danger mb-16">
-  <i data-feather="alert-circle" style="width:15px;height:15px;"></i>
-  <strong>{{ expired_docs }} compliance item(s) EXPIRED</strong> (documents/insurance) &mdash;
-  <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">Review now &rarr;</a>
-</div>
-{% endif %}
-{% if expiring_docs > 0 %}
-<div class="alert alert-warning mb-16">
-  <i data-feather="alert-triangle" style="width:15px;height:15px;"></i>
-  <strong>{{ expiring_docs }} compliance item(s)</strong> (documents/insurance) expiring within 30 days &mdash;
-  <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">View compliance &rarr;</a>
-</div>
-{% endif %}
-
-{% if maintenance_overdue > 0 %}
-<div class="alert alert-danger mb-16">
-  <i data-feather="alert-circle" style="width:15px;height:15px;"></i>
-  <strong>{{ maintenance_overdue }} vehicle(s) OVERDUE for service</strong> &mdash;
-  <a href="{{ url_for('maintenance_schedules') }}" style="color:inherit;text-decoration:underline;">Review now &rarr;</a>
-</div>
-{% endif %}
-{% if maintenance_watch|length > maintenance_overdue %}
-<div class="alert alert-warning mb-16">
-  <i data-feather="alert-triangle" style="width:15px;height:15px;"></i>
-  <strong>{{ maintenance_watch|length - maintenance_overdue }} vehicle(s)</strong> due for service soon &mdash;
-  <a href="{{ url_for('maintenance_schedules') }}" style="color:inherit;text-decoration:underline;">View schedules &rarr;</a>
-</div>
-{% endif %}
-
-{% if maintenance_watch %}
-<div class="card mb-24">
-  <div class="card-header">
-    <h3>Vehicles Due for Service</h3>
-    <a href="{{ url_for('maintenance_schedules') }}" class="btn btn-outline btn-sm">View all schedules</a>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Vehicle</th>
-          <th>Service</th>
-          <th>Next Due</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for row in maintenance_watch %}
-        {% set s = row.schedule %}
-        <tr>
-          <td><a href="{{ url_for('vehicle_detail', vid=s.vehicle_id) }}">{{ s.vehicle.registration }}</a></td>
-          <td>{{ s.description }}</td>
-          <td>
-            {{ s.next_due_date or '—' }}
-            {% if s.next_due_odometer %}<div class="form-hint">or {{ s.next_due_odometer }}km (currently {{ row.odometer or '?' }}km)</div>{% endif %}
-          </td>
-          <td>
-            {% if row.status == 'overdue' %}<span class="badge badge-red">Overdue</span>
-            {% else %}<span class="badge badge-amber">Due Soon</span>{% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% endif %}
-
-{% if insurance_watch %}
-<div class="card mb-24">
-  <div class="card-header">
-    <h3>Insurance — Expired &amp; Expiring Soon</h3>
-    <a href="{{ url_for('compliance') }}" class="btn btn-outline btn-sm">View all compliance</a>
-  </div>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Vehicle</th>
-          <th>Provider</th>
-          <th>Class</th>
-          <th>Policy Number</th>
-          <th>Expiry Date</th>
-          <th>Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for v in insurance_watch %}
-        <tr>
-          <td><a href="{{ url_for('vehicle_detail', vid=v.id) }}">{{ v.registration }}</a></td>
-          <td>{{ v.insurance_provider or '—' }}</td>
-          <td>{{ v.insurance_type or '—' }}</td>
-          <td>{{ v.insurance_policy_number or '—' }}</td>
-          <td>{{ v.insurance_expiry.strftime('%d %b %Y') }}</td>
-          <td>
-            {% if v.insurance_status == 'expired' %}
-              <span class="badge badge-red">Expired {{ -v.insurance_days_to_expiry }}d ago</span>
-            {% else %}
-              <span class="badge badge-amber">{{ v.insurance_days_to_expiry }}d left</span>
-            {% endif %}
-          </td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</div>
-{% endif %}
-{% endif %}
-
-<!-- Fleet & Operations -->
-<h2 class="section-title">Fleet &amp; Operations</h2>
-<div class="grid-2col">
-  <div class="card">
-    <div class="card-header"><h3>Fleet Summary</h3></div>
-    <div class="card-body">
-      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
-        <div class="kpi-card kpi-teal">
-          <div class="kpi-icon">🚌</div>
-          <div class="kpi-label">Active Vehicles</div>
-          <div class="kpi-value">{{ active_vehicles }}</div>
-          <div class="kpi-sub">Current fleet size</div>
-        </div>
-        <div class="kpi-card kpi-blue">
-          <div class="kpi-icon">👤</div>
-          <div class="kpi-label">Active Crew</div>
-          <div class="kpi-value">{{ active_drivers }}</div>
-          <div class="kpi-sub">Crew members</div>
-        </div>
-        <div class="kpi-card kpi-amber">
-          <div class="kpi-icon">🗺️</div>
-          <div class="kpi-label">Routes</div>
-          <div class="kpi-value">{{ active_routes }}</div>
-          <div class="kpi-sub">Available routes</div>
-        </div>
-      </div>
-    </div>
-  </div>
-  <div class="card">
-    <div class="card-header"><h3>Operations Summary</h3></div>
-    <div class="card-body">
-      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
-        <div class="kpi-card kpi-blue">
-          <div class="kpi-icon">⛽</div>
-          <div class="kpi-label">Fuel Logs</div>
-          <div class="kpi-value">{{ fuel_logs_mtd }}</div>
-          <div class="kpi-sub">Logs in selected period</div>
-        </div>
-        <div class="kpi-card kpi-amber">
-          <div class="kpi-icon">🛠️</div>
-          <div class="kpi-label">Maintenance Logs</div>
-          <div class="kpi-value">{{ maintenance_logs_mtd }}</div>
-          <div class="kpi-sub">Work orders in selected period</div>
-        </div>
-        <div class="kpi-card kpi-red">
-          <div class="kpi-icon">📆</div>
-          <div class="kpi-label">Due Maintenance</div>
-          <div class="kpi-value">{{ schedules_due }}</div>
-          <div class="kpi-sub">Next 30 days</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
 <!-- Finance & Store -->
 <h2 class="section-title">Finance &amp; Store</h2>
 <div class="grid-2col">
@@ -416,6 +247,175 @@
     </div>
     <div class="card-body">
       <div class="chart-wrap" style="height:260px;"><canvas id="chartVehicles"></canvas></div>
+    </div>
+  </div>
+</div>
+
+<!-- Needs Attention: only takes up space when there's something to act on -->
+{% if expired_docs > 0 or expiring_docs > 0 or insurance_watch or maintenance_watch %}
+<h2 class="section-title">Needs Attention</h2>
+
+{% if expired_docs > 0 %}
+<div class="alert alert-danger mb-16">
+  <i data-feather="alert-circle" style="width:15px;height:15px;"></i>
+  <strong>{{ expired_docs }} compliance item(s) EXPIRED</strong> (documents/insurance) &mdash;
+  <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">Review now &rarr;</a>
+</div>
+{% endif %}
+{% if expiring_docs > 0 %}
+<div class="alert alert-warning mb-16">
+  <i data-feather="alert-triangle" style="width:15px;height:15px;"></i>
+  <strong>{{ expiring_docs }} compliance item(s)</strong> (documents/insurance) expiring within 30 days &mdash;
+  <a href="{{ url_for('compliance') }}" style="color:inherit;text-decoration:underline;">View compliance &rarr;</a>
+</div>
+{% endif %}
+
+{% if maintenance_overdue > 0 %}
+<div class="alert alert-danger mb-16">
+  <i data-feather="alert-circle" style="width:15px;height:15px;"></i>
+  <strong>{{ maintenance_overdue }} vehicle(s) OVERDUE for service</strong> &mdash;
+  <a href="{{ url_for('maintenance_schedules') }}" style="color:inherit;text-decoration:underline;">Review now &rarr;</a>
+</div>
+{% endif %}
+{% if maintenance_watch|length > maintenance_overdue %}
+<div class="alert alert-warning mb-16">
+  <i data-feather="alert-triangle" style="width:15px;height:15px;"></i>
+  <strong>{{ maintenance_watch|length - maintenance_overdue }} vehicle(s)</strong> due for service soon &mdash;
+  <a href="{{ url_for('maintenance_schedules') }}" style="color:inherit;text-decoration:underline;">View schedules &rarr;</a>
+</div>
+{% endif %}
+
+{% if maintenance_watch %}
+<div class="card mb-24">
+  <div class="card-header">
+    <h3>Vehicles Due for Service</h3>
+    <a href="{{ url_for('maintenance_schedules') }}" class="btn btn-outline btn-sm">View all schedules</a>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Vehicle</th>
+          <th>Service</th>
+          <th>Next Due</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in maintenance_watch %}
+        {% set s = row.schedule %}
+        <tr>
+          <td><a href="{{ url_for('vehicle_detail', vid=s.vehicle_id) }}">{{ s.vehicle.registration }}</a></td>
+          <td>{{ s.description }}</td>
+          <td>
+            {{ s.next_due_date or '—' }}
+            {% if s.next_due_odometer %}<div class="form-hint">or {{ s.next_due_odometer }}km (currently {{ row.odometer or '?' }}km)</div>{% endif %}
+          </td>
+          <td>
+            {% if row.status == 'overdue' %}<span class="badge badge-red">Overdue</span>
+            {% else %}<span class="badge badge-amber">Due Soon</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{% if insurance_watch %}
+<div class="card mb-24">
+  <div class="card-header">
+    <h3>Insurance — Expired &amp; Expiring Soon</h3>
+    <a href="{{ url_for('compliance') }}" class="btn btn-outline btn-sm">View all compliance</a>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Vehicle</th>
+          <th>Provider</th>
+          <th>Class</th>
+          <th>Policy Number</th>
+          <th>Expiry Date</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for v in insurance_watch %}
+        <tr>
+          <td><a href="{{ url_for('vehicle_detail', vid=v.id) }}">{{ v.registration }}</a></td>
+          <td>{{ v.insurance_provider or '—' }}</td>
+          <td>{{ v.insurance_type or '—' }}</td>
+          <td>{{ v.insurance_policy_number or '—' }}</td>
+          <td>{{ v.insurance_expiry.strftime('%d %b %Y') }}</td>
+          <td>
+            {% if v.insurance_status == 'expired' %}
+              <span class="badge badge-red">Expired {{ -v.insurance_days_to_expiry }}d ago</span>
+            {% else %}
+              <span class="badge badge-amber">{{ v.insurance_days_to_expiry }}d left</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endif %}
+
+<!-- Fleet & Operations -->
+<h2 class="section-title">Fleet &amp; Operations</h2>
+<div class="grid-2col">
+  <div class="card">
+    <div class="card-header"><h3>Fleet Summary</h3></div>
+    <div class="card-body">
+      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
+        <div class="kpi-card kpi-teal">
+          <div class="kpi-icon">🚌</div>
+          <div class="kpi-label">Active Vehicles</div>
+          <div class="kpi-value">{{ active_vehicles }}</div>
+          <div class="kpi-sub">Current fleet size</div>
+        </div>
+        <div class="kpi-card kpi-blue">
+          <div class="kpi-icon">👤</div>
+          <div class="kpi-label">Active Crew</div>
+          <div class="kpi-value">{{ active_drivers }}</div>
+          <div class="kpi-sub">Crew members</div>
+        </div>
+        <div class="kpi-card kpi-amber">
+          <div class="kpi-icon">🗺️</div>
+          <div class="kpi-label">Routes</div>
+          <div class="kpi-value">{{ active_routes }}</div>
+          <div class="kpi-sub">Available routes</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header"><h3>Operations Summary</h3></div>
+    <div class="card-body">
+      <div class="kpi-grid" style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));margin-bottom:0;">
+        <div class="kpi-card kpi-blue">
+          <div class="kpi-icon">⛽</div>
+          <div class="kpi-label">Fuel Logs</div>
+          <div class="kpi-value">{{ fuel_logs_mtd }}</div>
+          <div class="kpi-sub">Logs in selected period</div>
+        </div>
+        <div class="kpi-card kpi-amber">
+          <div class="kpi-icon">🛠️</div>
+          <div class="kpi-label">Maintenance Logs</div>
+          <div class="kpi-value">{{ maintenance_logs_mtd }}</div>
+          <div class="kpi-sub">Work orders in selected period</div>
+        </div>
+        <div class="kpi-card kpi-red">
+          <div class="kpi-icon">📆</div>
+          <div class="kpi-label">Due Maintenance</div>
+          <div class="kpi-value">{{ schedules_due }}</div>
+          <div class="kpi-sub">Next 30 days</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
