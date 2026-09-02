@@ -6060,9 +6060,10 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
             CommissionPayment.driver_id == d.id,
             CommissionPayment.payment_date.between(df, dt)).order_by(CommissionPayment.payment_date).all()
         paid = sum(p.amount for p in payment_rows)
-        deductions = db.session.query(func.sum(PayrollDeduction.amount)).filter(
+        deduction_rows = PayrollDeduction.query.filter(
             PayrollDeduction.driver_id == d.id,
-            PayrollDeduction.deduction_date.between(df, dt)).scalar() or 0
+            PayrollDeduction.deduction_date.between(df, dt)).order_by(PayrollDeduction.deduction_date).all()
+        deductions = sum(x.amount for x in deduction_rows)
         net_pay = commission - deductions
         earnings.append({
             'driver': d,
@@ -6072,6 +6073,7 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
             'commission': commission,
             'garnish': garnish,
             'deductions': deductions,
+            'deduction_rows': deduction_rows,
             'net_pay': net_pay,
             'paid': paid,
             'payments': payment_rows,
@@ -6113,7 +6115,7 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
                 'total_revenue': e['total_revenue'], 'days_worked': e['days_worked'],
                 'rate_pct': co_rate * 100,
                 'commission': placeholder_commission, 'garnish': e['garnish'],
-                'deductions': 0, 'net_pay': placeholder_commission, 'paid': 0, 'payments': [],
+                'deductions': 0, 'deduction_rows': [], 'net_pay': placeholder_commission, 'paid': 0, 'payments': [],
                 'outstanding': placeholder_commission,
             })
             placeholder_total += placeholder_commission
@@ -6378,12 +6380,11 @@ def payroll_pay_placeholder_conductor():
 @login_required
 @permission_required('reports')
 def payroll_paid_sheet_pdf():
-    """Signable roster of crew who have actually been paid this period —
-    same layout and Signature/Date columns as payroll_pay_sheet_pdf, but
-    filtered to paid > 0 and showing what was actually paid rather than
-    net pay still owed, so it can double as the physical proof-of-payment
-    record kept on file (as opposed to the Pay Sheet, which is the blank
-    sheet crew sign as cash is first handed out)."""
+    """Roster of crew who have actually been paid this period — filtered
+    to paid > 0 and showing what was actually paid, so it can double as
+    the proof-of-payment record kept on file (as opposed to the Pay
+    Sheet, which is the blank sheet crew sign as cash is first handed
+    out)."""
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
     earnings, *_ = compute_payroll_earnings(df, dt)
@@ -6401,22 +6402,54 @@ def payroll_paid_sheet_pdf():
         Spacer(1, 10),
     ]
 
-    data = [['#', 'Crew Member', 'Role', 'Amount Paid (USD)', 'Signature', 'Date']]
-    total_paid = 0.0
-    for i, (name, role, row) in enumerate(crew_rows, start=1):
-        data.append([str(i), name, role, f"${row['paid']:,.2f}", '', ''])
-        total_paid += row['paid']
-    data.append(['', '', 'TOTAL', f"${total_paid:,.2f}", '', ''])
+    def reason_text(row):
+        return '; '.join(f"{d.reason or 'Deduction'} (${d.amount:,.2f})" for d in row['deduction_rows']) or '—'
 
-    table = _pdf_table(data, bold_last_row=True, col_widths=[24, 140, 60, 90, 140, 70])
+    data = [['#', 'Crew Member', 'Role', 'Deductions', 'Reason', 'Net Pay', 'Amount Paid (USD)']]
+    total_deductions = total_net_pay = total_paid = 0.0
+    for i, (name, role, row) in enumerate(crew_rows, start=1):
+        data.append([str(i), name, role, f"${row['deductions']:,.2f}", reason_text(row),
+                     f"${row['net_pay']:,.2f}", f"${row['paid']:,.2f}"])
+        total_deductions += row['deductions']
+        total_net_pay += row['net_pay']
+        total_paid += row['paid']
+    data.append(['', '', 'TOTAL', f"${total_deductions:,.2f}", '', f"${total_net_pay:,.2f}", f"${total_paid:,.2f}"])
+
+    table = _pdf_table(data, bold_last_row=True, col_widths=[18, 115, 48, 55, 120, 58, 72])
     table.setStyle(TableStyle([
         ('GRID', (0, 0), (-1, -1), 0.75, colors.black),
-        ('TOPPADDING', (0, 1), (-1, -1), 12),
-        ('BOTTOMPADDING', (0, 1), (-1, -1), 12),
     ]))
     elements.append(table)
 
     return _pdf_response(f'payroll_paid_sheet_{date_from_str}_to_{date_to_str}.pdf', elements)
+
+
+@app.route('/reports/payroll/paid-sheet.csv')
+@login_required
+@permission_required('reports')
+def payroll_paid_sheet_csv():
+    """CSV twin of payroll_paid_sheet_pdf — same paid > 0 filter and
+    columns, for whoever wants the paid roster in a spreadsheet rather
+    than a printable PDF."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    earnings, *_ = compute_payroll_earnings(df, dt)
+    crew_rows = [(name, role, row) for name, role, row in _flatten_wages_earnings(earnings) if row['paid'] > 0]
+
+    if not crew_rows:
+        flash(f'No paid crew for {date_from_str} to {date_to_str}.', 'warning')
+        return redirect(url_for('report_payroll', date_from=date_from_str, date_to=date_to_str))
+
+    def reason_text(row):
+        return '; '.join(f"{d.reason or 'Deduction'} (${d.amount:,.2f})" for d in row['deduction_rows'])
+
+    header = ['#', 'Crew Member', 'Role', 'Deductions', 'Deduction Reason', 'Net Pay', 'Amount Paid (USD)']
+    out_rows = [[i, name, role, f'{row["deductions"]:.2f}', reason_text(row), f'{row["net_pay"]:.2f}', f'{row["paid"]:.2f}']
+                for i, (name, role, row) in enumerate(crew_rows, start=1)]
+    out_rows.append(['', '', 'TOTAL', f'{sum(row["deductions"] for _, _, row in crew_rows):.2f}', '',
+                      f'{sum(row["net_pay"] for _, _, row in crew_rows):.2f}',
+                      f'{sum(row["paid"] for _, _, row in crew_rows):.2f}'])
+    return csv_export_response(f'payroll_paid_sheet_{date_from_str}_to_{date_to_str}.csv', header, out_rows)
 
 
 def _flatten_wages_earnings(earnings):

@@ -80,6 +80,9 @@
     <a href="{{ url_for('payroll_paid_sheet_pdf', date_from=date_from, date_to=date_to) }}" class="btn btn-outline" target="_blank">
       <i data-feather="check-square"></i> Print Paid Sheet
     </a>
+    <a href="{{ url_for('payroll_paid_sheet_csv', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
+      <i data-feather="download"></i> Export Paid Sheet CSV
+    </a>
     <a href="{{ url_for('payroll_payslips_print_all', date_from=date_from, date_to=date_to) }}" class="btn btn-primary" target="_blank">
       <i data-feather="printer"></i> Print All Payslips
     </a>
