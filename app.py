@@ -6337,6 +6337,27 @@ def payroll_pay_placeholder_conductor():
                   f'Added conductor {conductor.name} (paired to driver #{paired_driver_id}) from Payroll')
         touch_sync_fields(conductor)
 
+    # The placeholder's commission is projected off the driver's own
+    # DailyLog rows (see compute_payroll_earnings) — none of which name a
+    # conductor yet, which is exactly why this was a placeholder. Attribute
+    # this period's still-unassigned rows to the conductor now being paid,
+    # so compute_payroll_earnings picks them up as *their* conducted revenue
+    # from here on (matching the figure just paid) instead of the row
+    # staying invisible next load — without this, the conductor has 0 days
+    # worked, gets skipped by compute_payroll_earnings' "no activity"
+    # filter entirely, and both the payment and any Cancel/Pay controls for
+    # it would vanish from the report despite the payment existing in the DB.
+    if date_from and date_to:
+        unassigned_logs = DailyLog.query.filter(
+            DailyLog.driver_id == paired_driver_id,
+            DailyLog.conductor_id.is_(None),
+            DailyLog.deleted_at.is_(None),
+            DailyLog.log_date.between(parse_date(date_from), parse_date(date_to)),
+        ).all()
+        for log in unassigned_logs:
+            log.conductor_id = conductor.id
+            touch_sync_fields(log)
+
     payment = CommissionPayment(
         driver_id=conductor.id, payment_date=payment_date, amount=amount,
         period_start=parse_date(date_from) if date_from else None,
