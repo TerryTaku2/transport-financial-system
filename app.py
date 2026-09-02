@@ -6380,11 +6380,11 @@ def payroll_pay_placeholder_conductor():
 @login_required
 @permission_required('reports')
 def payroll_paid_sheet_pdf():
-    """Roster of crew who have actually been paid this period — filtered
-    to paid > 0 and showing what was actually paid, so it can double as
-    the proof-of-payment record kept on file (as opposed to the Pay
-    Sheet, which is the blank sheet crew sign as cash is first handed
-    out)."""
+    """Payslip-style breakdown for crew who have actually been paid this
+    period (filtered to paid > 0) — gross salary (accrued commission) down
+    through deductions to net salary, so it can double as the payroll
+    record kept on file (as opposed to the Pay Sheet, which is the blank
+    sheet crew sign as cash is first handed out)."""
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
     earnings, *_ = compute_payroll_earnings(df, dt)
@@ -6405,17 +6405,17 @@ def payroll_paid_sheet_pdf():
     def reason_text(row):
         return '; '.join(f"{d.reason or 'Deduction'} (${d.amount:,.2f})" for d in row['deduction_rows']) or '—'
 
-    data = [['#', 'Crew Member', 'Role', 'Deductions', 'Reason', 'Net Pay', 'Amount Paid (USD)']]
-    total_deductions = total_net_pay = total_paid = 0.0
+    data = [['#', 'Crew Member', 'Role', 'Gross Salary', 'Deductions', 'Reason', 'Net Salary']]
+    total_gross = total_deductions = total_net_pay = 0.0
     for i, (name, role, row) in enumerate(crew_rows, start=1):
-        data.append([str(i), name, role, f"${row['deductions']:,.2f}", reason_text(row),
-                     f"${row['net_pay']:,.2f}", f"${row['paid']:,.2f}"])
+        data.append([str(i), name, role, f"${row['commission']:,.2f}", f"${row['deductions']:,.2f}",
+                     reason_text(row), f"${row['net_pay']:,.2f}"])
+        total_gross += row['commission']
         total_deductions += row['deductions']
         total_net_pay += row['net_pay']
-        total_paid += row['paid']
-    data.append(['', '', 'TOTAL', f"${total_deductions:,.2f}", '', f"${total_net_pay:,.2f}", f"${total_paid:,.2f}"])
+    data.append(['', '', 'TOTAL', f"${total_gross:,.2f}", f"${total_deductions:,.2f}", '', f"${total_net_pay:,.2f}"])
 
-    table = _pdf_table(data, bold_last_row=True, col_widths=[18, 115, 48, 55, 120, 58, 72])
+    table = _pdf_table(data, bold_last_row=True, col_widths=[18, 115, 48, 62, 55, 120, 62])
     table.setStyle(TableStyle([
         ('GRID', (0, 0), (-1, -1), 0.75, colors.black),
     ]))
@@ -6443,12 +6443,12 @@ def payroll_paid_sheet_csv():
     def reason_text(row):
         return '; '.join(f"{d.reason or 'Deduction'} (${d.amount:,.2f})" for d in row['deduction_rows'])
 
-    header = ['#', 'Crew Member', 'Role', 'Deductions', 'Deduction Reason', 'Net Pay', 'Amount Paid (USD)']
-    out_rows = [[i, name, role, f'{row["deductions"]:.2f}', reason_text(row), f'{row["net_pay"]:.2f}', f'{row["paid"]:.2f}']
+    header = ['#', 'Crew Member', 'Role', 'Gross Salary', 'Deductions', 'Deduction Reason', 'Net Salary']
+    out_rows = [[i, name, role, f'{row["commission"]:.2f}', f'{row["deductions"]:.2f}', reason_text(row), f'{row["net_pay"]:.2f}']
                 for i, (name, role, row) in enumerate(crew_rows, start=1)]
-    out_rows.append(['', '', 'TOTAL', f'{sum(row["deductions"] for _, _, row in crew_rows):.2f}', '',
-                      f'{sum(row["net_pay"] for _, _, row in crew_rows):.2f}',
-                      f'{sum(row["paid"] for _, _, row in crew_rows):.2f}'])
+    out_rows.append(['', '', 'TOTAL', f'{sum(row["commission"] for _, _, row in crew_rows):.2f}',
+                      f'{sum(row["deductions"] for _, _, row in crew_rows):.2f}', '',
+                      f'{sum(row["net_pay"] for _, _, row in crew_rows):.2f}'])
     return csv_export_response(f'payroll_paid_sheet_{date_from_str}_to_{date_to_str}.csv', header, out_rows)
 
 
