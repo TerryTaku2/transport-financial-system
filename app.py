@@ -6289,6 +6289,108 @@ def export_payroll_paid_pdf():
     return _pdf_response(f'payroll_paid_{date_from_str}_to_{date_to_str}.pdf', elements)
 
 
+@app.route('/finance/payroll/pay-placeholder-conductor', methods=['POST'])
+@login_required
+@permission_required('finance')
+def payroll_pay_placeholder_conductor():
+    """Mark a Payroll placeholder conductor paid in one step. compute_payroll_earnings
+    prints a placeholder for a driver with no named conductor on file —
+    there's no Driver row to attach a CommissionPayment to until one
+    exists, so that row normally has no Pay button. This creates the
+    conductor (role='conductor', paired to the driver — reusing an
+    existing one of that name under the same driver if this isn't its
+    first payment) and records the payment against them in the same
+    submission, so "mark paid" works the same one-step way it does for
+    a named conductor."""
+    date_from = request.form.get('date_from', '')
+    date_to = request.form.get('date_to', '')
+    back = lambda: redirect(url_for('report_payroll', date_from=date_from, date_to=date_to))
+    try:
+        paired_driver_id = form_int(request.form, 'paired_driver_id')
+        name = request.form.get('name', '').strip()
+        if not name:
+            raise ValueError("Enter the conductor's name.")
+        amount = form_float(request.form, 'amount', min_value=0)
+        payment_date = parse_date(request.form['payment_date'])
+    except KeyError as e:
+        flash(f'Missing required field: {e}', 'danger')
+        return back()
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return back()
+
+    conductor = Driver.query.filter(
+        Driver.paired_driver_id == paired_driver_id, Driver.role == 'conductor',
+        func.lower(Driver.name) == name.lower()).first()
+    if not conductor:
+        conductor = Driver(name=name, role='conductor', status='active', paired_driver_id=paired_driver_id)
+        db.session.add(conductor)
+        db.session.flush()
+        log_audit('CREATE', 'drivers', conductor.id,
+                  f'Added conductor {conductor.name} (paired to driver #{paired_driver_id}) from Payroll')
+        touch_sync_fields(conductor)
+
+    payment = CommissionPayment(
+        driver_id=conductor.id, payment_date=payment_date, amount=amount,
+        period_start=parse_date(date_from) if date_from else None,
+        period_end=parse_date(date_to) if date_to else None,
+        created_by=current_user.id,
+    )
+    db.session.add(payment)
+    db.session.flush()
+    log_audit('CREATE', 'commission_payments', payment.id,
+              f'Commission payment of {payment.amount} to conductor #{conductor.id} ({conductor.name})')
+    touch_sync_fields(payment)
+    db.session.commit()
+    flash(f'{conductor.name} marked paid {amount:,.2f}.', 'success')
+    return back()
+
+
+@app.route('/reports/payroll/paid-sheet.pdf')
+@login_required
+@permission_required('reports')
+def payroll_paid_sheet_pdf():
+    """Signable roster of crew who have actually been paid this period —
+    same layout and Signature/Date columns as payroll_pay_sheet_pdf, but
+    filtered to paid > 0 and showing what was actually paid rather than
+    net pay still owed, so it can double as the physical proof-of-payment
+    record kept on file (as opposed to the Pay Sheet, which is the blank
+    sheet crew sign as cash is first handed out)."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    earnings, *_ = compute_payroll_earnings(df, dt)
+    crew_rows = [(name, role, row) for name, role, row in _flatten_wages_earnings(earnings) if row['paid'] > 0]
+
+    if not crew_rows:
+        flash(f'No paid crew for {date_from_str} to {date_to_str}.', 'warning')
+        return redirect(url_for('report_payroll', date_from=date_from_str, date_to=date_to_str))
+
+    styles = _pdf_styles()
+    elements = [
+        Paragraph('Payroll Paid Sheet', styles['Title']),
+        Paragraph(f'Period: {date_from_str} to {date_to_str}', styles['Normal']),
+        Paragraph(f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}', styles['Normal']),
+        Spacer(1, 10),
+    ]
+
+    data = [['#', 'Crew Member', 'Role', 'Amount Paid (USD)', 'Signature', 'Date']]
+    total_paid = 0.0
+    for i, (name, role, row) in enumerate(crew_rows, start=1):
+        data.append([str(i), name, role, f"${row['paid']:,.2f}", '', ''])
+        total_paid += row['paid']
+    data.append(['', '', 'TOTAL', f"${total_paid:,.2f}", '', ''])
+
+    table = _pdf_table(data, bold_last_row=True, col_widths=[24, 140, 60, 90, 140, 70])
+    table.setStyle(TableStyle([
+        ('GRID', (0, 0), (-1, -1), 0.75, colors.black),
+        ('TOPPADDING', (0, 1), (-1, -1), 12),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 12),
+    ]))
+    elements.append(table)
+
+    return _pdf_response(f'payroll_paid_sheet_{date_from_str}_to_{date_to_str}.pdf', elements)
+
+
 def _flatten_wages_earnings(earnings):
     """Flatten compute_payroll_earnings' driver-with-nested-conductors
     structure into one ordered list of (name, role, row) for a simple
