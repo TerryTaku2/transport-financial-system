@@ -176,7 +176,9 @@
                 <input type="hidden" name="payment_date" value="{{ date_to }}">
                 <input type="hidden" name="date_from" value="{{ date_from }}">
                 <input type="hidden" name="date_to" value="{{ date_to }}">
-                <input type="text" name="name" placeholder="Conductor's name" style="width:130px;padding:4px;" required>
+                <input type="text" name="name"
+                       placeholder="{{ e.driver.name.split(' ')[0] if e.driver.name else 'Conductor' }}'s Conductor"
+                       style="width:130px;padding:4px;" required>
                 <div style="display:flex;gap:4px;align-items:center;">
                   <input type="number" name="amount" step="any" min="0" placeholder="Amount"
                          value="{{ '%.2f'|format(ce.outstanding) if ce.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
