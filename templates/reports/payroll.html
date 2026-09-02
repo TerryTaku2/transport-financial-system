@@ -170,22 +170,17 @@
           <td>
             <div style="display:flex;flex-direction:column;gap:4px;min-width:150px;">
               <form method="POST" action="{{ url_for('payroll_pay_placeholder_conductor') }}"
-                    style="display:flex;flex-direction:column;gap:4px;">
+                    style="display:flex;gap:4px;align-items:center;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                 <input type="hidden" name="paired_driver_id" value="{{ e.driver.id }}">
                 <input type="hidden" name="payment_date" value="{{ date_to }}">
                 <input type="hidden" name="date_from" value="{{ date_from }}">
                 <input type="hidden" name="date_to" value="{{ date_to }}">
-                <input type="text" name="name"
-                       placeholder="{{ e.driver.name.split(' ')[0] if e.driver.name else 'Conductor' }}'s Conductor"
-                       style="width:130px;padding:4px;" required>
-                <div style="display:flex;gap:4px;align-items:center;">
-                  <input type="number" name="amount" step="any" min="0" placeholder="Amount"
-                         value="{{ '%.2f'|format(ce.outstanding) if ce.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
-                  <button class="btn btn-outline btn-xs">Pay</button>
-                </div>
+                <input type="number" name="amount" step="any" min="0" placeholder="Amount"
+                       value="{{ '%.2f'|format(ce.outstanding) if ce.outstanding > 0 else '' }}" style="width:90px;padding:4px;">
+                <button class="btn btn-outline btn-xs">Pay</button>
               </form>
-              <div class="form-hint">Names them and marks paid in one step.</div>
+              <div class="form-hint">Marks paid as "{{ e.driver.name.split(' ')[0] if e.driver.name else 'Conductor' }}'s Conductor".</div>
               <a href="{{ url_for('conductor_payslip_pdf', driver_id=e.driver.id, date_from=date_from, date_to=date_to) }}"
                  class="btn btn-outline btn-xs" target="_blank"><i data-feather="file-text"></i> Payslip</a>
             </div>

@@ -6296,10 +6296,14 @@ def payroll_pay_placeholder_conductor():
     """Mark a Payroll placeholder conductor paid in one step. compute_payroll_earnings
     prints a placeholder for a driver with no named conductor on file —
     there's no Driver row to attach a CommissionPayment to until one
-    exists, so that row normally has no Pay button. This creates the
-    conductor (role='conductor', paired to the driver — reusing an
+    exists, so that row normally has no Pay button. This auto-names the
+    conductor "<Driver's first name>'s Conductor" (same convention as the
+    placeholder label itself — see _flatten_wages_earnings/payslip naming)
+    rather than asking for a name up front, since at pay time the actual
+    person often isn't known/settled yet; the auto-created Driver record
+    can always be renamed later from Drivers once it is. Reuses an
     existing one of that name under the same driver if this isn't its
-    first payment) and records the payment against them in the same
+    first payment, and records the payment against them in the same
     submission, so "mark paid" works the same one-step way it does for
     a named conductor."""
     date_from = request.form.get('date_from', '')
@@ -6307,9 +6311,6 @@ def payroll_pay_placeholder_conductor():
     back = lambda: redirect(url_for('report_payroll', date_from=date_from, date_to=date_to))
     try:
         paired_driver_id = form_int(request.form, 'paired_driver_id')
-        name = request.form.get('name', '').strip()
-        if not name:
-            raise ValueError("Enter the conductor's name.")
         amount = form_float(request.form, 'amount', min_value=0)
         payment_date = parse_date(request.form['payment_date'])
     except KeyError as e:
@@ -6318,6 +6319,12 @@ def payroll_pay_placeholder_conductor():
     except ValueError as e:
         flash(str(e), 'danger')
         return back()
+
+    driver = Driver.query.filter_by(id=paired_driver_id).first()
+    if not driver:
+        flash('Driver not found.', 'danger')
+        return back()
+    name = f"{driver.name.split(' ')[0]}'s Conductor" if driver.name else 'Conductor'
 
     conductor = Driver.query.filter(
         Driver.paired_driver_id == paired_driver_id, Driver.role == 'conductor',
