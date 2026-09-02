@@ -3633,6 +3633,7 @@ def ledger_entry_edit(vehicle_id, log_date_str):
     fuel = fuel_logs_for_date[0] if fuel_logs_for_date else None
 
     if request.method == 'POST':
+        new_log_date = parse_date(request.form['log_date'])
         driver_id = form_int(request.form, 'driver_id', required=False)
         fare = form_float(request.form, 'fare', required=False, min_value=0)
         garnish = form_float(request.form, 'garnish', required=False, min_value=0)
@@ -3649,12 +3650,20 @@ def ledger_entry_edit(vehicle_id, log_date_str):
         if fare is None and diesel_cost is None and mileage is None and garnish is None:
             raise ValueError('Enter at least a fare, diesel cost, mileage reading, or garnish.')
 
+        if new_log_date != log_date:
+            conflict = (DailyLog.query.filter_by(vehicle_id=vehicle_id, log_date=new_log_date).first()
+                        or FuelLog.query.filter_by(vehicle_id=vehicle_id, log_date=new_log_date).first())
+            if conflict:
+                raise ValueError(f'{vehicle.registration} already has an entry for '
+                                  f'{new_log_date.strftime("%d %b %Y")} — edit that one instead.')
+
         if fare is not None:
             driver = Driver.query.filter_by(id=driver_id).first()
             conductor = resolve_conductor(driver, vehicle_id)
             if log is None:
-                log = DailyLog(vehicle_id=vehicle_id, log_date=log_date, created_by=current_user.id)
+                log = DailyLog(vehicle_id=vehicle_id, log_date=new_log_date, created_by=current_user.id)
                 db.session.add(log)
+            log.log_date = new_log_date
             log.driver_id = driver_id
             log.conductor_id = conductor.id if conductor else None
             log.gross_revenue = fare
@@ -3666,8 +3675,9 @@ def ledger_entry_edit(vehicle_id, log_date_str):
 
         if diesel_cost is not None or mileage is not None:
             if fuel is None:
-                fuel = FuelLog(vehicle_id=vehicle_id, log_date=log_date, liters=0, created_by=current_user.id)
+                fuel = FuelLog(vehicle_id=vehicle_id, log_date=new_log_date, liters=0, created_by=current_user.id)
                 db.session.add(fuel)
+            fuel.log_date = new_log_date
             price = fuel_price_for(vehicle.fuel_type)
             fuel.total_cost = diesel_cost or 0
             fuel.cost_per_liter = price or 0.0
@@ -3679,7 +3689,8 @@ def ledger_entry_edit(vehicle_id, log_date_str):
             touch_sync_fields(fuel)
 
         log_audit('UPDATE', 'daily_logs', log.id if log else None,
-                  f'Edited ledger entry for {vehicle.registration} on {log_date}')
+                  f'Edited ledger entry for {vehicle.registration} on {new_log_date}'
+                  + (f' (moved from {log_date})' if new_log_date != log_date else ''))
         db.session.commit()
         flash('Entry updated.', 'success')
         return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period, date_from=date_from, date_to=date_to))

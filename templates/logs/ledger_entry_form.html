@@ -22,9 +22,8 @@
       <input type="hidden" name="date_to" value="{{ date_to }}">
       <div class="form-grid mb-16">
         <div class="form-group">
-          <label>Date</label>
-          <input type="text" value="{{ log_date.strftime('%d %b %Y') }}" disabled>
-          <div class="form-hint">To change the date, delete this entry and add a new one.</div>
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="log_date" required value="{{ log_date.strftime('%Y-%m-%d') }}">
         </div>
         <div class="form-group">
           <label>Driver</label>
