@@ -31,7 +31,7 @@
         <div class="form-group" id="position-group">
           <label>Position</label>
           <input type="text" name="position" placeholder="e.g. Mechanic, Cleaner, Office Clerk"
-                 value="{{ driver.position if driver else '' }}">
+                 value="{{ driver.position if driver and driver.position else '' }}">
           <div class="form-hint">Job title for staff who aren't a driver or conductor.</div>
         </div>
         <div class="form-group" id="salary-group">
@@ -42,12 +42,12 @@
         </div>
         <div class="form-group" id="license-group">
           <label>License Number</label>
-          <input type="text" name="license_number" id="license-input" value="{{ driver.license_number if driver else '' }}">
+          <input type="text" name="license_number" id="license-input" value="{{ driver.license_number if driver and driver.license_number else '' }}">
           <div class="form-hint">Optional.</div>
         </div>
         <div class="form-group">
           <label>ID Number</label>
-          <input type="text" name="id_number" value="{{ driver.id_number if driver else '' }}">
+          <input type="text" name="id_number" value="{{ driver.id_number if driver and driver.id_number else '' }}">
           <div class="form-hint">National ID or passport number. Optional.</div>
         </div>
         <div class="form-group" id="paired-driver-group">
