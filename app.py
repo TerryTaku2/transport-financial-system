@@ -7032,8 +7032,13 @@ def _consolidated_overview_pdf(df, dt):
                         [_pdf_table(data)])
 
 
-def _income_statement_pdf(df, dt):
-    s = compute_income_statement(df, dt)
+def _income_statement_pdf(df, dt, vehicle_id=None, vehicle_label=None):
+    """Shared by the Full Report Pack (fleet-wide, vehicle_id=None) and the
+    standalone Income Statement export (export_income) so both match what
+    report_income()/income.html actually show on screen — not the detailed
+    day-by-day ledger that export_income used to dump instead (see
+    export_daily_logs for that raw-transaction view)."""
+    s = compute_income_statement(df, dt, vehicle_id)
     rows = [['Gross Revenue', f"${s['gross_revenue']:,.2f}"]]
     for name, amt in s['statement_expenses']:
         rows.append([f'  {name}', f"${amt:,.2f}"])
@@ -7043,7 +7048,10 @@ def _income_statement_pdf(df, dt):
     bold_idx = {len(rows) - 3, len(rows) - 2}
     flowables = [_pdf_statement_table(rows, bold_indices=bold_idx)]
 
-    if s['vehicle_breakdown']:
+    # Per-vehicle breakdown only makes sense fleet-wide — compute_income_statement's
+    # vehicle_breakdown always lists every vehicle regardless of vehicle_id, and a
+    # single vehicle's own statement shouldn't drag every other vehicle's figures in.
+    if not vehicle_id and s['vehicle_breakdown']:
         styles = _pdf_styles()
         flowables += [Spacer(1, 14), Paragraph('Per-Vehicle Breakdown', styles['Heading3']), Spacer(1, 6)]
         headers = ['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Wages', 'Net Profit', 'Margin']
@@ -7052,7 +7060,8 @@ def _income_statement_pdf(df, dt):
             f"${v['expenses']:,.2f}", f"${v['wages']:,.2f}", f"${v['net_profit']:,.2f}", f"{v['margin']:.1f}%",
         ] for v in s['vehicle_breakdown']]
         flowables.append(_pdf_table(vdata, bold_last_row=False))
-    return _pdf_section('Income Statement', f'Period: {df} to {dt} — fleet-wide', flowables)
+    scope = vehicle_label if vehicle_id else 'fleet-wide'
+    return _pdf_section('Income Statement', f'Period: {df} to {dt} — {scope}', flowables)
 
 
 def _income_statement_by_owner_pdf(df, dt):
@@ -8557,141 +8566,53 @@ def export_daily_logs():
 @login_required
 @permission_required('reports')
 def export_income():
+    """Exports exactly what report_income()/income.html show on screen —
+    the income statement, not the underlying day-by-day transactions (see
+    export_daily_logs for that raw ledger)."""
     vehicle_id = request.args.get('vehicle_id', '')
     df, dt = query_date_range()
     df_str, dt_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
-
-    daily_q = DailyLog.query.filter(DailyLog.log_date.between(df, dt))
-    fuel_q = FuelLog.query.filter(FuelLog.log_date.between(df, dt))
-    maint_q = MaintenanceLog.query.filter(MaintenanceLog.log_date.between(df, dt))
-    exp_q = Expense.query.filter(Expense.expense_date.between(df, dt))
-    spares_q = StoreSale.query.filter(StoreSale.sale_date.between(df, dt))
 
     vehicle_label = 'Consolidated (fleet-wide)'
     if vehicle_id:
         v = Vehicle.query.filter_by(id=vehicle_id).first()
         vehicle_label = f'{v.registration} — {v.make} {v.model}' if v else f'Vehicle #{vehicle_id}'
-        daily_q = daily_q.filter(DailyLog.vehicle_id == vehicle_id)
-        fuel_q = fuel_q.filter(FuelLog.vehicle_id == vehicle_id)
-        maint_q = maint_q.filter(MaintenanceLog.vehicle_id == vehicle_id)
-        exp_q = exp_q.filter(Expense.vehicle_id == vehicle_id)
-        spares_q = spares_q.filter(StoreSale.vehicle_id == vehicle_id)
-    else:
-        spares_q = spares_q.filter(StoreSale.vehicle_id.isnot(None))
 
-    daily = daily_q.order_by(DailyLog.log_date).all()
-    fuel = fuel_q.order_by(FuelLog.log_date).all()
-    maintenance = maint_q.order_by(MaintenanceLog.log_date).all()
-    expenses = exp_q.order_by(Expense.expense_date).all()
-    spares = spares_q.order_by(StoreSale.sale_date).all()
-
-    total_rev = sum(l.gross_revenue for l in daily)
-    total_fuel_liters = sum(f.liters for f in fuel)
-    total_maint = sum(m.total_cost for m in maintenance)
-    total_exp = sum(e.amount for e in expenses)
-    total_spares = sum(s.total_amount for s in spares)
+    scope_suffix = f'_vehicle{vehicle_id}' if vehicle_id else '_consolidated'
 
     if request.args.get('format') == 'pdf':
-        styles = _pdf_styles()
-        flowables = []
+        elements = _income_statement_pdf(df, dt, vehicle_id or None, vehicle_label)
+        return _pdf_response(f'income{scope_suffix}_{df_str}_to_{dt_str}.pdf', elements)
 
-        def section(title, headers, data_rows, total_row):
-            flowables.append(Paragraph(title, styles['Heading3']))
-            flowables.append(Spacer(1, 4))
-            flowables.append(_pdf_table([headers] + data_rows + [total_row]))
-            flowables.append(Spacer(1, 14))
-
-        section('Revenue', ['Date', 'Vehicle', 'Route', 'Trips', 'Gross Revenue (USD)'],
-                [[l.log_date, l.vehicle.registration, l.route.name if l.route else '',
-                  str(l.trips_completed), f'{l.gross_revenue:.2f}'] for l in daily],
-                ['', '', '', 'TOTAL REVENUE', f'{total_rev:.2f}'])
-        section('Fuel Consumption (not a cost — tracked in liters only)', ['Date', 'Vehicle', 'Liters', 'Supplier'],
-                [[f.log_date, f.vehicle.registration, f.liters, f.supplier or ''] for f in fuel],
-                ['', '', 'TOTAL LITERS', f'{total_fuel_liters:.1f}'])
-        section('Maintenance Expenses', ['Date', 'Vehicle', 'Description', 'Parts (USD)', 'Labor (USD)', 'Total (USD)'],
-                [[m.log_date, m.vehicle.registration, m.description,
-                  f'{m.parts_cost:.2f}', f'{m.labor_cost:.2f}', f'{m.total_cost:.2f}'] for m in maintenance],
-                ['', '', '', '', 'TOTAL MAINTENANCE', f'{total_maint:.2f}'])
-        section('Other Expenses', ['Date', 'Category', 'Vehicle', 'Description', 'Amount (USD)'],
-                [[e.expense_date, e.category.display_name, e.vehicle.registration if e.vehicle else '(general)',
-                  e.description or '', f'{e.amount:.2f}'] for e in expenses],
-                ['', '', '', 'TOTAL OTHER EXPENSES', f'{total_exp:.2f}'])
-        section('Spares Sold to Company Vehicles (booked as a maintenance expense on that vehicle)',
-                ['Date', 'Part', 'Vehicle', 'Qty', 'Unit Price (USD)', 'Total (USD)'],
-                [[s.sale_date, s.part.name, s.vehicle.registration if s.vehicle else '',
-                  s.quantity, f'{s.unit_price:.2f}', f'{s.total_amount:.2f}'] for s in spares],
-                ['', '', '', '', 'TOTAL SPARES', f'{total_spares:.2f}'])
-
-        flowables.append(_pdf_statement_table(
-            [['NET PROFIT', f'${total_rev - total_maint - total_exp - total_spares:,.2f}']], bold_indices=(0,)))
-        elements = _pdf_section('Transport Fleet Income Statement (ZIMRA Compliant)',
-                                f'Scope: {vehicle_label} — Period: {df_str} to {dt_str}', flowables)
-        scope_suffix = f'_vehicle{vehicle_id}' if vehicle_id else '_consolidated'
-        return _pdf_response(f'income{scope_suffix}_{df_str}_to_{dt_str}.pdf', elements, pagesize=landscape(A4))
-
+    s = compute_income_statement(df, dt, vehicle_id)
     out = io.StringIO()
     w = csv.writer(out)
-    w.writerow(['TRANSPORT FLEET INCOME STATEMENT (ZIMRA COMPLIANT)'])
+    w.writerow(['INCOME STATEMENT'])
     w.writerow([f'Scope: {vehicle_label}'])
     w.writerow([f'Period: {df_str} to {dt_str}'])
     w.writerow([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
     w.writerow([])
 
-    w.writerow(['REVENUE'])
-    w.writerow(['Date', 'Vehicle', 'Route', 'Trips', 'Gross Revenue (USD)'])
-    total_rev = 0
-    for l in daily:
-        w.writerow([l.log_date, l.vehicle.registration, l.route.name if l.route else '',
-                    l.trips_completed, f'{l.gross_revenue:.2f}'])
-        total_rev += l.gross_revenue
-    w.writerow(['', '', '', 'TOTAL REVENUE', f'{total_rev:.2f}'])
-    w.writerow([])
+    w.writerow(['Gross Revenue', f"{s['gross_revenue']:.2f}"])
+    for name, amt in s['statement_expenses']:
+        w.writerow([f'Less: {name}', f'{amt:.2f}'])
+    w.writerow(['Total Operating Expenses', f"{s['total_expenses']:.2f}"])
+    w.writerow(['NET PROFIT', f"{s['net_profit']:.2f}"])
+    w.writerow(['Profit Margin', f"{s['profit_margin']:.1f}%"])
 
-    w.writerow(['FUEL CONSUMPTION (not a cost — tracked in liters only)'])
-    w.writerow(['Date', 'Vehicle', 'Liters', 'Supplier'])
-    total_fuel_liters = 0
-    for f in fuel:
-        w.writerow([f.log_date, f.vehicle.registration, f.liters, f.supplier or ''])
-        total_fuel_liters += f.liters
-    w.writerow(['', '', 'TOTAL LITERS', f'{total_fuel_liters:.1f}'])
-    w.writerow([])
-
-    w.writerow(['MAINTENANCE EXPENSES'])
-    w.writerow(['Date', 'Vehicle', 'Description', 'Parts (USD)', 'Labor (USD)', 'Total (USD)'])
-    total_maint = 0
-    for m in maintenance:
-        w.writerow([m.log_date, m.vehicle.registration, m.description,
-                    f'{m.parts_cost:.2f}', f'{m.labor_cost:.2f}', f'{m.total_cost:.2f}'])
-        total_maint += m.total_cost
-    w.writerow(['', '', '', '', 'TOTAL MAINTENANCE', f'{total_maint:.2f}'])
-    w.writerow([])
-
-    w.writerow(['OTHER EXPENSES'])
-    w.writerow(['Date', 'Category', 'Vehicle', 'Description', 'Amount (USD)'])
-    total_exp = 0
-    for e in expenses:
-        w.writerow([e.expense_date, e.category.display_name, e.vehicle.registration if e.vehicle else '(general)',
-                    e.description or '', f'{e.amount:.2f}'])
-        total_exp += e.amount
-    w.writerow(['', '', '', 'TOTAL OTHER EXPENSES', f'{total_exp:.2f}'])
-    w.writerow([])
-
-    w.writerow(['SPARES SOLD TO COMPANY VEHICLES (booked as a maintenance expense on that vehicle)'])
-    w.writerow(['Date', 'Part', 'Vehicle', 'Qty', 'Unit Price (USD)', 'Total (USD)'])
-    total_spares = 0
-    for s in spares:
-        w.writerow([s.sale_date, s.part.name, s.vehicle.registration if s.vehicle else '',
-                    s.quantity, f'{s.unit_price:.2f}', f'{s.total_amount:.2f}'])
-        total_spares += s.total_amount
-    w.writerow(['', '', '', '', 'TOTAL SPARES', f'{total_spares:.2f}'])
-    w.writerow([])
-
-    w.writerow(['NET PROFIT', f'{total_rev - total_maint - total_exp - total_spares:.2f}'])
+    # Per-vehicle breakdown only makes sense fleet-wide — see _income_statement_pdf.
+    if not vehicle_id and s['vehicle_breakdown']:
+        w.writerow([])
+        w.writerow(['PER-VEHICLE BREAKDOWN'])
+        w.writerow(['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Wages', 'Net Profit', 'Margin'])
+        for row in s['vehicle_breakdown']:
+            w.writerow([row['vehicle'].registration, f"{row['revenue']:.2f}", f"{row['maintenance']:.2f}",
+                        f"{row['expenses']:.2f}", f"{row['wages']:.2f}", f"{row['net_profit']:.2f}",
+                        f"{row['margin']:.1f}%"])
 
     out.seek(0)
     resp = make_response(out.getvalue())
     resp.headers['Content-Type'] = 'text/csv'
-    scope_suffix = f'_vehicle{vehicle_id}' if vehicle_id else '_consolidated'
     resp.headers['Content-Disposition'] = f'attachment; filename=income{scope_suffix}_{df_str}_to_{dt_str}.csv'
     return resp
 
