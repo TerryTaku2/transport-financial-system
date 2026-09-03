@@ -24,7 +24,7 @@
           <th>Position</th>
           <th>Vehicle</th>
           <th>Phone</th>
-          <th>Commission Rate</th>
+          <th>Commission Rate / Salary</th>
           <th>Status</th>
           <th></th>
         </tr>
@@ -39,7 +39,7 @@
           <td>{{ d.position or '—' }}</td>
           <td>{{ d.assigned_vehicle.registration if d.assigned_vehicle else '—' }}</td>
           <td>{{ d.phone or '—' }}</td>
-          <td>{% if d.role == 'other' %}—{% elif d.commission_rate %}{{ (d.commission_rate*100)|round(1) }}% (custom){% else %}Default{% endif %}</td>
+          <td>{% if d.role == 'other' %}{% if d.salary %}{{ d.salary|currency }} salary{% else %}No salary set{% endif %}{% elif d.commission_rate %}{{ (d.commission_rate*100)|round(1) }}% (custom){% else %}Default{% endif %}</td>
           <td>
             {% if d.status == 'active' %}<span class="badge badge-green"><span class="dot dot-green"></span>Active</span>
             {% else %}<span class="badge badge-gray"><span class="dot dot-gray"></span>Inactive</span>{% endif %}

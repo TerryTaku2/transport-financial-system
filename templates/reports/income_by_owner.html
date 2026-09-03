@@ -45,8 +45,9 @@
 </div>
 
 <div class="form-hint mb-16">
-  Owner totals below are vehicle-attributable profit only &mdash; fleet-wide payroll and general overhead
-  (shown in the Net Profit figure above) aren't split across owners.
+  Each vehicle's Net Profit here matches its figure on the Income Statement page (revenue less maintenance,
+  expenses and its own crew's wages). Owner totals roll those up; general overhead not tied to any one
+  vehicle (shown in the Net Profit figure above) isn't split across owners.
 </div>
 
 <div class="card">
@@ -60,6 +61,7 @@
           <th class="text-right">Revenue</th>
           <th class="text-right">Maintenance</th>
           <th class="text-right">Expenses</th>
+          <th class="text-right">Wages</th>
           <th class="text-right">Net Profit</th>
           <th class="text-right">Margin</th>
         </tr>
@@ -74,6 +76,7 @@
           <td class="text-right">{{ g.revenue|currency }}</td>
           <td class="text-right">({{ g.maintenance|currency }})</td>
           <td class="text-right">({{ g.expenses|currency }})</td>
+          <td class="text-right">({{ g.wages|currency }})</td>
           <td class="text-right {% if g.net_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ g.net_profit|currency }}</strong></td>
           <td class="text-right">{{ g.margin|pct }}</td>
         </tr>
@@ -85,6 +88,7 @@
           <td class="text-right">{{ row.revenue|currency }}</td>
           <td class="text-right">({{ row.maintenance|currency }})</td>
           <td class="text-right">({{ row.expenses|currency }})</td>
+          <td class="text-right">({{ row.wages|currency }})</td>
           <td class="text-right {% if row.net_profit < 0 %}text-danger{% else %}text-success{% endif %}">{{ row.net_profit|currency }}</td>
           <td class="text-right">{{ row.margin|pct }}</td>
         </tr>

@@ -139,12 +139,12 @@
       <tbody>
         {% for e in earnings %}
         <tr>
-          <td><strong>{{ e.driver.name }}</strong></td>
+          <td><strong>{{ e.driver.name }}</strong>{% if e.driver.role == 'other' and e.driver.position %}<div class="form-hint">{{ e.driver.position }}</div>{% endif %}</td>
           <td><span class="badge badge-blue">{{ e.driver.role|title }}</span></td>
-          <td>{{ e.days_worked }}</td>
-          <td>{{ e.total_revenue|currency }}</td>
+          <td>{{ e.days_worked if e.days_worked is not none else '—' }}</td>
+          <td>{{ e.total_revenue|currency if e.total_revenue is not none else '—' }}</td>
           <td class="text-right {% if e.garnish %}text-danger{% endif %}">{{ e.garnish|currency if e.garnish else '—' }}</td>
-          <td>{{ e.rate_pct|round(1) }}%</td>
+          <td>{{ (e.rate_pct|round(1) ~ '%') if e.rate_pct is not none else 'Salary' }}</td>
           <td class="text-right">{{ e.commission|currency }}</td>
           <td class="text-right {% if e.deductions %}text-danger{% endif %}">{{ e.deductions|currency if e.deductions else '—' }}</td>
           <td class="text-right">{{ e.net_pay|currency }}</td>

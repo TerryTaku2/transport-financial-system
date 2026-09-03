@@ -437,6 +437,11 @@ class Driver(db.Model):
     # for role='other' (drivers/conductors are self-describing via role).
     position = db.Column(db.String(100))
     commission_rate = db.Column(db.Float)
+    # Fixed pay per payroll period for role='other' staff, who aren't tied
+    # to trip revenue the way a driver/conductor's commission is — see
+    # compute_payroll_earnings, which pays this out flat (less deductions)
+    # instead of computing it off DailyLog activity.
+    salary = db.Column(db.Float)
     status = db.Column(db.String(20), default='active')
     # For a conductor, the driver they normally work under — informational,
     # and used to auto-select the conductor when logging a trip for that driver.
@@ -3532,6 +3537,7 @@ def driver_add():
         if id_number:
             check_unique(Driver, 'id_number', id_number, label='ID number')
         paired_driver_id = form_int(request.form, 'paired_driver_id', required=False) if role == 'conductor' else None
+        salary_input = form_float(request.form, 'salary', required=False, min_value=0) if role == 'other' else None
         d = Driver(
             name=request.form['name'].strip(),
             license_number=license_number,
@@ -3540,6 +3546,7 @@ def driver_add():
             role=role,
             position=request.form.get('position', '').strip() if role == 'other' else None,
             commission_rate=rate_input / 100 if rate_input is not None else None,
+            salary=salary_input,
             status=request.form.get('status', 'active'),
             paired_driver_id=paired_driver_id,
             assigned_vehicle_id=form_int(request.form, 'assigned_vehicle_id', required=False),
@@ -3578,6 +3585,7 @@ def driver_edit(did):
         paired_driver_id = form_int(request.form, 'paired_driver_id', required=False) if role == 'conductor' else None
         if paired_driver_id == d.id:
             raise ValueError('A conductor cannot be paired with themself.')
+        salary_input = form_float(request.form, 'salary', required=False, min_value=0) if role == 'other' else None
         d.name = request.form['name'].strip()
         d.license_number = license_number
         d.id_number = id_number
@@ -3585,6 +3593,7 @@ def driver_edit(did):
         d.role = role
         d.position = request.form.get('position', '').strip() if role == 'other' else None
         d.commission_rate = rate_input / 100 if rate_input is not None else None
+        d.salary = salary_input
         d.status = request.form.get('status', 'active')
         d.paired_driver_id = paired_driver_id
         d.assigned_vehicle_id = form_int(request.form, 'assigned_vehicle_id', required=False)
@@ -6061,13 +6070,18 @@ def compute_income_statement(df, dt, vehicle_id=None):
         v_spares = spares_by_vehicle.get(v.id) or 0
         if v_rev == 0 and v_maint == 0 and v_exp == 0 and v_spares == 0:
             continue
-        v_total_cost = v_maint + v_exp + v_spares
+        # Same crew-payroll figure a single-vehicle Income Statement would
+        # show for this vehicle (compute_income_statement(df, dt, v.id) above)
+        # — without this, a vehicle's net profit here would silently exclude
+        # wages and disagree with that page's number for the same vehicle.
+        _, v_wages, *_ = compute_payroll_earnings(df, dt, v.id)
+        v_total_cost = v_maint + v_exp + v_spares + v_wages
         v_net = v_rev - v_total_cost
         vehicle_breakdown.append({
             # Spares bought from the in-house store for this vehicle count as
             # a maintenance cost, alongside logged maintenance-job spend.
             'vehicle': v, 'revenue': v_rev, 'maintenance': v_maint + v_spares,
-            'expenses': v_exp, 'net_profit': v_net,
+            'expenses': v_exp, 'wages': v_wages, 'net_profit': v_net,
             'margin': (v_net / v_rev * 100) if v_rev else 0,
         })
     vehicle_breakdown.sort(key=lambda r: r['net_profit'], reverse=True)
@@ -6138,11 +6152,13 @@ def compute_income_statement_by_owner(df, dt):
     """Regroups compute_income_statement's per-vehicle breakdown by
     Vehicle.owner_id — one row per owner (vehicles with no owner assigned
     land under a None/"Unassigned" group), each with its own vehicle list
-    and revenue/maintenance/expenses/net_profit/margin totals. Like the
-    per-vehicle breakdown it's built from, this only sums costs directly
-    attributable to a vehicle — fleet-wide payroll and general overhead
-    aren't split across owners, so owner totals won't add up to the
-    fleet-wide net_profit also returned here."""
+    and revenue/maintenance/expenses/wages/net_profit/margin totals. Each
+    vehicle's net_profit here matches what the Income Statement page shows
+    for that same vehicle (revenue less maintenance, expenses and its own
+    crew's payroll) — only overhead that isn't attributable to any single
+    vehicle (general/untagged expenses, and payroll for staff not tied to
+    a vehicle's own DailyLog activity) stays out, so owner totals won't add
+    up to the fleet-wide net_profit also returned here."""
     stmt = compute_income_statement(df, dt)
     groups = {}
     for row in stmt['vehicle_breakdown']:
@@ -6150,12 +6166,13 @@ def compute_income_statement_by_owner(df, dt):
         key = owner.id if owner else None
         g = groups.setdefault(key, {
             'owner': owner, 'vehicles': [],
-            'revenue': 0, 'maintenance': 0, 'expenses': 0, 'net_profit': 0,
+            'revenue': 0, 'maintenance': 0, 'expenses': 0, 'wages': 0, 'net_profit': 0,
         })
         g['vehicles'].append(row)
         g['revenue'] += row['revenue']
         g['maintenance'] += row['maintenance']
         g['expenses'] += row['expenses']
+        g['wages'] += row['wages']
         g['net_profit'] += row['net_profit']
     owner_breakdown = list(groups.values())
     for g in owner_breakdown:
@@ -6182,12 +6199,52 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
     on the commission math. vehicle_id narrows every DailyLog-based figure
     to that one vehicle's rows; CommissionPayment/PayrollDeduction (paid,
     deductions) stay driver-level regardless, since a payment isn't tied to
-    which vehicle earned it."""
+    which vehicle earned it. role='other' staff are paid their flat salary
+    instead (see Driver.salary) rather than a DailyLog-derived commission,
+    and are left out entirely when vehicle_id is given since their pay
+    isn't attributable to any one vehicle."""
     dr_rate = app.config['COMMISSION_DRIVER_RATE']
     co_rate = app.config['COMMISSION_CONDUCTOR_RATE']
 
     earnings = []
     for d in Driver.query.filter_by(status='active').order_by(Driver.name).all():
+        if d.role == 'other':
+            # Salaried staff aren't tied to trip revenue, so there's nothing
+            # to compute off DailyLog — just pay the flat salary (less
+            # deductions) for the period, same as everyone else. Not
+            # attributable to any one vehicle, so a vehicle-scoped call
+            # (the per-vehicle Income Statement's wages figure) excludes them.
+            if not d.salary or vehicle_id:
+                continue
+            payment_rows = CommissionPayment.query.filter(
+                CommissionPayment.driver_id == d.id,
+                CommissionPayment.payment_date.between(df, dt)).order_by(CommissionPayment.payment_date).all()
+            paid = sum(p.amount for p in payment_rows)
+            deduction_rows = PayrollDeduction.query.filter(
+                PayrollDeduction.driver_id == d.id,
+                PayrollDeduction.deduction_date.between(df, dt)).order_by(PayrollDeduction.deduction_date).all()
+            deductions = sum(x.amount for x in deduction_rows)
+            net_pay = d.salary - deductions
+            earnings.append({
+                'driver': d,
+                # 0, not None — every export (Excel/PDF/payslip) formats
+                # these with f"{x:.2f}"/round(x, 1), which raises on None.
+                # Not applicable to salaried pay, but 0 renders safely
+                # everywhere those already assume a number.
+                'total_revenue': 0,
+                'days_worked': 0,
+                'rate_pct': 0,
+                'commission': d.salary,
+                'garnish': 0,
+                'deductions': deductions,
+                'deduction_rows': deduction_rows,
+                'net_pay': net_pay,
+                'paid': paid,
+                'payments': payment_rows,
+                'outstanding': net_pay - paid,
+                'conductors': [],
+            })
+            continue
         driven_q = db.session.query(func.sum(DailyLog.gross_revenue),
                                     func.count(DailyLog.id)).filter(
             DailyLog.driver_id == d.id,
@@ -6270,7 +6327,7 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
     grouped, nested_ids = [], set()
     placeholder_total = 0.0
     for e in earnings:
-        if e['driver'].role == 'conductor':
+        if e['driver'].role != 'driver':
             continue
         for ce in earnings:
             if ce['driver'].role == 'conductor' and ce['driver'].paired_driver_id == e['driver'].id:
@@ -6289,6 +6346,7 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
             placeholder_total += placeholder_commission
         grouped.append(e)
     grouped.extend(e for e in earnings if e['driver'].role == 'conductor' and e['driver'].id not in nested_ids)
+    grouped.extend(e for e in earnings if e['driver'].role == 'other')
     earnings = grouped
 
     # total_commissions/total_outstanding above only summed named people
@@ -6345,7 +6403,8 @@ def export_payroll_excel():
 
     def write_row(name, role, e):
         ws.append([name, role, e['days_worked'], e['total_revenue'], e['garnish'],
-                   round(e['rate_pct'], 1), e['commission'], e['deductions'], e['net_pay'],
+                   round(e['rate_pct'], 1) if e['rate_pct'] is not None else 'Salary',
+                   e['commission'], e['deductions'], e['net_pay'],
                    e['paid'], e['outstanding']])
         r = ws.max_row
         for col in ('D', 'E', 'G', 'H', 'I', 'J', 'K'):
@@ -6398,8 +6457,12 @@ def export_payroll_pdf():
     data = [headers]
 
     def data_row(name, role, e):
-        data.append([name, role, str(e['days_worked']), f"${e['total_revenue']:,.2f}",
-                     f"${e['garnish']:,.2f}", f"{e['rate_pct']:.1f}%", f"${e['commission']:,.2f}",
+        data.append([name, role,
+                     str(e['days_worked']) if e['days_worked'] is not None else '—',
+                     f"${e['total_revenue']:,.2f}" if e['total_revenue'] is not None else '—',
+                     f"${e['garnish']:,.2f}",
+                     f"{e['rate_pct']:.1f}%" if e['rate_pct'] is not None else 'Salary',
+                     f"${e['commission']:,.2f}",
                      f"${e['deductions']:,.2f}", f"${e['net_pay']:,.2f}",
                      f"${e['paid']:,.2f}", f"${e['outstanding']:,.2f}"])
 
@@ -6983,10 +7046,10 @@ def _income_statement_pdf(df, dt):
     if s['vehicle_breakdown']:
         styles = _pdf_styles()
         flowables += [Spacer(1, 14), Paragraph('Per-Vehicle Breakdown', styles['Heading3']), Spacer(1, 6)]
-        headers = ['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Net Profit', 'Margin']
+        headers = ['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Wages', 'Net Profit', 'Margin']
         vdata = [headers] + [[
             v['vehicle'].registration, f"${v['revenue']:,.2f}", f"${v['maintenance']:,.2f}",
-            f"${v['expenses']:,.2f}", f"${v['net_profit']:,.2f}", f"{v['margin']:.1f}%",
+            f"${v['expenses']:,.2f}", f"${v['wages']:,.2f}", f"${v['net_profit']:,.2f}", f"{v['margin']:.1f}%",
         ] for v in s['vehicle_breakdown']]
         flowables.append(_pdf_table(vdata, bold_last_row=False))
     return _pdf_section('Income Statement', f'Period: {df} to {dt} — fleet-wide', flowables)
@@ -6996,7 +7059,7 @@ def _income_statement_by_owner_pdf(df, dt):
     s = compute_income_statement_by_owner(df, dt)
     styles = _pdf_styles()
     flowables = []
-    headers = ['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Net Profit', 'Margin']
+    headers = ['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Wages', 'Net Profit', 'Margin']
     grand_net = 0
     for g in s['owner_breakdown']:
         owner_label = g['owner'].name if g['owner'] else 'Unassigned (Company-owned)'
@@ -7004,17 +7067,18 @@ def _income_statement_by_owner_pdf(df, dt):
         flowables.append(Spacer(1, 4))
         vdata = [headers] + [[
             v['vehicle'].registration, f"${v['revenue']:,.2f}", f"${v['maintenance']:,.2f}",
-            f"${v['expenses']:,.2f}", f"${v['net_profit']:,.2f}", f"{v['margin']:.1f}%",
+            f"${v['expenses']:,.2f}", f"${v['wages']:,.2f}", f"${v['net_profit']:,.2f}", f"{v['margin']:.1f}%",
         ] for v in g['vehicles']]
         vdata.append(['TOTAL', f"${g['revenue']:,.2f}", f"${g['maintenance']:,.2f}",
-                      f"${g['expenses']:,.2f}", f"${g['net_profit']:,.2f}", f"{g['margin']:.1f}%"])
+                      f"${g['expenses']:,.2f}", f"${g['wages']:,.2f}", f"${g['net_profit']:,.2f}", f"{g['margin']:.1f}%"])
         flowables.append(_pdf_table(vdata))
         flowables.append(Spacer(1, 14))
         grand_net += g['net_profit']
     flowables.append(_pdf_statement_table(
         [['GRAND TOTAL (vehicle-attributable, all owners)', f"${grand_net:,.2f}"]], bold_indices=(0,)))
-    note = ('Vehicle-attributable profit only — fleet-wide payroll and general overhead are not '
-            'split across owners; see the fleet-wide Income Statement for those totals.')
+    note = ('Each vehicle\'s Net Profit matches the fleet-wide Income Statement for that vehicle '
+            '(revenue less maintenance, expenses and its own crew wages). General overhead not tied '
+            'to any one vehicle is not split across owners; see the fleet-wide Income Statement for that.')
     return _pdf_section('Income Statement by Owner', f'Period: {df} to {dt}', flowables, note=note)
 
 
@@ -8649,19 +8713,21 @@ def export_income_by_owner():
     w.writerow(['INCOME STATEMENT BY OWNER'])
     w.writerow([f'Period: {df_str} to {dt_str}'])
     w.writerow([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
-    w.writerow(['Note: vehicle-attributable profit only — fleet-wide payroll and general overhead',
-                'are not split across owners; see the fleet-wide Income Statement for those totals.'])
+    w.writerow(['Note: each vehicle\'s Net Profit matches the fleet-wide Income Statement for that vehicle',
+                '(revenue less maintenance, expenses and its own crew wages). General overhead not tied to',
+                'any one vehicle is not split across owners; see the fleet-wide Income Statement for that.'])
     w.writerow([])
 
     grand_net = 0
     for g in s['owner_breakdown']:
         owner_label = g['owner'].name if g['owner'] else 'Unassigned (Company-owned)'
         w.writerow([f'OWNER: {owner_label}', f'{g["vehicle_count"]} vehicle(s)'])
-        w.writerow(['Vehicle', 'Revenue (USD)', 'Maintenance (USD)', 'Expenses (USD)', 'Net Profit (USD)', 'Margin'])
+        w.writerow(['Vehicle', 'Revenue (USD)', 'Maintenance (USD)', 'Expenses (USD)', 'Wages (USD)', 'Net Profit (USD)', 'Margin'])
         for v in g['vehicles']:
             w.writerow([v['vehicle'].registration, f"{v['revenue']:.2f}", f"{v['maintenance']:.2f}",
-                        f"{v['expenses']:.2f}", f"{v['net_profit']:.2f}", f"{v['margin']:.1f}%"])
-        w.writerow(['', '', '', 'TOTAL', f"{g['net_profit']:.2f}", f"{g['margin']:.1f}%"])
+                        f"{v['expenses']:.2f}", f"{v['wages']:.2f}", f"{v['net_profit']:.2f}", f"{v['margin']:.1f}%"])
+        w.writerow(['TOTAL', f"{g['revenue']:.2f}", f"{g['maintenance']:.2f}", f"{g['expenses']:.2f}",
+                    f"{g['wages']:.2f}", f"{g['net_profit']:.2f}", f"{g['margin']:.1f}%"])
         w.writerow([])
         grand_net += g['net_profit']
 
@@ -14083,6 +14149,8 @@ def migrate_db():
             conn.execute(text("ALTER TABLE drivers ADD COLUMN id_number VARCHAR(30)"))
         if 'position' not in driver_col_names:
             conn.execute(text("ALTER TABLE drivers ADD COLUMN position VARCHAR(100)"))
+        if 'salary' not in driver_col_names:
+            conn.execute(text("ALTER TABLE drivers ADD COLUMN salary FLOAT"))
 
         license_col = next((c for c in driver_cols if c['name'] == 'license_number'), None)
         if license_col is not None and not license_col['nullable']:

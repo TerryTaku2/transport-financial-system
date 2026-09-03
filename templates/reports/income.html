@@ -196,6 +196,7 @@ document.querySelectorAll('.expense-row-toggle').forEach(function (row) {
           <th class="text-right">Revenue</th>
           <th class="text-right">Maintenance</th>
           <th class="text-right">Expenses</th>
+          <th class="text-right">Wages</th>
           <th class="text-right">Net Profit</th>
           <th class="text-right">Margin</th>
           <th></th>
@@ -208,6 +209,7 @@ document.querySelectorAll('.expense-row-toggle').forEach(function (row) {
           <td class="text-right">{{ row.revenue|currency }}</td>
           <td class="text-right">({{ row.maintenance|currency }})</td>
           <td class="text-right">({{ row.expenses|currency }})</td>
+          <td class="text-right">({{ row.wages|currency }})</td>
           <td class="text-right {% if row.net_profit < 0 %}text-danger{% else %}text-success{% endif %}"><strong>{{ row.net_profit|currency }}</strong></td>
           <td class="text-right">{{ row.margin|pct }}</td>
           <td><a href="{{ url_for('report_income', date_from=date_from, date_to=date_to, vehicle_id=row.vehicle.id) }}" class="btn btn-outline btn-xs">View</a></td>
