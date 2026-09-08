@@ -24,10 +24,27 @@
       {% endfor %}
     </select>
   </div>
+  <div class="form-group">
+    <label>Vehicle</label>
+    <select name="vehicle_id">
+      <option value="">All Vehicles</option>
+      {% for v in vehicles %}
+      <option value="{{ v.id }}" {% if vehicle_id|string == v.id|string %}selected{% endif %}>{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
   <button type="submit" class="btn btn-outline"><i data-feather="filter"></i> Filter</button>
   <a href="{{ url_for('store_sales') }}" class="btn btn-outline">Reset</a>
-  <a href="{{ url_for('store_sales_export', part_id=part_id) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
-  <a href="{{ url_for('store_sales_export', part_id=part_id, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
+  <a href="{{ url_for('store_sales_export', part_id=part_id, vehicle_id=vehicle_id, date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Export CSV</a>
+  <a href="{{ url_for('store_sales_export', part_id=part_id, vehicle_id=vehicle_id, date_from=date_from, date_to=date_to, format='pdf') }}" class="btn btn-outline"><i data-feather="file-text"></i> Export PDF</a>
 </form>
 
 <div class="card">
@@ -68,9 +85,9 @@
     </table>
   </div>
   <div class="pagination">
-    {% if sales.has_prev %}<a href="?page={{ sales.prev_num }}&part_id={{ part_id }}">&laquo; Prev</a>{% endif %}
+    {% if sales.has_prev %}<a href="?page={{ sales.prev_num }}&part_id={{ part_id }}&vehicle_id={{ vehicle_id }}&date_from={{ date_from }}&date_to={{ date_to }}">&laquo; Prev</a>{% endif %}
     <span class="active">Page {{ sales.page }} of {{ sales.pages or 1 }}</span>
-    {% if sales.has_next %}<a href="?page={{ sales.next_num }}&part_id={{ part_id }}">Next &raquo;</a>{% endif %}
+    {% if sales.has_next %}<a href="?page={{ sales.next_num }}&part_id={{ part_id }}&vehicle_id={{ vehicle_id }}&date_from={{ date_from }}&date_to={{ date_to }}">Next &raquo;</a>{% endif %}
   </div>
   {% else %}
   <div class="empty-state">

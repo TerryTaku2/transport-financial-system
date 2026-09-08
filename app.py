@@ -5342,12 +5342,28 @@ def store_purchases_import_confirm():
 def store_sales():
     page = request.args.get('page', 1, type=int)
     part_id = request.args.get('part_id', '')
+    vehicle_id = request.args.get('vehicle_id', '')
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
     q = StoreSale.query
     if part_id:
         q = q.filter(StoreSale.part_id == part_id)
+    if vehicle_id:
+        q = q.filter(StoreSale.vehicle_id == vehicle_id)
+    try:
+        df, dt = parse_date(date_from), parse_date(date_to)
+    except ValueError as e:
+        flash(str(e), 'warning')
+        df = dt = None
+    if df:
+        q = q.filter(StoreSale.sale_date >= df)
+    if dt:
+        q = q.filter(StoreSale.sale_date <= dt)
     sales = q.order_by(StoreSale.sale_date.desc()).paginate(page=page, per_page=20)
     all_parts = SparePart.query.order_by(SparePart.name).all()
-    return render_template('store/sales.html', sales=sales, parts=all_parts, part_id=part_id)
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    return render_template('store/sales.html', sales=sales, parts=all_parts, part_id=part_id,
+                            vehicles=all_vehicles, vehicle_id=vehicle_id, date_from=date_from, date_to=date_to)
 
 
 @app.route('/store/sales/export')
@@ -5355,9 +5371,22 @@ def store_sales():
 @permission_required('store')
 def store_sales_export():
     part_id = request.args.get('part_id', '')
+    vehicle_id = request.args.get('vehicle_id', '')
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
     q = StoreSale.query
     if part_id:
         q = q.filter(StoreSale.part_id == part_id)
+    if vehicle_id:
+        q = q.filter(StoreSale.vehicle_id == vehicle_id)
+    try:
+        df, dt = parse_date(date_from), parse_date(date_to)
+    except ValueError:
+        df = dt = None
+    if df:
+        q = q.filter(StoreSale.sale_date >= df)
+    if dt:
+        q = q.filter(StoreSale.sale_date <= dt)
     sales = q.order_by(StoreSale.sale_date.desc()).all()
     rows = [[s.sale_date, s.part.name, qty_filter(s.quantity), f'{s.unit_cost:.2f}', f'{s.unit_price:.2f}',
              f'{s.total_amount:.2f}', s.vehicle.registration if s.vehicle else '',
