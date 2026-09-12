@@ -4067,6 +4067,52 @@ def vehicle_ledger_rows(vehicle_id, df=None, dt=None, daily_target=None):
     return rows, total_fare, total_diesel_cost, total_garnish
 
 
+IN_GARAGE_REASON = 'In Garage'
+
+
+def backfill_in_garage_days(vehicle, date_from, date_to):
+    """Auto-record a zero-fare 'In Garage' entry for every day in range that
+    has no income (DailyLog) and no fuel (FuelLog) entry at all for this
+    vehicle — i.e. nothing was ever logged for that day, so it reads as the
+    vehicle sitting idle rather than silently vanishing from the ledger and
+    every report built on top of it (Revenue Shortfalls in particular).
+    Never touches today or the future — that day's shift may still be in
+    progress and hasn't been missed yet. Only reaches back to whichever is
+    later of date_from or the vehicle's creation date, so it can't invent
+    days before the vehicle existed in the system. A day with a FuelLog but
+    no DailyLog is left alone — diesel was bought, so the vehicle likely did
+    run and this is a missing fare entry, not an idle day."""
+    yesterday = date.today() - timedelta(days=1)
+    start = max(date_from or vehicle.created_at.date(), vehicle.created_at.date())
+    end = min(date_to or yesterday, yesterday)
+    if start > end:
+        return
+
+    covered = {d for (d,) in db.session.query(DailyLog.log_date).filter(
+        DailyLog.vehicle_id == vehicle.id, DailyLog.log_date.between(start, end)).distinct()}
+    covered |= {d for (d,) in db.session.query(FuelLog.log_date).filter(
+        FuelLog.vehicle_id == vehicle.id, FuelLog.log_date.between(start, end)).distinct()}
+
+    missing = [start + timedelta(days=i) for i in range((end - start).days + 1)
+               if start + timedelta(days=i) not in covered]
+    if not missing:
+        return
+
+    for d in missing:
+        log = DailyLog(
+            vehicle_id=vehicle.id, log_date=d, gross_revenue=0.0, garnish=0.0,
+            reason_for_shortfall=IN_GARAGE_REASON,
+            notes='Auto-recorded — no income was logged for this day.',
+            created_by=current_user.id if current_user.is_authenticated else None,
+        )
+        db.session.add(log)
+        touch_sync_fields(log)
+    log_audit('CREATE', 'daily_logs', None,
+              f'Auto-recorded {len(missing)} "In Garage" day(s) for {vehicle.registration} '
+              f'({missing[0]} to {missing[-1]})')
+    db.session.commit()
+
+
 def resolve_ledger_period(period, today):
     if period == 'today':
         df = dt = today
@@ -4112,6 +4158,7 @@ def driver_ledger():
     rows, total_fare, total_diesel_cost, total_garnish = [], 0.0, 0.0, 0.0
     latest_odometer = None
     if vehicle:
+        backfill_in_garage_days(vehicle, df, dt)
         rows, total_fare, total_diesel_cost, total_garnish = vehicle_ledger_rows(
             vehicle.id, df, dt, daily_target=vehicle.daily_target)
         latest_fuel = FuelLog.query.filter(
@@ -7404,12 +7451,18 @@ def _daily_transactions_pdf(df, dt):
 
 
 def _franchise_reconciliation_pdf(df, dt):
+    """Mirrors report_franchise_reconciliation's suspense-clearance handling
+    (see _apply_suspense_clearance) — without it this PDF would show a
+    variance an admin already cleared in the Suspense Account as still
+    outstanding, disagreeing with the live Reconciliation Schedule page."""
     daily_entries = FranchiseDailyIncome.query.filter(FranchiseDailyIncome.entry_date.between(df, dt)).all()
     weekly_entries = FranchiseWeeklyIncome.query.filter(FranchiseWeeklyIncome.week_start.between(df, dt)).all()
-    daily_rows = _group_income_by_period(daily_entries, 'entry_date')
-    weekly_rows = _group_income_by_period(weekly_entries, 'week_start')
+    daily_rows = _apply_suspense_clearance(_group_income_by_period(daily_entries, 'entry_date'), 'daily', df, dt)
+    weekly_rows = _apply_suspense_clearance(_group_income_by_period(weekly_entries, 'week_start'), 'weekly', df, dt)
     daily_totals = _income_entry_totals(daily_entries)
+    daily_totals['variance'] = sum(r['variance'] for r in daily_rows)
     weekly_totals = _income_entry_totals(weekly_entries)
+    weekly_totals['variance'] = sum(r['variance'] for r in weekly_rows)
 
     def rows_table(rows, totals, period_label):
         headers = [period_label, 'Vehicles', 'Income', 'Expenditure', 'Net Income', 'Deposited', 'Variance']
@@ -7596,6 +7649,7 @@ def _compute_shortfall_rows(df, dt):
         Vehicle.daily_target.isnot(None), Vehicle.daily_target > 0
     ).order_by(Vehicle.registration).all()
     for v in targeted_vehicles:
+        backfill_in_garage_days(v, df, dt)
         logs = DailyLog.query.filter(
             DailyLog.vehicle_id == v.id, DailyLog.log_date.between(df, dt)
         ).all()
@@ -11684,6 +11738,12 @@ def report_franchise_consolidated():
     daily_totals = _income_entry_totals(daily_entries)
     weekly_totals = _income_entry_totals(weekly_entries)
     totals = {k: daily_totals[k] + weekly_totals[k] for k in daily_totals}
+    # Override the raw sum above with the suspense-cleared figure (see
+    # _apply_suspense_clearance) so a variance an admin already cleared in
+    # the Suspense Account doesn't still read as outstanding here.
+    daily_rows = _apply_suspense_clearance(_group_income_by_period(daily_entries, 'entry_date'), 'daily', df, dt)
+    weekly_rows = _apply_suspense_clearance(_group_income_by_period(weekly_entries, 'week_start'), 'weekly', df, dt)
+    totals['variance'] = sum(r['variance'] for r in daily_rows) + sum(r['variance'] for r in weekly_rows)
     totals['income_daily'] = daily_totals['income']
     totals['income_weekly'] = weekly_totals['income']
     totals['total_income'] = totals.pop('income')
@@ -11712,6 +11772,11 @@ def report_franchise_consolidated_export():
     daily_totals = _income_entry_totals(daily_entries)
     weekly_totals = _income_entry_totals(weekly_entries)
     totals = {k: daily_totals[k] + weekly_totals[k] for k in daily_totals}
+    # See report_franchise_consolidated — override with the suspense-cleared
+    # figure so a cleared variance doesn't export as still outstanding.
+    daily_rows = _apply_suspense_clearance(_group_income_by_period(daily_entries, 'entry_date'), 'daily', df, dt)
+    weekly_rows = _apply_suspense_clearance(_group_income_by_period(weekly_entries, 'week_start'), 'weekly', df, dt)
+    totals['variance'] = sum(r['variance'] for r in daily_rows) + sum(r['variance'] for r in weekly_rows)
 
     op_by_category = {}
     for e in op_expenses:
