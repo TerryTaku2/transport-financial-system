@@ -51,7 +51,7 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.utils import secure_filename
 from sqlalchemy import event, func
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import with_loader_criteria
+from sqlalchemy.orm import aliased, with_loader_criteria
 
 # A PyInstaller-frozen spoke .exe needs its .env and default SQLite file
 # next to the .exe itself (sys.executable — stable across runs), not
@@ -6330,9 +6330,20 @@ def majority_conductor_claims(df, dt, vehicle_id=None):
     Returns {driver_id: conductor_id} — a driver with no entry either had
     no conductor logged at all, or lost every one of their pairings to a
     stronger claim elsewhere."""
+    # Joined to Driver on both sides and filtered to non-deleted rows so a
+    # conductor (or driver) who's since been removed can never win a
+    # claim — old logs can still point at a since-deleted person's id
+    # (deleting a driver only soft-deletes them; it doesn't rewrite
+    # history), and awarding them "the" pairing would hand
+    # compute_payroll_earnings a majority conductor with no live Driver
+    # row to show a name for.
+    driver_alias, conductor_alias = aliased(Driver), aliased(Driver)
     pair_totals_q = db.session.query(DailyLog.driver_id, DailyLog.conductor_id,
-                                     func.count(DailyLog.id), func.sum(DailyLog.gross_revenue)).filter(
+                                     func.count(DailyLog.id), func.sum(DailyLog.gross_revenue)).join(
+        driver_alias, DailyLog.driver_id == driver_alias.id).join(
+        conductor_alias, DailyLog.conductor_id == conductor_alias.id).filter(
         DailyLog.driver_id.isnot(None), DailyLog.conductor_id.isnot(None),
+        driver_alias.deleted_at.is_(None), conductor_alias.deleted_at.is_(None),
         DailyLog.log_date.between(df, dt))
     if vehicle_id:
         pair_totals_q = pair_totals_q.filter(DailyLog.vehicle_id == vehicle_id)
@@ -6489,9 +6500,11 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
         if e['driver'].role != 'driver':
             continue
         majority_id = majority_conductor_for_driver.get(e['driver'].id)
+        conductor_driver = None
         if majority_id:
             ce = earnings_by_id.get(majority_id)
             conductor_driver = ce['driver'] if ce else Driver.query.get(majority_id)
+        if majority_id and conductor_driver:
             rate = (ce['rate_pct'] if ce else co_rate * 100) / 100
             commission = max(e['total_revenue'] - e['garnish'], 0) * rate
             deductions = ce['deductions'] if ce else 0
@@ -6514,7 +6527,12 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
             })
             nested_ids.add(majority_id)
         elif e['total_revenue'] or e['days_worked']:
-            # No conductor logged for this driver at all this period.
+            # No conductor logged for this driver at all this period, or
+            # majority_conductor_claims named one whose Driver row no
+            # longer resolves (defensive — majority_conductor_claims
+            # already excludes deleted drivers/conductors from winning a
+            # claim, but this still can't fall through to a nameless
+            # "named" row if some other edge case slips past that).
             placeholder_commission = max(e['total_revenue'] - e['garnish'], 0) * co_rate
             e['conductors'].append({
                 'driver': None, 'is_placeholder': True, 'full': None,
