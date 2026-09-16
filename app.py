@@ -6307,6 +6307,49 @@ def report_income_by_owner():
         date_from=df.strftime('%Y-%m-%d'), date_to=dt.strftime('%Y-%m-%d'), **stmt)
 
 
+def majority_conductor_claims(df, dt, vehicle_id=None):
+    """Which conductor "belongs" to each driver for [df, dt]: real crews
+    are one driver <-> one conductor, not a rotation, so this picks
+    whichever conductor a driver logged the most days with and treats that
+    as the one true pairing for the period — shared by compute_payroll_
+    earnings (to decide who a driver's whole revenue/commission nests
+    under) and the conductor resync tool (to decide what DailyLog.
+    conductor_id should actually be), so the two can never disagree about
+    who's who.
+
+    Assignment is company-wide and greedy, not decided driver-by-driver:
+    every (driver, conductor) pairing this period is ranked by days worked
+    together (ties broken by revenue, then id, so it's always the same
+    answer for the same data), and each driver and each conductor can be
+    claimed at most once, strongest pairing first. That's what stops one
+    conductor from being declared "the" conductor for two different
+    drivers at once — which would double-count their commission — while
+    still letting the obviously-dominant pairing win even when a driver
+    has a stray day or two logged against someone else.
+
+    Returns {driver_id: conductor_id} — a driver with no entry either had
+    no conductor logged at all, or lost every one of their pairings to a
+    stronger claim elsewhere."""
+    pair_totals_q = db.session.query(DailyLog.driver_id, DailyLog.conductor_id,
+                                     func.count(DailyLog.id), func.sum(DailyLog.gross_revenue)).filter(
+        DailyLog.driver_id.isnot(None), DailyLog.conductor_id.isnot(None),
+        DailyLog.log_date.between(df, dt))
+    if vehicle_id:
+        pair_totals_q = pair_totals_q.filter(DailyLog.vehicle_id == vehicle_id)
+    ranked_pairs = sorted(
+        pair_totals_q.group_by(DailyLog.driver_id, DailyLog.conductor_id).all(),
+        key=lambda p: (-(p[2] or 0), -(p[3] or 0), p[0], p[1]))
+
+    majority_conductor_for_driver, claimed_drivers, claimed_conductors = {}, set(), set()
+    for drv_id, cond_id, _days, _rev in ranked_pairs:
+        if drv_id in claimed_drivers or cond_id in claimed_conductors:
+            continue
+        majority_conductor_for_driver[drv_id] = cond_id
+        claimed_drivers.add(drv_id)
+        claimed_conductors.add(cond_id)
+    return majority_conductor_for_driver
+
+
 def compute_payroll_earnings(df, dt, vehicle_id=None):
     """Crew commission breakdown for [df, dt] — shared by the payroll report
     page, its Excel/PDF exports, and the vehicle-scoped Wages & Salaries
@@ -6432,17 +6475,6 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
     # row instead of fragmenting across every conductor who ever touched
     # one of that driver's logs.
     #
-    # Assignment is company-wide and greedy, not decided driver-by-driver:
-    # every (driver, conductor) pairing this period is ranked by days
-    # worked together (ties broken by revenue, then id, so it's always the
-    # same answer for the same data), and each driver and each conductor
-    # can be claimed at most once, strongest pairing first. That's what
-    # stops one conductor from being declared "the" conductor for two
-    # different drivers at once — which would otherwise double-count their
-    # commission (once under each driver) — while still letting the
-    # obviously-dominant pairing win even when a driver has a stray day or
-    # two logged against someone else.
-    #
     # A conductor who never wins a claim (every one of their logged days
     # belonged to a driver whose majority conductor turned out to be
     # someone else) has already had that same revenue fully credited over
@@ -6450,24 +6482,7 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
     # here rather than counting it a second time. Real deductions/payments
     # against them still show, since those are owed regardless.
     earnings_by_id = {e['driver'].id: e for e in earnings}
-
-    pair_totals_q = db.session.query(DailyLog.driver_id, DailyLog.conductor_id,
-                                     func.count(DailyLog.id), func.sum(DailyLog.gross_revenue)).filter(
-        DailyLog.driver_id.isnot(None), DailyLog.conductor_id.isnot(None),
-        DailyLog.log_date.between(df, dt))
-    if vehicle_id:
-        pair_totals_q = pair_totals_q.filter(DailyLog.vehicle_id == vehicle_id)
-    ranked_pairs = sorted(
-        pair_totals_q.group_by(DailyLog.driver_id, DailyLog.conductor_id).all(),
-        key=lambda p: (-(p[2] or 0), -(p[3] or 0), p[0], p[1]))
-
-    majority_conductor_for_driver, claimed_drivers, claimed_conductors = {}, set(), set()
-    for drv_id, cond_id, _days, _rev in ranked_pairs:
-        if drv_id in claimed_drivers or cond_id in claimed_conductors:
-            continue
-        majority_conductor_for_driver[drv_id] = cond_id
-        claimed_drivers.add(drv_id)
-        claimed_conductors.add(cond_id)
+    majority_conductor_for_driver = majority_conductor_claims(df, dt, vehicle_id)
 
     grouped, nested_ids = [], set()
     for e in earnings:
@@ -6541,6 +6556,102 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
             total_outstanding += ce['outstanding']
 
     return earnings, total_commissions, total_garnish, total_deductions, total_paid, total_outstanding
+
+
+def conductor_resync_plan(df, dt, vehicle_id=None):
+    """What a conductor resync for [df, dt] would change: every DailyLog
+    whose conductor_id doesn't match majority_conductor_claims' one true
+    pairing for that log's driver — either corrected to that driver's real
+    conductor, or cleared to none if the driver never settled on one this
+    period (no conductor logged at all, or every pairing they had lost its
+    claim to a stronger one elsewhere — same as when Payroll falls back to
+    a placeholder row for them). Read-only: callers decide whether to
+    apply what's returned."""
+    majority = majority_conductor_claims(df, dt, vehicle_id)
+
+    logs_q = DailyLog.query.filter(DailyLog.driver_id.isnot(None), DailyLog.log_date.between(df, dt))
+    if vehicle_id:
+        logs_q = logs_q.filter(DailyLog.vehicle_id == vehicle_id)
+
+    driver_ids = {d for (d,) in db.session.query(DailyLog.driver_id).filter(
+        DailyLog.driver_id.isnot(None), DailyLog.log_date.between(df, dt)).distinct()}
+    conductor_ids = {c for c in majority.values()} | {
+        c for (c,) in db.session.query(DailyLog.conductor_id).filter(
+            DailyLog.conductor_id.isnot(None), DailyLog.log_date.between(df, dt)).distinct()}
+    drivers_by_id = {d.id: d for d in Driver.query.filter(Driver.id.in_(driver_ids)).all()} if driver_ids else {}
+    conductors_by_id = {c.id: c for c in Driver.query.filter(Driver.id.in_(conductor_ids)).all()} if conductor_ids else {}
+
+    changes = []
+    for log in logs_q.order_by(DailyLog.log_date).all():
+        target_id = majority.get(log.driver_id)
+        if log.conductor_id == target_id:
+            continue
+        changes.append({
+            'log': log,
+            'driver': drivers_by_id.get(log.driver_id),
+            'old_conductor': conductors_by_id.get(log.conductor_id) if log.conductor_id else None,
+            'new_conductor': conductors_by_id.get(target_id) if target_id else None,
+        })
+    return changes
+
+
+@app.route('/finance/payroll/resync-conductors')
+@login_required
+@admin_required
+def payroll_resync_conductors():
+    """Preview-only: shows what a conductor resync would change for the
+    chosen period without writing anything, so an admin can review before
+    committing via payroll_resync_conductors_apply."""
+    df, dt = query_date_range()
+    date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    vehicle_id = request.args.get('vehicle_id', '')
+    changes = conductor_resync_plan(df, dt, vehicle_id or None)
+    all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    return render_template('finance/resync_conductors.html', changes=changes,
+        date_from=date_from_str, date_to=date_to_str, vehicles=all_vehicles, vehicle_id=vehicle_id)
+
+
+@app.route('/finance/payroll/resync-conductors/apply', methods=['POST'])
+@login_required
+@admin_required
+@handle_form_errors
+def payroll_resync_conductors_apply():
+    """Applies exactly what payroll_resync_conductors just previewed — the
+    plan is recomputed here from the same [date_from, date_to] rather than
+    trusting anything posted from the preview page, so it can't apply a
+    stale plan if the underlying logs changed in between."""
+    date_from = request.form.get('date_from', '')
+    date_to = request.form.get('date_to', '')
+    vehicle_id = request.form.get('vehicle_id', '')
+    try:
+        df = parse_date(date_from)
+        dt = parse_date(date_to)
+        if df is None or dt is None:
+            raise ValueError('Both dates are required.')
+    except ValueError:
+        flash('Invalid date range.', 'danger')
+        return redirect(url_for('report_payroll'))
+
+    changes = conductor_resync_plan(df, dt, vehicle_id or None)
+    if not changes:
+        flash('Nothing to resync — every log already matches its driver\'s majority conductor.', 'info')
+        return redirect(url_for('report_payroll', date_from=date_from, date_to=date_to))
+
+    for change in changes:
+        log = change['log']
+        new_conductor = change['new_conductor']
+        log.conductor_id = new_conductor.id if new_conductor else None
+        log.updated_by = current_user.id
+        log.updated_at = datetime.now(timezone.utc)
+        touch_sync_fields(log)
+
+    log_audit('UPDATE', 'daily_logs', None,
+              f'Resynced conductor assignments for {date_from} to {date_to}'
+              + (f', vehicle #{vehicle_id}' if vehicle_id else '')
+              + f' — {len(changes)} log(s) corrected to each driver\'s majority conductor.')
+    db.session.commit()
+    flash(f'{len(changes)} log(s) updated to match each driver\'s majority conductor.', 'success')
+    return redirect(url_for('report_payroll', date_from=date_from, date_to=date_to))
 
 
 @app.route('/reports/payroll')

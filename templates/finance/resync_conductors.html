@@ -1,0 +1,72 @@
+{% extends 'base.html' %}
+{% block title %}Resync Conductors{% endblock %}
+{% block page_title %}Resync Conductor Assignments{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Resync Conductor Assignments</h1>
+    <div class="subtitle">Corrects DailyLog.conductor_id to match each driver's one true conductor for the period — same logic Payroll already uses to display it, but written back to the actual records.</div>
+  </div>
+  <a href="{{ url_for('report_payroll', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
+    <i data-feather="arrow-left"></i> Back to Payroll
+  </a>
+</div>
+
+<form method="GET" class="filter-bar mb-16">
+  <div class="form-group">
+    <label>From</label>
+    <input type="date" name="date_from" value="{{ date_from }}">
+  </div>
+  <div class="form-group">
+    <label>To</label>
+    <input type="date" name="date_to" value="{{ date_to }}">
+  </div>
+  <div class="form-group">
+    <label>Vehicle</label>
+    <select name="vehicle_id">
+      <option value="">All Vehicles</option>
+      {% for v in vehicles %}
+      <option value="{{ v.id }}" {% if vehicle_id|string == v.id|string %}selected{% endif %}>{{ v.registration }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <button type="submit" class="btn btn-primary"><i data-feather="search"></i> Preview</button>
+</form>
+
+<div class="card">
+  <div class="card-header"><h3>{{ changes|length }} log(s) would change</h3></div>
+  {% if changes %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Driver</th><th>Current Conductor</th><th></th><th>Corrected Conductor</th></tr>
+      </thead>
+      <tbody>
+        {% for c in changes %}
+        <tr>
+          <td>{{ c.log.log_date }}</td>
+          <td>{{ c.driver.name if c.driver else '—' }}</td>
+          <td>{{ c.old_conductor.name if c.old_conductor else '— none —' }}</td>
+          <td><i data-feather="arrow-right"></i></td>
+          <td><strong>{{ c.new_conductor.name if c.new_conductor else '— none (no clear majority) —' }}</strong></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <div class="card-body" style="border-top:1px solid var(--border);">
+    <form method="POST" action="{{ url_for('payroll_resync_conductors_apply') }}"
+          data-confirm="Apply these {{ changes|length }} conductor correction(s) for {{ date_from }} to {{ date_to }}? This rewrites the underlying daily log records, not just how Payroll displays them.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="date_from" value="{{ date_from }}">
+      <input type="hidden" name="date_to" value="{{ date_to }}">
+      <input type="hidden" name="vehicle_id" value="{{ vehicle_id }}">
+      <button type="submit" class="btn btn-primary"><i data-feather="check"></i> Confirm &amp; Apply {{ changes|length }} Correction(s)</button>
+    </form>
+  </div>
+  {% else %}
+  <div class="empty-state"><p>Nothing to change for this period — every log already matches its driver's majority conductor.</p></div>
+  {% endif %}
+</div>
+{% endblock %}
