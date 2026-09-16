@@ -140,6 +140,16 @@
           </select>
         </div>
         <div class="form-group">
+          <label>Conductor</label>
+          <select name="conductor_id">
+            <option value="">— Auto (system picks) —</option>
+            {% for c in conductors %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-hint">Leave on Auto to use this driver's paired/assigned conductor, or pick one directly.</div>
+        </div>
+        <div class="form-group">
           <label>Daily Fare (USD)</label>
           <input type="number" name="fare" step="any" min="0" placeholder="0.00">
           <div class="form-hint">Can be logged with no driver selected yet.</div>

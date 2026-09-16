@@ -2736,12 +2736,27 @@ def resolve_conductor(driver, vehicle_id):
     (Driver.assigned_vehicle_id) — a conductor can be attached either way,
     and either attachment should flow through to DailyLog.conductor_id (and
     from there into payroll — see compute_payroll_earnings) without the
-    person logging the trip having to pick the conductor by hand."""
-    if driver and driver.paired_conductors:
-        return driver.paired_conductors[0]
+    person logging the trip having to pick the conductor by hand.
+
+    Both lookups are explicitly ordered by id. Without that, if more than
+    one active conductor is paired to the same driver (or assigned to the
+    same vehicle) — e.g. two conductor profiles both set to work under the
+    same driver by mistake — the "first" one picked isn't guaranteed to be
+    the same conductor from one trip to the next (Driver.paired_conductors
+    has no defined order, and neither does an unordered SQL query on
+    Postgres); the same driver could silently get a different conductor
+    auto-attached on different days despite nothing about the pairing
+    having changed, splitting one crew's days/commission across two people
+    in payroll instead of the one conductor actually meant."""
+    if driver:
+        paired = Driver.query.filter_by(
+            paired_driver_id=driver.id, role='conductor', status='active'
+        ).order_by(Driver.id).first()
+        if paired:
+            return paired
     if vehicle_id:
         return Driver.query.filter_by(assigned_vehicle_id=vehicle_id, role='conductor',
-                                      status='active').first()
+                                      status='active').order_by(Driver.id).first()
     return None
 
 
@@ -3881,6 +3896,7 @@ def ledger_entry_edit(vehicle_id, log_date_str):
     if request.method == 'POST':
         new_log_date = parse_date(request.form['log_date'])
         driver_id = form_int(request.form, 'driver_id', required=False)
+        conductor_id_input = form_int(request.form, 'conductor_id', required=False)
         fare = form_float(request.form, 'fare', required=False, min_value=0)
         garnish = form_float(request.form, 'garnish', required=False, min_value=0)
         reason_for_shortfall = request.form.get('reason_for_shortfall', '').strip() or None
@@ -3905,7 +3921,17 @@ def ledger_entry_edit(vehicle_id, log_date_str):
 
         if fare is not None:
             driver = Driver.query.filter_by(id=driver_id).first()
-            conductor = resolve_conductor(driver, vehicle_id)
+            # Leaving the Conductor field on "Auto" re-resolves it the same
+            # way every save always has; an explicit choice overrides that
+            # instead of being silently clobbered on the next edit — needed
+            # since auto-resolution has no visibility into which crew
+            # actually rode together, only what's paired/assigned on file.
+            if conductor_id_input:
+                conductor = Driver.query.filter_by(id=conductor_id_input, role='conductor', status='active').first()
+                if not conductor:
+                    raise ValueError('Selected conductor not found.')
+            else:
+                conductor = resolve_conductor(driver, vehicle_id)
             if log is None:
                 log = DailyLog(vehicle_id=vehicle_id, log_date=new_log_date, created_by=current_user.id)
                 db.session.add(log)
@@ -3942,8 +3968,9 @@ def ledger_entry_edit(vehicle_id, log_date_str):
         return redirect(url_for('driver_ledger', vehicle_id=vehicle_id, period=period, date_from=date_from, date_to=date_to))
 
     all_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
+    all_conductors = Driver.query.filter_by(role='conductor', status='active').order_by(Driver.name).all()
     return render_template('logs/ledger_entry_form.html', vehicle=vehicle, log=log, fuel=fuel,
-                           log_date=log_date, drivers=all_drivers, period=period,
+                           log_date=log_date, drivers=all_drivers, conductors=all_conductors, period=period,
                            date_from=date_from, date_to=date_to)
 
 
@@ -4167,8 +4194,9 @@ def driver_ledger():
         latest_odometer = latest_fuel.odometer if latest_fuel else None
 
     all_drivers = Driver.query.filter_by(role='driver', status='active').order_by(Driver.name).all()
+    all_conductors = Driver.query.filter_by(role='conductor', status='active').order_by(Driver.name).all()
     return render_template('logs/ledger.html', vehicles=all_vehicles, vehicle=vehicle,
-        drivers=all_drivers,
+        drivers=all_drivers, conductors=all_conductors,
         rows=rows, total_fare=total_fare, total_diesel_cost=total_diesel_cost,
         total_garnish=total_garnish,
         period=period, date_from=date_from_str, date_to=date_to_str,
@@ -4198,6 +4226,7 @@ def driver_ledger_add():
 
         log_date = parse_date(request.form['log_date'])
         driver_id = form_int(request.form, 'driver_id', required=False)
+        conductor_id_input = form_int(request.form, 'conductor_id', required=False)
         fare = form_float(request.form, 'fare', required=False, min_value=0)
         garnish = form_float(request.form, 'garnish', required=False, min_value=0)
         reason_for_shortfall = request.form.get('reason_for_shortfall', '').strip() or None
@@ -4229,7 +4258,17 @@ def driver_ledger_add():
                                   f'driver, fare and garnish already exists — this looks like a duplicate submission.')
 
             driver = Driver.query.filter_by(id=driver_id).first()
-            conductor = resolve_conductor(driver, vehicle_id)
+            # Leaving the Conductor field on "Auto" lets resolve_conductor
+            # pick one the same way it always has; an explicit choice here
+            # overrides that (see the ledger's Conductor field) — needed
+            # since auto-resolution has no visibility into which crew
+            # actually rode together, only what's paired/assigned on file.
+            if conductor_id_input:
+                conductor = Driver.query.filter_by(id=conductor_id_input, role='conductor', status='active').first()
+                if not conductor:
+                    raise ValueError('Selected conductor not found.')
+            else:
+                conductor = resolve_conductor(driver, vehicle_id)
             daily = DailyLog(
                 vehicle_id=vehicle_id, driver_id=driver_id, conductor_id=conductor.id if conductor else None,
                 log_date=log_date, gross_revenue=fare or 0.0,
