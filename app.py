@@ -6607,22 +6607,31 @@ def payroll_resync_conductors():
     vehicle_id = request.args.get('vehicle_id', '')
     changes = conductor_resync_plan(df, dt, vehicle_id or None)
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
+    all_conductors = Driver.query.filter_by(role='conductor', status='active').order_by(Driver.name).all()
     return render_template('finance/resync_conductors.html', changes=changes,
-        date_from=date_from_str, date_to=date_to_str, vehicles=all_vehicles, vehicle_id=vehicle_id)
+        date_from=date_from_str, date_to=date_to_str, vehicles=all_vehicles, vehicle_id=vehicle_id,
+        conductors=all_conductors)
 
 
 @app.route('/finance/payroll/resync-conductors/apply', methods=['POST'])
 @login_required
 @admin_required
-@handle_form_errors
 def payroll_resync_conductors_apply():
-    """Applies exactly what payroll_resync_conductors just previewed — the
-    plan is recomputed here from the same [date_from, date_to] rather than
-    trusting anything posted from the preview page, so it can't apply a
-    stale plan if the underlying logs changed in between."""
+    """Applies what payroll_resync_conductors previewed, honoring any
+    per-row overrides the admin picked there (see the Conductor dropdown
+    on each row) over the auto-suggested majority. The plan is still
+    recomputed here from [date_from, date_to] rather than trusting the
+    posted log ids wholesale — that fixes which *logs* are in scope (so a
+    stale preview can't touch logs outside today's actual plan), while a
+    submitted conductor_for_<log_id> field decides what each one is
+    corrected *to*. This is a POST-only route, so errors are handled
+    locally and redirect back to the preview rather than to request.url
+    (which would GET this URL and 405)."""
     date_from = request.form.get('date_from', '')
     date_to = request.form.get('date_to', '')
     vehicle_id = request.form.get('vehicle_id', '')
+    back_to_preview = lambda: redirect(url_for('payroll_resync_conductors',
+        date_from=date_from, date_to=date_to, vehicle_id=vehicle_id))
     try:
         df = parse_date(date_from)
         dt = parse_date(date_to)
@@ -6637,20 +6646,45 @@ def payroll_resync_conductors_apply():
         flash('Nothing to resync — every log already matches its driver\'s majority conductor.', 'info')
         return redirect(url_for('report_payroll', date_from=date_from, date_to=date_to))
 
-    for change in changes:
-        log = change['log']
-        new_conductor = change['new_conductor']
-        log.conductor_id = new_conductor.id if new_conductor else None
+    try:
+        resolved = []
+        for change in changes:
+            log = change['log']
+            field_name = f'conductor_for_{log.id}'
+            if field_name not in request.form:
+                # Not part of the submitted form (the plan grew between
+                # preview and submit) — fall back to the auto-suggestion.
+                new_conductor_id = change['new_conductor'].id if change['new_conductor'] else None
+            else:
+                new_conductor_id = form_int(request.form, field_name, required=False)
+                if new_conductor_id and not Driver.query.filter_by(
+                        id=new_conductor_id, role='conductor', status='active').first():
+                    raise ValueError(f'Conductor selection for {log.log_date} is invalid.')
+            resolved.append((log, new_conductor_id))
+    except ValueError as e:
+        flash(str(e), 'danger')
+        return back_to_preview()
+
+    applied = 0
+    for log, new_conductor_id in resolved:
+        if log.conductor_id == new_conductor_id:
+            continue
+        log.conductor_id = new_conductor_id
         log.updated_by = current_user.id
         log.updated_at = datetime.now(timezone.utc)
         touch_sync_fields(log)
+        applied += 1
+
+    if applied == 0:
+        flash('No changes applied — every selection matched the log\'s current conductor.', 'info')
+        return redirect(url_for('report_payroll', date_from=date_from, date_to=date_to))
 
     log_audit('UPDATE', 'daily_logs', None,
               f'Resynced conductor assignments for {date_from} to {date_to}'
               + (f', vehicle #{vehicle_id}' if vehicle_id else '')
-              + f' — {len(changes)} log(s) corrected to each driver\'s majority conductor.')
+              + f' — {applied} log(s) corrected (admin-reviewed).')
     db.session.commit()
-    flash(f'{len(changes)} log(s) updated to match each driver\'s majority conductor.', 'success')
+    flash(f'{applied} log(s) updated.', 'success')
     return redirect(url_for('report_payroll', date_from=date_from, date_to=date_to))
 
 

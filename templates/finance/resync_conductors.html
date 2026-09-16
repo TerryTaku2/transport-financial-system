@@ -37,34 +37,42 @@
 <div class="card">
   <div class="card-header"><h3>{{ changes|length }} log(s) would change</h3></div>
   {% if changes %}
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr><th>Date</th><th>Driver</th><th>Current Conductor</th><th></th><th>Corrected Conductor</th></tr>
-      </thead>
-      <tbody>
-        {% for c in changes %}
-        <tr>
-          <td>{{ c.log.log_date }}</td>
-          <td>{{ c.driver.name if c.driver else '—' }}</td>
-          <td>{{ c.old_conductor.name if c.old_conductor else '— none —' }}</td>
-          <td><i data-feather="arrow-right"></i></td>
-          <td><strong>{{ c.new_conductor.name if c.new_conductor else '— none (no clear majority) —' }}</strong></td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-  <div class="card-body" style="border-top:1px solid var(--border);">
-    <form method="POST" action="{{ url_for('payroll_resync_conductors_apply') }}"
-          data-confirm="Apply these {{ changes|length }} conductor correction(s) for {{ date_from }} to {{ date_to }}? This rewrites the underlying daily log records, not just how Payroll displays them.">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-      <input type="hidden" name="date_from" value="{{ date_from }}">
-      <input type="hidden" name="date_to" value="{{ date_to }}">
-      <input type="hidden" name="vehicle_id" value="{{ vehicle_id }}">
+  <form method="POST" action="{{ url_for('payroll_resync_conductors_apply') }}"
+        data-confirm="Apply these conductor correction(s) for {{ date_from }} to {{ date_to }}? This rewrites the underlying daily log records, not just how Payroll displays them.">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="date_from" value="{{ date_from }}">
+    <input type="hidden" name="date_to" value="{{ date_to }}">
+    <input type="hidden" name="vehicle_id" value="{{ vehicle_id }}">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Driver</th><th>Current Conductor</th><th></th><th>Match Correctly</th></tr>
+        </thead>
+        <tbody>
+          {% for c in changes %}
+          <tr>
+            <td>{{ c.log.log_date }}</td>
+            <td>{{ c.driver.name if c.driver else '—' }}</td>
+            <td>{{ c.old_conductor.name if c.old_conductor else '— none —' }}</td>
+            <td><i data-feather="arrow-right"></i></td>
+            <td>
+              <select name="conductor_for_{{ c.log.id }}" style="min-width:200px;">
+                <option value="">— None (clear) —</option>
+                {% for co in conductors %}
+                <option value="{{ co.id }}" {% if c.new_conductor and c.new_conductor.id == co.id %}selected{% endif %}>{{ co.name }}{% if c.new_conductor and c.new_conductor.id == co.id %} (suggested){% endif %}</option>
+                {% endfor %}
+              </select>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="card-body" style="border-top:1px solid var(--border);">
+      <div class="form-hint mb-8">Each row defaults to the suggested majority conductor — change any row's dropdown before applying to correct it instead.</div>
       <button type="submit" class="btn btn-primary"><i data-feather="check"></i> Confirm &amp; Apply {{ changes|length }} Correction(s)</button>
-    </form>
-  </div>
+    </div>
+  </form>
   {% else %}
   <div class="empty-state"><p>Nothing to change for this period — every log already matches its driver's majority conductor.</p></div>
   {% endif %}
