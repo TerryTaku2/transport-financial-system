@@ -6388,38 +6388,84 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
     total_paid = sum(e['paid'] for e in earnings)
     total_outstanding = sum(e['outstanding'] for e in earnings)
 
-    # Nest each conductor's row under their paired driver so payroll reads
-    # crew-by-crew (driver + the conductor who rode with them) instead of one
-    # flat alphabetical list mixing roles. A conductor only nests if their
-    # paired driver also has an earnings row this period — otherwise (no
-    # pairing set, or the paired driver didn't earn anything) it stays as
-    # its own top-level row, same as before. If a driver has no conductor
-    # to nest, a placeholder row still prints under them labeled "Conductor",
-    # with commission projected off the driver's own revenue at the standard
-    # conductor rate — there's no CommissionPayment target without a real
-    # person to pay it to yet, but the conductor's cut is still owed on that
-    # revenue, so it's folded into the totals below (just not payable via
-    # the per-row "Pay" action, which needs a real driver_id).
+    # Nest each conductor's row under every driver they actually worked with
+    # this period, so payroll reads crew-by-crew (driver + the conductor who
+    # rode with them) instead of one flat alphabetical list mixing roles —
+    # and so a driver's Revenue Generated / Days Worked always equals the
+    # sum of what's shown for their nested conductor(s) (crews that rotate
+    # conductors day-to-day nest more than one under the same driver, each
+    # scoped to just the days that pairing actually happened).
+    #
+    # Who "actually worked with" a driver is read off each DailyLog's own
+    # conductor_id, not Driver.paired_driver_id — that field only
+    # auto-selects a conductor when a *new* trip is logged (see
+    # resolve_conductor); it says nothing about who was on a given day's
+    # trips, and a pairing that was never set (or changed mid-period) would
+    # otherwise hide a real, named conductor behind a fabricated placeholder
+    # while double-counting commission already credited to them elsewhere.
+    #
+    # Revenue/days/garnish/commission on each nested row are scoped to that
+    # exact driver+conductor pairing (a straight SQL group-by partition of
+    # the driver's own total, so it always adds back up exactly). Paid/
+    # deductions/net pay/outstanding are each conductor's real, whole-period
+    # totals repeated on every pairing they appear in — intentionally not
+    # split, since a payment or deduction is against the person, not a
+    # specific driver pairing, and understating them per-row would risk
+    # someone being paid less than they're actually still owed. `full`
+    # points back at that same whole-period entry so anything that needs
+    # the conductor exactly once (payslips, the pay sheet) can dedupe on it
+    # instead of double-paying/double-printing a rotating conductor.
+    earnings_by_id = {e['driver'].id: e for e in earnings}
     grouped, nested_ids = [], set()
     placeholder_total = 0.0
     for e in earnings:
         if e['driver'].role != 'driver':
             continue
-        for ce in earnings:
-            if ce['driver'].role == 'conductor' and ce['driver'].paired_driver_id == e['driver'].id:
-                e['conductors'].append(ce)
-                nested_ids.add(ce['driver'].id)
-        if not e['conductors']:
-            placeholder_commission = max(e['total_revenue'] - e['garnish'], 0) * co_rate
-            e['conductors'].append({
-                'driver': None, 'is_placeholder': True,
-                'total_revenue': e['total_revenue'], 'days_worked': e['days_worked'],
-                'rate_pct': co_rate * 100,
-                'commission': placeholder_commission, 'garnish': e['garnish'],
-                'deductions': 0, 'deduction_rows': [], 'net_pay': placeholder_commission, 'paid': 0, 'payments': [],
-                'outstanding': placeholder_commission,
-            })
-            placeholder_total += placeholder_commission
+        pair_q = db.session.query(DailyLog.conductor_id, func.sum(DailyLog.gross_revenue),
+                                  func.count(DailyLog.id), func.sum(DailyLog.garnish)).filter(
+            DailyLog.driver_id == e['driver'].id, DailyLog.log_date.between(df, dt))
+        if vehicle_id:
+            pair_q = pair_q.filter(DailyLog.vehicle_id == vehicle_id)
+        for conductor_id, pair_rev, pair_days, pair_garnish in pair_q.group_by(DailyLog.conductor_id).all():
+            pair_rev, pair_days, pair_garnish = pair_rev or 0, pair_days or 0, pair_garnish or 0
+            if not (pair_rev or pair_days):
+                continue
+            ce = earnings_by_id.get(conductor_id) if conductor_id else None
+            if conductor_id and ce and ce['driver'].role == 'conductor':
+                rate = ce['rate_pct'] / 100
+                e['conductors'].append({
+                    'driver': ce['driver'], 'is_placeholder': False, 'full': ce,
+                    'total_revenue': pair_rev, 'days_worked': pair_days, 'rate_pct': ce['rate_pct'],
+                    'commission': max(pair_rev - pair_garnish, 0) * rate, 'garnish': pair_garnish,
+                    'deductions': ce['deductions'], 'deduction_rows': ce['deduction_rows'],
+                    'net_pay': ce['net_pay'], 'paid': ce['paid'], 'payments': ce['payments'],
+                    'outstanding': ce['outstanding'],
+                })
+                nested_ids.add(conductor_id)
+            elif conductor_id and (co_driver := Driver.query.get(conductor_id)):
+                # A real conductor logged these trips but has no earnings
+                # row this period (e.g. deactivated since) — still show
+                # their actual name rather than a placeholder; no payment
+                # history is pulled in since they're no longer active.
+                commission = max(pair_rev - pair_garnish, 0) * co_rate
+                e['conductors'].append({
+                    'driver': co_driver, 'is_placeholder': False, 'full': None,
+                    'total_revenue': pair_rev, 'days_worked': pair_days, 'rate_pct': co_rate * 100,
+                    'commission': commission, 'garnish': pair_garnish,
+                    'deductions': 0, 'deduction_rows': [], 'net_pay': commission, 'paid': 0, 'payments': [],
+                    'outstanding': commission,
+                })
+            else:
+                # Genuinely no conductor on record for these trips at all.
+                placeholder_commission = max(pair_rev - pair_garnish, 0) * co_rate
+                e['conductors'].append({
+                    'driver': None, 'is_placeholder': True, 'full': None,
+                    'total_revenue': pair_rev, 'days_worked': pair_days, 'rate_pct': co_rate * 100,
+                    'commission': placeholder_commission, 'garnish': pair_garnish,
+                    'deductions': 0, 'deduction_rows': [], 'net_pay': placeholder_commission, 'paid': 0, 'payments': [],
+                    'outstanding': placeholder_commission,
+                })
+                placeholder_total += placeholder_commission
         grouped.append(e)
     grouped.extend(e for e in earnings if e['driver'].role == 'conductor' and e['driver'].id not in nested_ids)
     grouped.extend(e for e in earnings if e['driver'].role == 'other')
@@ -6568,7 +6614,7 @@ def export_payroll_paid_pdf():
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
     earnings, *_ = compute_payroll_earnings(df, dt)
-    paid_rows = [(name, role, e) for name, role, e in _flatten_wages_earnings(earnings) if e['paid'] > 0]
+    paid_rows = [(name, role, e) for name, role, e in _flatten_wages_earnings(earnings, dedupe=True) if e['paid'] > 0]
 
     if not paid_rows:
         flash(f'No paid crew for {date_from_str} to {date_to_str}.', 'warning')
@@ -6695,7 +6741,7 @@ def payroll_paid_sheet_pdf():
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
     earnings, *_ = compute_payroll_earnings(df, dt)
-    crew_rows = [(name, role, row) for name, role, row in _flatten_wages_earnings(earnings) if row['paid'] > 0]
+    crew_rows = [(name, role, row) for name, role, row in _flatten_wages_earnings(earnings, dedupe=True) if row['paid'] > 0]
 
     if not crew_rows:
         flash(f'No paid crew for {date_from_str} to {date_to_str}.', 'warning')
@@ -6741,7 +6787,7 @@ def payroll_paid_sheet_csv():
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
     earnings, *_ = compute_payroll_earnings(df, dt)
-    crew_rows = [(name, role, row) for name, role, row in _flatten_wages_earnings(earnings) if row['paid'] > 0]
+    crew_rows = [(name, role, row) for name, role, row in _flatten_wages_earnings(earnings, dedupe=True) if row['paid'] > 0]
 
     if not crew_rows:
         flash(f'No paid crew for {date_from_str} to {date_to_str}.', 'warning')
@@ -6759,17 +6805,40 @@ def payroll_paid_sheet_csv():
     return csv_export_response(f'payroll_paid_sheet_{date_from_str}_to_{date_to_str}.csv', header, out_rows)
 
 
-def _flatten_wages_earnings(earnings):
+def _flatten_wages_earnings(earnings, dedupe=False):
     """Flatten compute_payroll_earnings' driver-with-nested-conductors
     structure into one ordered list of (name, role, row) for a simple
     per-crew-member table — the Wages & Salaries report doesn't need the
-    Payroll page's Pay/Deduct actions, just the accrued figures."""
+    Payroll page's Pay/Deduct actions, just the accrued figures.
+
+    A conductor who rotated across several drivers this period nests once
+    per driver they actually worked with (see compute_payroll_earnings),
+    each nested row scoped to that pairing's own revenue/days/commission
+    but carrying the conductor's whole-period paid/deductions/net pay/
+    outstanding. That's fine for a per-pairing breakdown, but anything that
+    treats each row as one person's payable record — a "who's been paid"
+    listing, a signature sheet, a batch of payslips — must count that
+    person exactly once or it'll multiply their pay/deductions by however
+    many drivers they rotated with. Pass dedupe=True for those callers: it
+    resolves each nested conductor row back to its single whole-period
+    record (via 'full') and skips repeats."""
     flat = []
+    seen_ids = set()
     for e in earnings:
         flat.append((e['driver'].name, e['driver'].role.title(), e))
         for ce in e['conductors']:
-            name = ce['driver'].name if ce['driver'] else f"{e['driver'].name.split(' ')[0]} Conductor"
-            flat.append((name, 'Conductor', ce))
+            if ce.get('is_placeholder'):
+                name = f"{e['driver'].name.split(' ')[0]} Conductor"
+                flat.append((name, 'Conductor', ce))
+                continue
+            if dedupe:
+                row = ce.get('full') or ce
+                if row['driver'].id in seen_ids:
+                    continue
+                seen_ids.add(row['driver'].id)
+                flat.append((row['driver'].name, 'Conductor', row))
+            else:
+                flat.append((ce['driver'].name, 'Conductor', ce))
     return flat
 
 
@@ -7905,7 +7974,7 @@ def payroll_pay_sheet_pdf():
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
     earnings, *_ = compute_payroll_earnings(df, dt)
-    crew_rows = _flatten_wages_earnings(earnings)
+    crew_rows = _flatten_wages_earnings(earnings, dedupe=True)
 
     if not crew_rows:
         flash(f'No payroll activity for {date_from_str} to {date_to_str}.', 'warning')
@@ -7963,6 +8032,12 @@ def driver_payslip_pdf(driver_id):
     if e is None:
         flash(f'{driver.name} has no payroll activity for {date_from_str} to {date_to_str}.', 'warning')
         return redirect(url_for('report_payroll', date_from=date_from_str, date_to=date_to_str))
+    # A conductor who rotated across several drivers this period matches
+    # more than one fragment above, each scoped to just one driver pairing
+    # (see compute_payroll_earnings) — resolve back to their single
+    # whole-period record so this payslip shows their real total, not
+    # whichever partial pairing happened to be found first.
+    e = e.get('full') or e
 
     deduction_rows, payment_rows = _crew_deduction_payment_rows(driver_id, df, dt)
 
@@ -8025,6 +8100,7 @@ def payroll_payslips_print_all():
         return redirect(url_for('report_payroll', date_from=date_from_str, date_to=date_to_str))
 
     elements = []
+    printed_conductor_ids = set()
     for e in earnings:
         deduction_rows, payment_rows = _crew_deduction_payment_rows(e['driver'].id, df, dt)
         elements += _payslip_elements(e['driver'].name, e['driver'].role.title(), e,
@@ -8037,8 +8113,17 @@ def payroll_payslips_print_all():
                 elements += _payslip_elements(f'{first_name} Conductor', 'Conductor', ce, [], [],
                                                date_from_str, date_to_str)
             else:
-                c_deduction_rows, c_payment_rows = _crew_deduction_payment_rows(ce['driver'].id, df, dt)
-                elements += _payslip_elements(ce['driver'].name, 'Conductor', ce,
+                # A conductor who rotated across several drivers this
+                # period nests once per driver (see compute_payroll_
+                # earnings) — print their one whole-period payslip only
+                # once, not a partial copy under every driver they rode
+                # with.
+                full = ce.get('full') or ce
+                if full['driver'].id in printed_conductor_ids:
+                    continue
+                printed_conductor_ids.add(full['driver'].id)
+                c_deduction_rows, c_payment_rows = _crew_deduction_payment_rows(full['driver'].id, df, dt)
+                elements += _payslip_elements(full['driver'].name, 'Conductor', full,
                                                c_deduction_rows, c_payment_rows, date_from_str, date_to_str)
             elements.append(PageBreak())
 
