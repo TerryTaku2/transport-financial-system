@@ -6421,102 +6421,124 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
             'conductors': [],
         })
 
-    total_commissions = sum(e['commission'] for e in earnings)
-    total_garnish = sum(e['garnish'] for e in earnings)
-    total_deductions = sum(e['deductions'] for e in earnings)
-    total_paid = sum(e['paid'] for e in earnings)
-    total_outstanding = sum(e['outstanding'] for e in earnings)
-
-    # Nest each conductor's row under every driver they actually worked with
-    # this period, so payroll reads crew-by-crew (driver + the conductor who
-    # rode with them) instead of one flat alphabetical list mixing roles —
-    # and so a driver's Revenue Generated / Days Worked always equals the
-    # sum of what's shown for their nested conductor(s) (crews that rotate
-    # conductors day-to-day nest more than one under the same driver, each
-    # scoped to just the days that pairing actually happened).
+    # Real crews are one driver <-> one conductor — they don't rotate — so
+    # a driver's conductor-cut belongs entirely to that one person, not
+    # split up by whichever conductor happened to get auto-attached to
+    # each individual day (see resolve_conductor; a stray day or two on the
+    # wrong conductor is a data slip, not a second real crew member). Nest
+    # exactly one conductor under each driver — whichever conductor they
+    # logged the most days with — and credit that conductor with the
+    # driver's *entire* period revenue/days/commission, matching row for
+    # row instead of fragmenting across every conductor who ever touched
+    # one of that driver's logs.
     #
-    # Who "actually worked with" a driver is read off each DailyLog's own
-    # conductor_id, not Driver.paired_driver_id — that field only
-    # auto-selects a conductor when a *new* trip is logged (see
-    # resolve_conductor); it says nothing about who was on a given day's
-    # trips, and a pairing that was never set (or changed mid-period) would
-    # otherwise hide a real, named conductor behind a fabricated placeholder
-    # while double-counting commission already credited to them elsewhere.
+    # Assignment is company-wide and greedy, not decided driver-by-driver:
+    # every (driver, conductor) pairing this period is ranked by days
+    # worked together (ties broken by revenue, then id, so it's always the
+    # same answer for the same data), and each driver and each conductor
+    # can be claimed at most once, strongest pairing first. That's what
+    # stops one conductor from being declared "the" conductor for two
+    # different drivers at once — which would otherwise double-count their
+    # commission (once under each driver) — while still letting the
+    # obviously-dominant pairing win even when a driver has a stray day or
+    # two logged against someone else.
     #
-    # Revenue/days/garnish/commission on each nested row are scoped to that
-    # exact driver+conductor pairing (a straight SQL group-by partition of
-    # the driver's own total, so it always adds back up exactly). Paid/
-    # deductions/net pay/outstanding are each conductor's real, whole-period
-    # totals repeated on every pairing they appear in — intentionally not
-    # split, since a payment or deduction is against the person, not a
-    # specific driver pairing, and understating them per-row would risk
-    # someone being paid less than they're actually still owed. `full`
-    # points back at that same whole-period entry so anything that needs
-    # the conductor exactly once (payslips, the pay sheet) can dedupe on it
-    # instead of double-paying/double-printing a rotating conductor.
+    # A conductor who never wins a claim (every one of their logged days
+    # belonged to a driver whose majority conductor turned out to be
+    # someone else) has already had that same revenue fully credited over
+    # there — so their own standalone row shows 0 revenue/days/commission
+    # here rather than counting it a second time. Real deductions/payments
+    # against them still show, since those are owed regardless.
     earnings_by_id = {e['driver'].id: e for e in earnings}
+
+    pair_totals_q = db.session.query(DailyLog.driver_id, DailyLog.conductor_id,
+                                     func.count(DailyLog.id), func.sum(DailyLog.gross_revenue)).filter(
+        DailyLog.driver_id.isnot(None), DailyLog.conductor_id.isnot(None),
+        DailyLog.log_date.between(df, dt))
+    if vehicle_id:
+        pair_totals_q = pair_totals_q.filter(DailyLog.vehicle_id == vehicle_id)
+    ranked_pairs = sorted(
+        pair_totals_q.group_by(DailyLog.driver_id, DailyLog.conductor_id).all(),
+        key=lambda p: (-(p[2] or 0), -(p[3] or 0), p[0], p[1]))
+
+    majority_conductor_for_driver, claimed_drivers, claimed_conductors = {}, set(), set()
+    for drv_id, cond_id, _days, _rev in ranked_pairs:
+        if drv_id in claimed_drivers or cond_id in claimed_conductors:
+            continue
+        majority_conductor_for_driver[drv_id] = cond_id
+        claimed_drivers.add(drv_id)
+        claimed_conductors.add(cond_id)
+
     grouped, nested_ids = [], set()
-    placeholder_total = 0.0
     for e in earnings:
         if e['driver'].role != 'driver':
             continue
-        pair_q = db.session.query(DailyLog.conductor_id, func.sum(DailyLog.gross_revenue),
-                                  func.count(DailyLog.id), func.sum(DailyLog.garnish)).filter(
-            DailyLog.driver_id == e['driver'].id, DailyLog.log_date.between(df, dt))
-        if vehicle_id:
-            pair_q = pair_q.filter(DailyLog.vehicle_id == vehicle_id)
-        for conductor_id, pair_rev, pair_days, pair_garnish in pair_q.group_by(DailyLog.conductor_id).all():
-            pair_rev, pair_days, pair_garnish = pair_rev or 0, pair_days or 0, pair_garnish or 0
-            if not (pair_rev or pair_days):
-                continue
-            ce = earnings_by_id.get(conductor_id) if conductor_id else None
-            if conductor_id and ce and ce['driver'].role == 'conductor':
-                rate = ce['rate_pct'] / 100
-                e['conductors'].append({
-                    'driver': ce['driver'], 'is_placeholder': False, 'full': ce,
-                    'total_revenue': pair_rev, 'days_worked': pair_days, 'rate_pct': ce['rate_pct'],
-                    'commission': max(pair_rev - pair_garnish, 0) * rate, 'garnish': pair_garnish,
-                    'deductions': ce['deductions'], 'deduction_rows': ce['deduction_rows'],
-                    'net_pay': ce['net_pay'], 'paid': ce['paid'], 'payments': ce['payments'],
-                    'outstanding': ce['outstanding'],
-                })
-                nested_ids.add(conductor_id)
-            elif conductor_id and (co_driver := Driver.query.get(conductor_id)):
-                # A real conductor logged these trips but has no earnings
-                # row this period (e.g. deactivated since) — still show
-                # their actual name rather than a placeholder; no payment
-                # history is pulled in since they're no longer active.
-                commission = max(pair_rev - pair_garnish, 0) * co_rate
-                e['conductors'].append({
-                    'driver': co_driver, 'is_placeholder': False, 'full': None,
-                    'total_revenue': pair_rev, 'days_worked': pair_days, 'rate_pct': co_rate * 100,
-                    'commission': commission, 'garnish': pair_garnish,
-                    'deductions': 0, 'deduction_rows': [], 'net_pay': commission, 'paid': 0, 'payments': [],
-                    'outstanding': commission,
-                })
-            else:
-                # Genuinely no conductor on record for these trips at all.
-                placeholder_commission = max(pair_rev - pair_garnish, 0) * co_rate
-                e['conductors'].append({
-                    'driver': None, 'is_placeholder': True, 'full': None,
-                    'total_revenue': pair_rev, 'days_worked': pair_days, 'rate_pct': co_rate * 100,
-                    'commission': placeholder_commission, 'garnish': pair_garnish,
-                    'deductions': 0, 'deduction_rows': [], 'net_pay': placeholder_commission, 'paid': 0, 'payments': [],
-                    'outstanding': placeholder_commission,
-                })
-                placeholder_total += placeholder_commission
+        majority_id = majority_conductor_for_driver.get(e['driver'].id)
+        if majority_id:
+            ce = earnings_by_id.get(majority_id)
+            conductor_driver = ce['driver'] if ce else Driver.query.get(majority_id)
+            rate = (ce['rate_pct'] if ce else co_rate * 100) / 100
+            commission = max(e['total_revenue'] - e['garnish'], 0) * rate
+            deductions = ce['deductions'] if ce else 0
+            deduction_rows = ce['deduction_rows'] if ce else []
+            paid = ce['paid'] if ce else 0
+            payments = ce['payments'] if ce else []
+            net_pay = commission - deductions
+            e['conductors'].append({
+                # No 'full' to resolve back to: unlike a rotating conductor
+                # fragmented across several drivers, a majority-claimed
+                # conductor appears exactly once (the greedy claim above
+                # guarantees it), already carrying the driver's whole
+                # period figures — this row *is* their whole picture.
+                'driver': conductor_driver, 'is_placeholder': False, 'full': None,
+                'total_revenue': e['total_revenue'], 'days_worked': e['days_worked'], 'rate_pct': rate * 100,
+                'commission': commission, 'garnish': e['garnish'],
+                'deductions': deductions, 'deduction_rows': deduction_rows,
+                'net_pay': net_pay, 'paid': paid, 'payments': payments,
+                'outstanding': net_pay - paid,
+            })
+            nested_ids.add(majority_id)
+        elif e['total_revenue'] or e['days_worked']:
+            # No conductor logged for this driver at all this period.
+            placeholder_commission = max(e['total_revenue'] - e['garnish'], 0) * co_rate
+            e['conductors'].append({
+                'driver': None, 'is_placeholder': True, 'full': None,
+                'total_revenue': e['total_revenue'], 'days_worked': e['days_worked'], 'rate_pct': co_rate * 100,
+                'commission': placeholder_commission, 'garnish': e['garnish'],
+                'deductions': 0, 'deduction_rows': [], 'net_pay': placeholder_commission, 'paid': 0, 'payments': [],
+                'outstanding': placeholder_commission,
+            })
         grouped.append(e)
-    grouped.extend(e for e in earnings if e['driver'].role == 'conductor' and e['driver'].id not in nested_ids)
+
+    for e in earnings:
+        if e['driver'].role != 'conductor' or e['driver'].id in nested_ids:
+            continue
+        loose = dict(e)
+        loose['total_revenue'] = loose['days_worked'] = loose['commission'] = loose['garnish'] = 0
+        loose['net_pay'] = -loose['deductions']
+        loose['outstanding'] = loose['net_pay'] - loose['paid']
+        grouped.append(loose)
     grouped.extend(e for e in earnings if e['driver'].role == 'other')
     earnings = grouped
 
-    # total_commissions/total_outstanding above only summed named people
-    # (drivers, plus any conductor who has their own Driver record) — a
-    # driver with no named conductor still owes a conductor's cut on that
-    # revenue (the placeholder row above), so it must count toward the
-    # period totals too, not just commission tied to a named person.
-    total_commissions += placeholder_total
-    total_outstanding += placeholder_total
+    # Summed from the same rows the report displays (each driver, plus
+    # their one nested conductor/placeholder row) so the TOTAL line always
+    # reconciles with what's shown above it — the conductor-side commission
+    # in particular is now driver-anchored (see above), not a sum of each
+    # conductor's own DailyLog rows, so it has to be totaled the same way.
+    total_commissions = total_garnish = total_deductions = total_paid = total_outstanding = 0.0
+    for e in earnings:
+        total_commissions += e['commission']
+        total_garnish += e['garnish']
+        total_deductions += e['deductions']
+        total_paid += e['paid']
+        total_outstanding += e['outstanding']
+        for ce in e['conductors']:
+            total_commissions += ce['commission']
+            total_garnish += ce['garnish']
+            total_deductions += ce['deductions']
+            total_paid += ce['paid']
+            total_outstanding += ce['outstanding']
 
     return earnings, total_commissions, total_garnish, total_deductions, total_paid, total_outstanding
 
