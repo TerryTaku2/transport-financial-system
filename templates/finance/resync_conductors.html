@@ -1,12 +1,12 @@
 {% extends 'base.html' %}
-{% block title %}Resync Conductors{% endblock %}
-{% block page_title %}Resync Conductor Assignments{% endblock %}
+{% block title %}Match Conductors{% endblock %}
+{% block page_title %}Match Drivers to Conductors{% endblock %}
 
 {% block content %}
 <div class="page-header">
   <div>
-    <h1>Resync Conductor Assignments</h1>
-    <div class="subtitle">Corrects DailyLog.conductor_id to match each driver's one true conductor for the period — same logic Payroll already uses to display it, but written back to the actual records.</div>
+    <h1>Match Drivers to Conductors</h1>
+    <div class="subtitle">One conductor per driver for the period — review every driver below, correct any row, then apply to rewrite the underlying daily log records (not just how Payroll displays them).</div>
   </div>
   <a href="{{ url_for('report_payroll', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
     <i data-feather="arrow-left"></i> Back to Payroll
@@ -35,10 +35,11 @@
 </form>
 
 <div class="card">
-  <div class="card-header"><h3>{{ changes|length }} log(s) would change</h3></div>
-  {% if changes %}
+  {% set mismatched = rows|selectattr('mismatch_count', 'gt', 0)|list %}
+  <div class="card-header"><h3>{{ rows|length }} driver(s) — {{ mismatched|length }} need correcting</h3></div>
+  {% if rows %}
   <form method="POST" action="{{ url_for('payroll_resync_conductors_apply') }}"
-        data-confirm="Apply these conductor correction(s) for {{ date_from }} to {{ date_to }}? This rewrites the underlying daily log records, not just how Payroll displays them.">
+        data-confirm="Apply these driver/conductor matches for {{ date_from }} to {{ date_to }}? This rewrites the underlying daily log records, not just how Payroll displays them.">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <input type="hidden" name="date_from" value="{{ date_from }}">
     <input type="hidden" name="date_to" value="{{ date_to }}">
@@ -46,20 +47,25 @@
     <div class="table-wrap">
       <table>
         <thead>
-          <tr><th>Date</th><th>Driver</th><th>Current Conductor</th><th></th><th>Match Correctly</th></tr>
+          <tr><th>Driver</th><th>Days Worked</th><th>Status</th><th>Match Correctly</th></tr>
         </thead>
         <tbody>
-          {% for c in changes %}
+          {% for r in rows %}
           <tr>
-            <td>{{ c.log.log_date }}</td>
-            <td>{{ c.driver.name if c.driver else '—' }}</td>
-            <td>{{ c.old_conductor.name if c.old_conductor else '— none —' }}</td>
-            <td><i data-feather="arrow-right"></i></td>
+            <td><strong>{{ r.driver.name if r.driver else '—' }}</strong></td>
+            <td>{{ r.days_worked }}</td>
             <td>
-              <select name="conductor_for_{{ c.log.id }}" style="min-width:200px;">
+              {% if r.mismatch_count > 0 %}
+              <span class="badge badge-amber">{{ r.mismatch_count }} log(s) need correcting</span>
+              {% else %}
+              <span class="badge badge-green">Already matched</span>
+              {% endif %}
+            </td>
+            <td>
+              <select name="conductor_for_driver_{{ r.driver.id }}" style="min-width:200px;">
                 <option value="">— None (clear) —</option>
                 {% for co in conductors %}
-                <option value="{{ co.id }}" {% if c.new_conductor and c.new_conductor.id == co.id %}selected{% endif %}>{{ co.name }}{% if c.new_conductor and c.new_conductor.id == co.id %} (suggested){% endif %}</option>
+                <option value="{{ co.id }}" {% if r.suggested_conductor and r.suggested_conductor.id == co.id %}selected{% endif %}>{{ co.name }}{% if r.suggested_conductor and r.suggested_conductor.id == co.id %} (suggested){% endif %}</option>
                 {% endfor %}
               </select>
             </td>
@@ -69,12 +75,12 @@
       </table>
     </div>
     <div class="card-body" style="border-top:1px solid var(--border);">
-      <div class="form-hint mb-8">Each row defaults to the suggested majority conductor — change any row's dropdown before applying to correct it instead.</div>
-      <button type="submit" class="btn btn-primary"><i data-feather="check"></i> Confirm &amp; Apply {{ changes|length }} Correction(s)</button>
+      <div class="form-hint mb-8">Every driver is listed, not just mismatches — each dropdown defaults to the suggested conductor (or the one already matched); change any row before applying to correct it. Applying sets the selected conductor on <em>every</em> log for that driver in this period.</div>
+      <button type="submit" class="btn btn-primary"><i data-feather="check"></i> Confirm &amp; Apply</button>
     </div>
   </form>
   {% else %}
-  <div class="empty-state"><p>Nothing to change for this period — every log already matches its driver's majority conductor.</p></div>
+  <div class="empty-state"><p>No driver activity for this period.</p></div>
   {% endif %}
 </div>
 {% endblock %}

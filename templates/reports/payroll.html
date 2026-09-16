@@ -66,7 +66,7 @@
     </a>
     {% if current_user.role == 'admin' %}
     <a href="{{ url_for('payroll_resync_conductors', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">
-      <i data-feather="refresh-cw"></i> Resync Conductors
+      <i data-feather="refresh-cw"></i> Match Conductors
     </a>
     {% endif %}
     <a href="{{ url_for('export_payroll_excel', date_from=date_from, date_to=date_to) }}" class="btn btn-outline">

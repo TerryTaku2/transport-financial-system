@@ -6558,57 +6558,64 @@ def compute_payroll_earnings(df, dt, vehicle_id=None):
     return earnings, total_commissions, total_garnish, total_deductions, total_paid, total_outstanding
 
 
-def conductor_resync_plan(df, dt, vehicle_id=None):
-    """What a conductor resync for [df, dt] would change: every DailyLog
-    whose conductor_id doesn't match majority_conductor_claims' one true
-    pairing for that log's driver — either corrected to that driver's real
-    conductor, or cleared to none if the driver never settled on one this
-    period (no conductor logged at all, or every pairing they had lost its
-    claim to a stronger one elsewhere — same as when Payroll falls back to
-    a placeholder row for them). Read-only: callers decide whether to
-    apply what's returned."""
+def driver_conductor_match_plan(df, dt, vehicle_id=None):
+    """One row per driver with any logged activity in [df, dt] — their days
+    worked, the conductor majority_conductor_claims currently suggests for
+    them, and how many of their logs don't yet carry that conductor —
+    the basis for a driver-by-driver matching review instead of one row
+    per individual log (which repeats the same driver on every day they
+    worked and makes correcting a whole crew pairing tedious). Read-only:
+    callers decide whether to apply what's returned."""
     majority = majority_conductor_claims(df, dt, vehicle_id)
 
-    logs_q = DailyLog.query.filter(DailyLog.driver_id.isnot(None), DailyLog.log_date.between(df, dt))
+    days_q = db.session.query(DailyLog.driver_id, func.count(DailyLog.id)).filter(
+        DailyLog.driver_id.isnot(None), DailyLog.log_date.between(df, dt))
     if vehicle_id:
-        logs_q = logs_q.filter(DailyLog.vehicle_id == vehicle_id)
+        days_q = days_q.filter(DailyLog.vehicle_id == vehicle_id)
+    days_by_driver = dict(days_q.group_by(DailyLog.driver_id).all())
+    if not days_by_driver:
+        return []
 
-    driver_ids = {d for (d,) in db.session.query(DailyLog.driver_id).filter(
-        DailyLog.driver_id.isnot(None), DailyLog.log_date.between(df, dt)).distinct()}
-    conductor_ids = {c for c in majority.values()} | {
-        c for (c,) in db.session.query(DailyLog.conductor_id).filter(
-            DailyLog.conductor_id.isnot(None), DailyLog.log_date.between(df, dt)).distinct()}
-    drivers_by_id = {d.id: d for d in Driver.query.filter(Driver.id.in_(driver_ids)).all()} if driver_ids else {}
+    driver_ids = list(days_by_driver.keys())
+    drivers_by_id = {d.id: d for d in Driver.query.filter(Driver.id.in_(driver_ids)).all()}
+    conductor_ids = {c for c in majority.values() if c}
     conductors_by_id = {c.id: c for c in Driver.query.filter(Driver.id.in_(conductor_ids)).all()} if conductor_ids else {}
 
-    changes = []
-    for log in logs_q.order_by(DailyLog.log_date).all():
-        target_id = majority.get(log.driver_id)
-        if log.conductor_id == target_id:
-            continue
-        changes.append({
-            'log': log,
-            'driver': drivers_by_id.get(log.driver_id),
-            'old_conductor': conductors_by_id.get(log.conductor_id) if log.conductor_id else None,
-            'new_conductor': conductors_by_id.get(target_id) if target_id else None,
+    rows = []
+    for drv_id in driver_ids:
+        target_id = majority.get(drv_id)
+        mismatch_q = DailyLog.query.filter(DailyLog.driver_id == drv_id, DailyLog.log_date.between(df, dt))
+        if vehicle_id:
+            mismatch_q = mismatch_q.filter(DailyLog.vehicle_id == vehicle_id)
+        if target_id:
+            mismatch_q = mismatch_q.filter(db.or_(DailyLog.conductor_id != target_id, DailyLog.conductor_id.is_(None)))
+        else:
+            mismatch_q = mismatch_q.filter(DailyLog.conductor_id.isnot(None))
+        rows.append({
+            'driver': drivers_by_id.get(drv_id),
+            'days_worked': days_by_driver[drv_id],
+            'suggested_conductor': conductors_by_id.get(target_id) if target_id else None,
+            'mismatch_count': mismatch_q.count(),
         })
-    return changes
+    rows.sort(key=lambda r: r['driver'].name if r['driver'] else '')
+    return rows
 
 
 @app.route('/finance/payroll/resync-conductors')
 @login_required
 @admin_required
 def payroll_resync_conductors():
-    """Preview-only: shows what a conductor resync would change for the
-    chosen period without writing anything, so an admin can review before
-    committing via payroll_resync_conductors_apply."""
+    """Preview-only: one row per driver with activity in the chosen period,
+    each with the conductor majority_conductor_claims suggests for them —
+    review and correct any row before committing via
+    payroll_resync_conductors_apply, which writes nothing until then."""
     df, dt = query_date_range()
     date_from_str, date_to_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
     vehicle_id = request.args.get('vehicle_id', '')
-    changes = conductor_resync_plan(df, dt, vehicle_id or None)
+    rows = driver_conductor_match_plan(df, dt, vehicle_id or None)
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     all_conductors = Driver.query.filter_by(role='conductor', status='active').order_by(Driver.name).all()
-    return render_template('finance/resync_conductors.html', changes=changes,
+    return render_template('finance/resync_conductors.html', rows=rows,
         date_from=date_from_str, date_to=date_to_str, vehicles=all_vehicles, vehicle_id=vehicle_id,
         conductors=all_conductors)
 
@@ -6617,21 +6624,20 @@ def payroll_resync_conductors():
 @login_required
 @admin_required
 def payroll_resync_conductors_apply():
-    """Applies what payroll_resync_conductors previewed, honoring any
-    per-row overrides the admin picked there (see the Conductor dropdown
-    on each row) over the auto-suggested majority. The plan is still
-    recomputed here from [date_from, date_to] rather than trusting the
-    posted log ids wholesale — that fixes which *logs* are in scope (so a
-    stale preview can't touch logs outside today's actual plan), while a
-    submitted conductor_for_<log_id> field decides what each one is
-    corrected *to*. This is a POST-only route, so errors are handled
+    """Applies what payroll_resync_conductors previewed: for every driver
+    with activity in [date_from, date_to], sets ALL of their DailyLog rows
+    in that range to whichever conductor was selected for them (see the
+    Match Correctly dropdown) — a full, one-shot re-pairing for that
+    driver's whole period, not just the logs that were already mismatched.
+    Which *drivers* are in scope is recomputed here from the date range
+    rather than trusting the posted form wholesale, so a stale preview
+    can't reach logs outside today's actual plan; the selected conductor
+    per driver is what the form decides. POST-only, so errors are handled
     locally and redirect back to the preview rather than to request.url
     (which would GET this URL and 405)."""
     date_from = request.form.get('date_from', '')
     date_to = request.form.get('date_to', '')
     vehicle_id = request.form.get('vehicle_id', '')
-    back_to_preview = lambda: redirect(url_for('payroll_resync_conductors',
-        date_from=date_from, date_to=date_to, vehicle_id=vehicle_id))
     try:
         df = parse_date(date_from)
         dt = parse_date(date_to)
@@ -6641,46 +6647,51 @@ def payroll_resync_conductors_apply():
         flash('Invalid date range.', 'danger')
         return redirect(url_for('report_payroll'))
 
-    changes = conductor_resync_plan(df, dt, vehicle_id or None)
-    if not changes:
-        flash('Nothing to resync — every log already matches its driver\'s majority conductor.', 'info')
+    rows = driver_conductor_match_plan(df, dt, vehicle_id or None)
+    if not rows:
+        flash('Nothing to match — no driver activity in this period.', 'info')
         return redirect(url_for('report_payroll', date_from=date_from, date_to=date_to))
 
     try:
         resolved = []
-        for change in changes:
-            log = change['log']
-            field_name = f'conductor_for_{log.id}'
+        for row in rows:
+            driver = row['driver']
+            field_name = f'conductor_for_driver_{driver.id}'
             if field_name not in request.form:
                 # Not part of the submitted form (the plan grew between
                 # preview and submit) — fall back to the auto-suggestion.
-                new_conductor_id = change['new_conductor'].id if change['new_conductor'] else None
+                conductor_id = row['suggested_conductor'].id if row['suggested_conductor'] else None
             else:
-                new_conductor_id = form_int(request.form, field_name, required=False)
-                if new_conductor_id and not Driver.query.filter_by(
-                        id=new_conductor_id, role='conductor', status='active').first():
-                    raise ValueError(f'Conductor selection for {log.log_date} is invalid.')
-            resolved.append((log, new_conductor_id))
+                conductor_id = form_int(request.form, field_name, required=False)
+                if conductor_id and not Driver.query.filter_by(
+                        id=conductor_id, role='conductor', status='active').first():
+                    raise ValueError(f'Conductor selection for {driver.name} is invalid.')
+            resolved.append((driver.id, conductor_id))
     except ValueError as e:
         flash(str(e), 'danger')
-        return back_to_preview()
+        return redirect(url_for('payroll_resync_conductors',
+            date_from=date_from, date_to=date_to, vehicle_id=vehicle_id))
 
     applied = 0
-    for log, new_conductor_id in resolved:
-        if log.conductor_id == new_conductor_id:
-            continue
-        log.conductor_id = new_conductor_id
-        log.updated_by = current_user.id
-        log.updated_at = datetime.now(timezone.utc)
-        touch_sync_fields(log)
-        applied += 1
+    for driver_id, conductor_id in resolved:
+        logs_q = DailyLog.query.filter(DailyLog.driver_id == driver_id, DailyLog.log_date.between(df, dt))
+        if vehicle_id:
+            logs_q = logs_q.filter(DailyLog.vehicle_id == vehicle_id)
+        for log in logs_q.all():
+            if log.conductor_id == conductor_id:
+                continue
+            log.conductor_id = conductor_id
+            log.updated_by = current_user.id
+            log.updated_at = datetime.now(timezone.utc)
+            touch_sync_fields(log)
+            applied += 1
 
     if applied == 0:
-        flash('No changes applied — every selection matched the log\'s current conductor.', 'info')
+        flash('No changes applied — every driver already matched their selected conductor.', 'info')
         return redirect(url_for('report_payroll', date_from=date_from, date_to=date_to))
 
     log_audit('UPDATE', 'daily_logs', None,
-              f'Resynced conductor assignments for {date_from} to {date_to}'
+              f'Matched drivers to conductors for {date_from} to {date_to}'
               + (f', vehicle #{vehicle_id}' if vehicle_id else '')
               + f' — {applied} log(s) corrected (admin-reviewed).')
     db.session.commit()
