@@ -28,6 +28,7 @@ from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 from types import SimpleNamespace
 
+import click
 import openpyxl
 import requests
 from openpyxl.styles import Font
@@ -261,6 +262,13 @@ class User(UserMixin, db.Model):
     # the bot won't respond to their number. See whatsapp_dispatch below.
     whatsapp_phone = db.Column(db.String(20), unique=True, nullable=True)
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    # Developer-only flag, never surfaced or settable through any web UI —
+    # see grant_super_admin (a `flask` CLI command run from a shell, not a
+    # route) and super_admin_required. Deliberately separate from role==
+    # 'admin': that's the client's own top permission tier and must stay
+    # powerless to touch subscription suspension (see system_license below)
+    # or grant this to themselves/each other.
+    is_super_admin = db.Column(db.Boolean, default=False, nullable=False)
 
     linked_driver = db.relationship('Driver', foreign_keys=[driver_id])
 
@@ -584,6 +592,30 @@ class FuelPrice(db.Model):
     updated_by = db.Column(db.Integer, db.ForeignKey('users.id'))
 
     updater = db.relationship('User', foreign_keys=[updated_by])
+
+
+class SystemLicense(db.Model):
+    """Subscription/suspension switch for this deployment — developer-only,
+    set from the hidden /system/license panel (see super_admin_required),
+    never from anything a client's own admin can reach. When suspended,
+    every request from every non-super-admin user is intercepted (see
+    enforce_subscription_suspension) and shown `message` instead of the
+    app, regardless of role or permissions.
+
+    Deliberately local/unsynced (like FuelPrice/SpokeUpdateState) rather
+    than propagated hub-to-spoke — this is a per-deployment billing
+    relationship with whoever's running this instance, not data the
+    business itself owns or that should travel with a sync payload.
+    Singleton: one row (id=1)."""
+    __tablename__ = 'system_license'
+    id = db.Column(db.Integer, primary_key=True)
+    suspended = db.Column(db.Boolean, default=False, nullable=False)
+    message = db.Column(db.Text, nullable=True)
+    suspended_at = db.Column(db.DateTime, nullable=True)
+    suspended_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+    suspender = db.relationship('User', foreign_keys=[suspended_by])
 
 
 class MaintenanceLog(db.Model):
@@ -1696,6 +1728,21 @@ def admin_required(f):
     return decorated
 
 
+def super_admin_required(f):
+    """Gate for the subscription-suspension panel — deliberately separate
+    from admin_required. role=='admin' is the client's own top permission
+    tier; is_super_admin is a developer-only flag no route or form ever
+    sets (see User.is_super_admin and the grant-super-admin CLI command),
+    so no client admin can reach this panel no matter how they navigate,
+    even if they guess the URL."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_super_admin:
+            abort(404)
+        return f(*args, **kwargs)
+    return decorated
+
+
 def permission_required(perm):
     def decorator(f):
         @wraps(f)
@@ -2720,6 +2767,19 @@ def get_fuel_price_row():
     return FuelPrice.query.get(1)
 
 
+def get_system_license():
+    """The singleton suspension-status row, creating it (unsuspended) on
+    first access so every other call site can assume it always exists
+    instead of null-checking a row that only gets created the first time
+    a super admin ever visits the panel."""
+    row = SystemLicense.query.get(1)
+    if not row:
+        row = SystemLicense(id=1, suspended=False)
+        db.session.add(row)
+        db.session.commit()
+    return row
+
+
 def fuel_price_for(fuel_type):
     """Current per-liter price for 'diesel' or 'petrol', or None if the
     admin hasn't set one yet — callers treat that as "can't convert"."""
@@ -3010,6 +3070,33 @@ def require_first_run_setup():
         return redirect(url_for('setup'))
 
 
+# Endpoints that must keep working even while the system is suspended:
+# static assets, the service worker, and login/logout — a suspended
+# client still needs to be *able* to sign in (so the suspension notice
+# they land on is the informative page below, not a bare login screen
+# with no explanation) and a super admin has to be able to log in at all
+# before the is_super_admin bypass below has any account to check.
+_SUSPENSION_EXEMPT_ENDPOINTS = {None, 'static', 'service_worker', 'setup', 'login', 'logout'}
+
+
+@app.before_request
+def enforce_subscription_suspension():
+    """Developer-controlled kill switch: while SystemLicense.suspended is
+    set (see the hidden /system/license panel), every request from every
+    user except a super admin is intercepted here and shown the
+    suspension notice instead of reaching its normal view — a client
+    admin has no route, permission or URL that gets them past this; only
+    is_super_admin does, and nothing in the app ever sets that flag."""
+    if request.endpoint in _SUSPENSION_EXEMPT_ENDPOINTS:
+        return
+    if current_user.is_authenticated and current_user.is_super_admin:
+        return
+    license_row = get_system_license()
+    if not license_row.suspended:
+        return
+    return render_template('system/suspended.html', message=license_row.message), 402
+
+
 @app.route('/setup', methods=['GET', 'POST'])
 def setup():
     """First-run wizard for a brand-new spoke .exe: pick a local admin
@@ -3109,6 +3196,51 @@ def logout():
     logout_user()
     flash('You have been signed out.', 'info')
     return redirect(url_for('login'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Developer-only subscription suspension panel — not linked from any
+# nav/menu, gated by super_admin_required (404s for everyone else). See
+# SystemLicense and enforce_subscription_suspension above.
+# ─────────────────────────────────────────────────────────────
+@app.route('/system/license')
+@login_required
+@super_admin_required
+def system_license():
+    return render_template('system/license.html', license=get_system_license())
+
+
+@app.route('/system/license/suspend', methods=['POST'])
+@login_required
+@super_admin_required
+def system_license_suspend():
+    message = request.form.get('message', '').strip() or (
+        'This system has been suspended pending subscription payment. '
+        'Please contact your account manager to restore access.')
+    row = get_system_license()
+    row.suspended = True
+    row.message = message
+    row.suspended_at = datetime.now(timezone.utc)
+    row.suspended_by = current_user.id
+    row.updated_at = datetime.now(timezone.utc)
+    log_audit('UPDATE', 'system_license', row.id,
+              f'{current_user.username} suspended the system: {message}')
+    db.session.commit()
+    flash('System suspended — every user except super admins will now see the notice instead of the app.', 'warning')
+    return redirect(url_for('system_license'))
+
+
+@app.route('/system/license/unsuspend', methods=['POST'])
+@login_required
+@super_admin_required
+def system_license_unsuspend():
+    row = get_system_license()
+    row.suspended = False
+    row.updated_at = datetime.now(timezone.utc)
+    log_audit('UPDATE', 'system_license', row.id, f'{current_user.username} lifted the suspension')
+    db.session.commit()
+    flash('System unsuspended — normal access restored for everyone.', 'success')
+    return redirect(url_for('system_license'))
 
 
 @app.route('/account/change-password', methods=['GET', 'POST'])
@@ -14419,6 +14551,8 @@ def migrate_db():
             conn.execute(text("ALTER TABLE users ADD COLUMN driver_id INTEGER REFERENCES drivers(id)"))
         if 'whatsapp_phone' not in user_cols:
             conn.execute(text("ALTER TABLE users ADD COLUMN whatsapp_phone VARCHAR(20)"))
+        if 'is_super_admin' not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN is_super_admin BOOLEAN NOT NULL DEFAULT 0"))
 
         # Depots were removed — drop the leftover columns/table from any DB that has them.
         for table in ('vehicles', 'drivers', 'routes'):
@@ -14942,6 +15076,25 @@ def create_default_admin():
     db.session.commit()
     print(f'Default admin created username: admin  password: {admin_password}')
     print('Log in and change this password immediately.')
+
+
+@app.cli.command('grant-super-admin')
+@click.argument('username')
+def grant_super_admin(username):
+    """Flags an existing user as the developer-only super admin who can
+    reach /system/license (subscription suspension) — never done through
+    any web route, only this shell command, so a client can't grant it to
+    themselves no matter what they click. Run from wherever this
+    deployment's shell is reachable, e.g. Render's Shell tab:
+        flask grant-super-admin <username>
+    The account must already exist (sign up/create it normally first)."""
+    user = User.query.filter_by(username=username).first()
+    if not user:
+        click.echo(f'No user "{username}" found — create the account first, then grant it.')
+        return
+    user.is_super_admin = True
+    db.session.commit()
+    click.echo(f'{username} is now a super admin and can reach /system/license.')
 
 
 with app.app_context():

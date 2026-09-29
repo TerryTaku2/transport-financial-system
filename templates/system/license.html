@@ -1,0 +1,49 @@
+{% extends 'base.html' %}
+{% block title %}System License{% endblock %}
+{% block page_title %}System License{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>System License</h1>
+    <div class="subtitle">Developer-only subscription control for this deployment — not visible or reachable by any client admin.</div>
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Current Status</h3></div>
+  <div class="card-body">
+    {% if license.suspended %}
+    <p><span class="badge badge-red">Suspended</span></p>
+    <p class="form-hint">Suspended {{ license.suspended_at.strftime('%d %b %Y %H:%M') if license.suspended_at else '' }} by {{ license.suspender.username if license.suspender else 'unknown' }}.</p>
+    <p><strong>Message shown to everyone else:</strong></p>
+    <p>{{ license.message }}</p>
+    <form method="POST" action="{{ url_for('system_license_unsuspend') }}"
+          data-confirm="Restore normal access for everyone right now?">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <button type="submit" class="btn btn-primary"><i data-feather="unlock"></i> Unsuspend — Restore Access</button>
+    </form>
+    {% else %}
+    <p><span class="badge badge-green">Active</span></p>
+    <p class="form-hint">Every user can currently access the system normally.</p>
+    {% endif %}
+  </div>
+</div>
+
+{% if not license.suspended %}
+<div class="card">
+  <div class="card-header"><h3>Suspend for Non-Payment</h3></div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('system_license_suspend') }}"
+          data-confirm="Suspend this system right now? Every user except super admins will immediately see the notice instead of the app.">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group mb-16">
+        <label>Message shown to everyone (drivers, admins, all of them)</label>
+        <textarea name="message" rows="4" placeholder="This system has been suspended pending subscription payment. Please contact your account manager to restore access.">This system has been suspended pending subscription payment. Please contact your account manager to restore access.</textarea>
+      </div>
+      <button type="submit" class="btn btn-danger"><i data-feather="lock"></i> Suspend System</button>
+    </form>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
