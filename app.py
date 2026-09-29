@@ -3179,7 +3179,17 @@ def login():
         password = request.form.get('password', '')
         user = User.query.filter_by(username=username).first()
         if user and user.check_password(password) and user.is_active:
-            login_user(user)
+            # Everyone else's session still expires after PERMANENT_SESSION_
+            # LIFETIME (12h) — but a super admin logged out is a super admin
+            # unable to lift a suspension without someone else's help, which
+            # defeats the point of the switch being theirs alone to control.
+            # A 365-day remember-me cookie (Flask-Login's own mechanism, not
+            # a change to the session config everyone else uses) keeps them
+            # signed in far past that without weakening anyone else's timeout.
+            if user.is_super_admin:
+                login_user(user, remember=True, duration=timedelta(days=365))
+            else:
+                login_user(user)
             session.permanent = True
             log_audit('LOGIN', description=f'User {username} logged in')
             db.session.commit()
