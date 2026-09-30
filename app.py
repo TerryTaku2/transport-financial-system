@@ -3288,6 +3288,7 @@ def no_access():
 @login_required
 @permission_required('dashboard')
 def dashboard():
+    ensure_monthly_garage_fees()
     today = date.today()
     month_start = today.replace(day=1)
     df, dt = query_date_range(default_from=month_start, default_to=today)
@@ -4280,6 +4281,69 @@ def backfill_in_garage_days(vehicle, date_from, date_to):
               f'Auto-recorded {len(missing)} "In Garage" day(s) for {vehicle.registration} '
               f'({missing[0]} to {missing[-1]})')
     db.session.commit()
+
+
+def _last_day_of_month(d):
+    next_month = d.replace(day=28) + timedelta(days=4)
+    return next_month.replace(day=1) - timedelta(days=1)
+
+
+def ensure_monthly_garage_fees():
+    """Auto-posts every active vehicle's Garage Fee expense (the seeded
+    'Garage Fee' category's default_amount — see
+    create_default_expense_categories) on the last calendar day of the
+    month, so nobody has to remember to log it by hand: by the time
+    anyone opens Expenses or the Dashboard on or after that day, it's
+    already there — same "backfill on page load" approach as
+    backfill_in_garage_days, rather than a background scheduler this
+    single-process web app has no reliable way to run on a fixed clock.
+
+    Checks the current month and the immediately preceding one (not an
+    open-ended backfill to each vehicle's creation date) — that covers a
+    short gap where nobody opened the app right on the last day, without
+    retroactively inventing garage fees for months, or years, of history
+    the moment this feature first ships. Idempotent per vehicle+month:
+    never double-posts one that's already there, including one entered
+    by hand instead of auto-posted."""
+    category = ExpenseCategory.query.filter_by(name='Garage Fee', parent_id=None).first()
+    if not category or not category.default_amount:
+        return
+    today = date.today()
+    this_month_start = today.replace(day=1)
+    prev_month_start = (this_month_start - timedelta(days=1)).replace(day=1)
+    candidate_last_days = sorted({
+        d for d in (_last_day_of_month(prev_month_start), _last_day_of_month(this_month_start))
+        if d <= today
+    })
+    if not candidate_last_days:
+        return
+
+    vehicles = Vehicle.query.filter_by(status='active').all()
+    if not vehicles:
+        return
+
+    posted = 0
+    for last_day in candidate_last_days:
+        already_posted = {row[0] for row in db.session.query(Expense.vehicle_id).filter(
+            Expense.category_id == category.id, Expense.expense_date == last_day,
+            Expense.vehicle_id.isnot(None)).all()}
+        for vehicle in vehicles:
+            if vehicle.id in already_posted or vehicle.created_at.date() > last_day:
+                continue
+            fee = Expense(
+                category_id=category.id, vehicle_id=vehicle.id, expense_date=last_day,
+                amount=category.default_amount, description='Garage fee (auto-posted)',
+                created_by=current_user.id if current_user.is_authenticated else None,
+            )
+            db.session.add(fee)
+            db.session.flush()
+            touch_sync_fields(fee)
+            posted += 1
+    if posted:
+        log_audit('CREATE', 'expenses', None,
+                  f'Auto-posted {posted} monthly Garage Fee expense(s) '
+                  f'for {", ".join(d.strftime("%b %Y") for d in candidate_last_days)}')
+        db.session.commit()
 
 
 def resolve_ledger_period(period, today):
@@ -9803,6 +9867,7 @@ def owner_drawing_delete(did):
 @login_required
 @permission_required('finance')
 def expenses_list():
+    ensure_monthly_garage_fees()
     page = request.args.get('page', 1, type=int)
     vehicle_id = request.args.get('vehicle_id', '')
     q = request.args.get('q', '').strip()
