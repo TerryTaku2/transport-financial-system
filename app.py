@@ -7650,23 +7650,33 @@ def _income_statement_pdf(df, dt, vehicle_id=None, vehicle_label=None):
     return _pdf_section('Income Statement', f'Period: {df} to {dt} — {scope}', flowables)
 
 
+def _income_statement_owner_flowables(g, styles):
+    """One owner's vehicle table + TOTAL row, as reportlab flowables —
+    shared by the combined Income Statement by Owner PDF (one block per
+    owner, one after another) and the standalone per-owner PDF used by
+    the "Download All (ZIP)" export, so a given owner's figures can never
+    drift between the combined document and their own individual copy."""
+    owner_label = g['owner'].name if g['owner'] else 'Unassigned (Company-owned)'
+    headers = ['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Wages', 'Net Profit', 'Margin']
+    flowables = [Paragraph(f'{owner_label} — {g["vehicle_count"]} vehicle(s)', styles['Heading3']), Spacer(1, 4)]
+    vdata = [headers] + [[
+        v['vehicle'].registration, f"${v['revenue']:,.2f}", f"${v['maintenance']:,.2f}",
+        f"${v['expenses']:,.2f}", f"${v['wages']:,.2f}", f"${v['net_profit']:,.2f}", f"{v['margin']:.1f}%",
+    ] for v in g['vehicles']]
+    vdata.append(['TOTAL', f"${g['revenue']:,.2f}", f"${g['maintenance']:,.2f}",
+                  f"${g['expenses']:,.2f}", f"${g['wages']:,.2f}", f"${g['net_profit']:,.2f}", f"{g['margin']:.1f}%"])
+    flowables.append(_pdf_table(vdata))
+    return flowables, owner_label
+
+
 def _income_statement_by_owner_pdf(df, dt):
     s = compute_income_statement_by_owner(df, dt)
     styles = _pdf_styles()
     flowables = []
-    headers = ['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Wages', 'Net Profit', 'Margin']
     grand_net = 0
     for g in s['owner_breakdown']:
-        owner_label = g['owner'].name if g['owner'] else 'Unassigned (Company-owned)'
-        flowables.append(Paragraph(f'{owner_label} — {g["vehicle_count"]} vehicle(s)', styles['Heading3']))
-        flowables.append(Spacer(1, 4))
-        vdata = [headers] + [[
-            v['vehicle'].registration, f"${v['revenue']:,.2f}", f"${v['maintenance']:,.2f}",
-            f"${v['expenses']:,.2f}", f"${v['wages']:,.2f}", f"${v['net_profit']:,.2f}", f"{v['margin']:.1f}%",
-        ] for v in g['vehicles']]
-        vdata.append(['TOTAL', f"${g['revenue']:,.2f}", f"${g['maintenance']:,.2f}",
-                      f"${g['expenses']:,.2f}", f"${g['wages']:,.2f}", f"${g['net_profit']:,.2f}", f"{g['margin']:.1f}%"])
-        flowables.append(_pdf_table(vdata))
+        owner_flowables, _ = _income_statement_owner_flowables(g, styles)
+        flowables += owner_flowables
         flowables.append(Spacer(1, 14))
         grand_net += g['net_profit']
     flowables.append(_pdf_statement_table(
@@ -7675,6 +7685,24 @@ def _income_statement_by_owner_pdf(df, dt):
             '(revenue less maintenance, expenses and its own crew wages). General overhead not tied '
             'to any one vehicle is not split across owners; see the fleet-wide Income Statement for that.')
     return _pdf_section('Income Statement by Owner', f'Period: {df} to {dt}', flowables, note=note)
+
+
+def _income_statement_owner_pdf_bytes(g, df, dt):
+    """One owner's Income Statement as a standalone PDF's raw bytes
+    (rather than a Flask response — see export_income_by_owner_zip,
+    which writes several of these straight into a zip archive instead of
+    returning any one of them directly)."""
+    styles = _pdf_styles()
+    flowables, owner_label = _income_statement_owner_flowables(g, styles)
+    note = ('This owner\'s vehicles only — each vehicle\'s Net Profit matches the fleet-wide Income '
+            'Statement for that vehicle (revenue less maintenance, expenses and its own crew wages).')
+    elements = _pdf_section(f'Income Statement — {owner_label}', f'Period: {df} to {dt}', flowables, note=note)
+    out = io.BytesIO()
+    doc = SimpleDocTemplate(out, pagesize=landscape(A4), leftMargin=14 * mm, rightMargin=14 * mm,
+                            topMargin=14 * mm + 14 * mm, bottomMargin=14 * mm)
+    doc.build(elements, onFirstPage=_draw_pdf_letterhead, onLaterPages=_draw_pdf_letterhead)
+    out.seek(0)
+    return out.getvalue(), owner_label
 
 
 def _cash_flow_pdf(df, dt):
@@ -9267,6 +9295,47 @@ def export_income_by_owner():
     resp = make_response(out.getvalue())
     resp.headers['Content-Type'] = 'text/csv'
     resp.headers['Content-Disposition'] = f'attachment; filename=income_by_owner_{df_str}_to_{dt_str}.csv'
+    return resp
+
+
+@app.route('/reports/export/income-by-owner/zip')
+@login_required
+@permission_required('reports')
+def export_income_by_owner_zip():
+    """Same figures as Export PDF, but one standalone Income Statement PDF
+    per owner (see _income_statement_owner_pdf_bytes) instead of a single
+    combined document — for handing each partner only their own copy
+    without anyone seeing another owner's numbers — all bundled into one
+    zip so it's still a single download/attachment."""
+    df, dt = query_date_range()
+    df_str, dt_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    s = compute_income_statement_by_owner(df, dt)
+
+    if not s['owner_breakdown']:
+        flash('No revenue or cost data for the selected period.', 'warning')
+        return redirect(url_for('report_income_by_owner', date_from=df_str, date_to=dt_str))
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
+        used_names = set()
+        for g in s['owner_breakdown']:
+            pdf_bytes, owner_label = _income_statement_owner_pdf_bytes(g, df, dt)
+            # Sanitized to a plain filesystem-safe name — an owner name is
+            # free text and could contain '/', quotes, etc. that would
+            # otherwise land in a zip entry path. Deduplicated in the rare
+            # case two owners sanitize to the same name (e.g. differing
+            # only by punctuation).
+            safe_name = re.sub(r'[^A-Za-z0-9_-]+', '_', owner_label).strip('_') or 'owner'
+            filename, n = f'{safe_name}.pdf', 2
+            while filename in used_names:
+                filename = f'{safe_name}_{n}.pdf'
+                n += 1
+            used_names.add(filename)
+            zf.writestr(filename, pdf_bytes)
+    buf.seek(0)
+    resp = make_response(buf.getvalue())
+    resp.headers['Content-Type'] = 'application/zip'
+    resp.headers['Content-Disposition'] = f'attachment; filename=income_by_owner_{df_str}_to_{dt_str}.zip'
     return resp
 
 
