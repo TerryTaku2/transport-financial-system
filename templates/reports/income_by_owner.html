@@ -86,7 +86,9 @@
         {% for row in g.vehicles %}
         <tr>
           <td style="padding-left:28px;">
-            {{ row.vehicle.registration }} <span class="form-hint">{{ row.vehicle.make }} {{ row.vehicle.model }}</span>
+            <a href="{{ url_for('report_income', vehicle_id=row.vehicle.id, date_from=date_from, date_to=date_to) }}"
+               title="See every expense (spares, maintenance jobs, etc.) behind this vehicle's figures">{{ row.vehicle.registration }}</a>
+            <span class="form-hint">{{ row.vehicle.make }} {{ row.vehicle.model }}</span>
           </td>
           <td class="text-right">{{ row.revenue|currency }}</td>
           <td class="text-right">({{ row.maintenance|currency }})</td>
