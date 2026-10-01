@@ -6319,6 +6319,23 @@ def statement_expense_line_items(df, dt, vehicle_id=None):
     return {INCOME_STATEMENT_LABELS.get(name, name): rows for name, rows in items.items()}
 
 
+def vehicle_expense_items_flat(df, dt, vehicle_id):
+    """Every Maintenance/Traffic Fines/Insurance/Admin/Other line item
+    behind one vehicle's Income Statement expense figures, flattened into
+    one date-sorted list — e.g. which specific spares were bought for
+    this vehicle — for exports that need each expense shown standalone
+    instead of folded into a single total (see Income Statement by
+    Owner's PDF/CSV/ZIP exports). Reuses statement_expense_line_items;
+    Wages is excluded since that column is driven by computed crew
+    payroll commission, not these raw rows, so itemizing it here
+    wouldn't add back up to the Wages total shown alongside it."""
+    items_by_category = statement_expense_line_items(df, dt, vehicle_id)
+    flat = [item for name, rows in items_by_category.items()
+            if name != 'Wages and Salaries' for item in rows]
+    flat.sort(key=lambda r: r['date'])
+    return flat
+
+
 def statement_revenue_line_items(df, dt, vehicle_id=None):
     """The DailyLog rows behind the Gross Revenue line — same purpose as
     statement_expense_line_items but for the one revenue line, so it can
@@ -7650,12 +7667,15 @@ def _income_statement_pdf(df, dt, vehicle_id=None, vehicle_label=None):
     return _pdf_section('Income Statement', f'Period: {df} to {dt} — {scope}', flowables)
 
 
-def _income_statement_owner_flowables(g, styles):
-    """One owner's vehicle table + TOTAL row, as reportlab flowables —
-    shared by the combined Income Statement by Owner PDF (one block per
-    owner, one after another) and the standalone per-owner PDF used by
-    the "Download All (ZIP)" export, so a given owner's figures can never
-    drift between the combined document and their own individual copy."""
+def _income_statement_owner_flowables(g, styles, df, dt):
+    """One owner's vehicle table + TOTAL row, followed by each vehicle's
+    own expenses listed out standalone (not folded into the Maintenance/
+    Expenses totals above — e.g. exactly which spares were bought for
+    which vehicle), as reportlab flowables — shared by the combined
+    Income Statement by Owner PDF (one block per owner, one after
+    another) and the standalone per-owner PDF used by the "Download All
+    (ZIP)" export, so a given owner's figures can never drift between the
+    combined document and their own individual copy."""
     owner_label = g['owner'].name if g['owner'] else 'Unassigned (Company-owned)'
     headers = ['Vehicle', 'Revenue', 'Maintenance', 'Expenses', 'Wages', 'Net Profit', 'Margin']
     flowables = [Paragraph(f'{owner_label} — {g["vehicle_count"]} vehicle(s)', styles['Heading3']), Spacer(1, 4)]
@@ -7666,6 +7686,18 @@ def _income_statement_owner_flowables(g, styles):
     vdata.append(['TOTAL', f"${g['revenue']:,.2f}", f"${g['maintenance']:,.2f}",
                   f"${g['expenses']:,.2f}", f"${g['wages']:,.2f}", f"${g['net_profit']:,.2f}", f"{g['margin']:.1f}%"])
     flowables.append(_pdf_table(vdata))
+
+    item_headers = ['Date', 'Source', 'Description', 'Amount']
+    for v in g['vehicles']:
+        items = vehicle_expense_items_flat(df, dt, v['vehicle'].id)
+        if not items:
+            continue
+        flowables.append(Spacer(1, 8))
+        flowables.append(Paragraph(f'{v["vehicle"].registration} — Itemized Expenses', styles['Heading4']))
+        idata = [item_headers] + [[
+            i['date'].strftime('%d %b %Y'), i['source'], i['description'], f"${i['amount']:,.2f}",
+        ] for i in items]
+        flowables.append(_pdf_table(idata, bold_last_row=False))
     return flowables, owner_label
 
 
@@ -7675,7 +7707,7 @@ def _income_statement_by_owner_pdf(df, dt):
     flowables = []
     grand_net = 0
     for g in s['owner_breakdown']:
-        owner_flowables, _ = _income_statement_owner_flowables(g, styles)
+        owner_flowables, _ = _income_statement_owner_flowables(g, styles, df, dt)
         flowables += owner_flowables
         flowables.append(Spacer(1, 14))
         grand_net += g['net_profit']
@@ -7683,7 +7715,9 @@ def _income_statement_by_owner_pdf(df, dt):
         [['GRAND TOTAL (vehicle-attributable, all owners)', f"${grand_net:,.2f}"]], bold_indices=(0,)))
     note = ('Each vehicle\'s Net Profit matches the fleet-wide Income Statement for that vehicle '
             '(revenue less maintenance, expenses and its own crew wages). General overhead not tied '
-            'to any one vehicle is not split across owners; see the fleet-wide Income Statement for that.')
+            'to any one vehicle is not split across owners; see the fleet-wide Income Statement for that. '
+            'Itemized Expenses excludes Wages, which is computed crew payroll commission rather than '
+            'individually-booked rows.')
     return _pdf_section('Income Statement by Owner', f'Period: {df} to {dt}', flowables, note=note)
 
 
@@ -7693,7 +7727,7 @@ def _income_statement_owner_pdf_bytes(g, df, dt):
     which writes several of these straight into a zip archive instead of
     returning any one of them directly)."""
     styles = _pdf_styles()
-    flowables, owner_label = _income_statement_owner_flowables(g, styles)
+    flowables, owner_label = _income_statement_owner_flowables(g, styles, df, dt)
     note = ('This owner\'s vehicles only — each vehicle\'s Net Profit matches the fleet-wide Income '
             'Statement for that vehicle (revenue less maintenance, expenses and its own crew wages).')
     elements = _pdf_section(f'Income Statement — {owner_label}', f'Period: {df} to {dt}', flowables, note=note)
@@ -9273,7 +9307,9 @@ def export_income_by_owner():
     w.writerow([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
     w.writerow(['Note: each vehicle\'s Net Profit matches the fleet-wide Income Statement for that vehicle',
                 '(revenue less maintenance, expenses and its own crew wages). General overhead not tied to',
-                'any one vehicle is not split across owners; see the fleet-wide Income Statement for that.'])
+                'any one vehicle is not split across owners; see the fleet-wide Income Statement for that.',
+                'Itemized Expenses excludes Wages, which is computed crew payroll commission rather than',
+                'individually-booked rows.'])
     w.writerow([])
 
     grand_net = 0
@@ -9287,6 +9323,16 @@ def export_income_by_owner():
         w.writerow(['TOTAL', f"{g['revenue']:.2f}", f"{g['maintenance']:.2f}", f"{g['expenses']:.2f}",
                     f"{g['wages']:.2f}", f"{g['net_profit']:.2f}", f"{g['margin']:.1f}%"])
         w.writerow([])
+
+        for v in g['vehicles']:
+            items = vehicle_expense_items_flat(df, dt, v['vehicle'].id)
+            if not items:
+                continue
+            w.writerow([f'  {v["vehicle"].registration} — Itemized Expenses'])
+            w.writerow(['  Date', 'Source', 'Description', 'Amount (USD)'])
+            for i in items:
+                w.writerow([f'  {i["date"]}', i['source'], i['description'], f"{i['amount']:.2f}"])
+            w.writerow([])
         grand_net += g['net_profit']
 
     w.writerow(['GRAND TOTAL (vehicle-attributable, all owners)', f'{grand_net:.2f}'])
