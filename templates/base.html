@@ -230,6 +230,9 @@
       <a href="{{ url_for('store_sales') }}" class="nav-item {% if 'store_sale' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="arrow-up-circle"></i> Sales
       </a>
+      <a href="{{ url_for('store_customers') }}" class="nav-item {% if 'store_customer' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="users"></i> Customers
+      </a>
       <a href="{{ url_for('store_movements') }}" class="nav-item {% if 'store_movement' in (request.endpoint or '') %}active{% endif %}">
         <i data-feather="repeat"></i> Stock Movement
       </a>

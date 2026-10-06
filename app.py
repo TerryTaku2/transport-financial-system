@@ -1531,6 +1531,12 @@ class StoreSale(db.Model):
     unit_cost = db.Column(db.Float, nullable=False)
     unit_price = db.Column(db.Float, nullable=False)
     total_amount = db.Column(db.Float, nullable=False)
+    # Set for an outside customer sale — links the sale to a StoreCustomer
+    # account so it appears on that customer's statement of account. The
+    # free-text customer_name is kept alongside as a snapshot of what was
+    # on the sale when it was recorded (and for legacy sales made before
+    # customer records existed, backfilled by backfill_store_customers).
+    customer_id = db.Column(db.Integer, db.ForeignKey('store_customers.id'), nullable=True)
     customer_name = db.Column(db.String(100))
     notes = db.Column(db.Text)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
@@ -1545,6 +1551,7 @@ class StoreSale(db.Model):
 
     creator = db.relationship('User', foreign_keys=[created_by])
     vehicle = db.relationship('Vehicle')
+    customer = db.relationship('StoreCustomer', backref='sales')
 
     @property
     def profit(self):
@@ -1553,6 +1560,52 @@ class StoreSale(db.Model):
     @property
     def customer_display(self):
         return self.vehicle.registration if self.vehicle else (self.customer_name or None)
+
+
+class StoreCustomer(db.Model):
+    """An outside customer who buys spares from the garage on account.
+    Their sales are recorded against this record (StoreSale.customer_id),
+    and their payments against it (StoreCustomerPayment), so their running
+    balance and statement of account come from one source of truth."""
+    __tablename__ = 'store_customers'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    phone = db.Column(db.String(20))
+    address = db.Column(db.Text)
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
+
+    payments = db.relationship('StoreCustomerPayment', backref='customer', order_by='StoreCustomerPayment.payment_date')
+
+
+class StoreCustomerPayment(db.Model):
+    """Cash or transfer received from an outside store customer against
+    their account. Reduces what they owe; doesn't touch the Spares Store
+    trading account, which already counts the sale itself at the point it
+    was made."""
+    __tablename__ = 'store_customer_payments'
+    id = db.Column(db.Integer, primary_key=True)
+    customer_id = db.Column(db.Integer, db.ForeignKey('store_customers.id'), nullable=False)
+    payment_date = db.Column(db.Date, nullable=False, default=date.today)
+    amount = db.Column(db.Float, nullable=False)
+    method = db.Column(db.String(30))
+    notes = db.Column(db.Text)
+    created_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    sync_uuid = db.Column(db.String(36), unique=True, index=True)
+    pending_push = db.Column(db.Boolean, default=False)
+    last_modified_site = db.Column(db.String(50))
+    deleted_at = db.Column(db.DateTime, nullable=True)
+    last_synced_updated_at = db.Column(db.DateTime, nullable=True)
+    server_touched_at = db.Column(db.DateTime, nullable=True)
 
 
 ADJUSTMENT_REASONS = [
@@ -5628,6 +5681,93 @@ def store_purchases_import_confirm():
     return redirect(url_for('store_purchases'))
 
 
+def find_or_create_store_customer(name):
+    """The StoreCustomer whose name matches (case-insensitive, ignoring
+    surrounding whitespace), creating one if none exists — so a sale typed
+    against a new name still lands on a proper account the next time it's
+    looked up, rather than a free-text string that can't be statemented."""
+    name = (name or '').strip()
+    if not name:
+        return None
+    existing = StoreCustomer.query.filter(func.lower(StoreCustomer.name) == name.lower()).first()
+    if existing:
+        return existing
+    customer = StoreCustomer(name=name)
+    db.session.add(customer)
+    db.session.flush()
+    touch_sync_fields(customer)
+    return customer
+
+
+def resolve_store_sale_customer(form):
+    """The customer a store sale is to: an existing account picked from the
+    dropdown, else whatever name was typed (found or created). None for an
+    anonymous cash sale, which is still allowed."""
+    cust_id = form_int(form, 'customer_id', required=False)
+    if cust_id:
+        customer = StoreCustomer.query.filter_by(id=cust_id).first()
+        if not customer:
+            raise ValueError('Selected customer not found.')
+        return customer
+    return find_or_create_store_customer(form.get('customer_name', ''))
+
+
+def backfill_store_customers():
+    """One-time (and idempotent) link of legacy outside-customer sales —
+    recorded before customer accounts existed, as a typed name only — to a
+    proper StoreCustomer, so their history shows on a statement. Only
+    touches sales with a name and no customer_id yet; never a vehicle sale."""
+    unlinked = StoreSale.query.filter(
+        StoreSale.customer_id.is_(None), StoreSale.vehicle_id.is_(None),
+        StoreSale.customer_name.isnot(None), StoreSale.customer_name != '').all()
+    if not unlinked:
+        return
+    for sale in unlinked:
+        sale.customer_id = find_or_create_store_customer(sale.customer_name).id
+        touch_sync_fields(sale)
+    db.session.commit()
+
+
+def store_customer_statement_rows(customer, df=None, dt=None):
+    """Chronological sales and payments for one customer, with the balance
+    carried forward, plus the opening balance brought forward from before
+    df. Shared by the on-screen customer page and the PDF/CSV statements so
+    all three always agree on the figures."""
+    sales_q = StoreSale.query.filter(StoreSale.customer_id == customer.id)
+    pay_q = StoreCustomerPayment.query.filter(StoreCustomerPayment.customer_id == customer.id)
+    if df:
+        sales_before = sum(s.total_amount for s in sales_q.filter(StoreSale.sale_date < df).all())
+        paid_before = sum(p.amount for p in pay_q.filter(StoreCustomerPayment.payment_date < df).all())
+        opening = sales_before - paid_before
+        sales_q = sales_q.filter(StoreSale.sale_date >= df)
+        pay_q = pay_q.filter(StoreCustomerPayment.payment_date >= df)
+    else:
+        opening = 0.0
+    if dt:
+        sales_q = sales_q.filter(StoreSale.sale_date <= dt)
+        pay_q = pay_q.filter(StoreCustomerPayment.payment_date <= dt)
+
+    entries = []
+    for s in sales_q.all():
+        entries.append({'date': s.sale_date, 'kind': 'Sale', 'description': s.part.name,
+                        'quantity': s.quantity, 'debit': s.total_amount, 'credit': 0.0, 'sort': 0})
+    for p in pay_q.all():
+        entries.append({'date': p.payment_date, 'kind': 'Payment', 'payment_id': p.id,
+                        'description': p.method or 'Payment received', 'quantity': None,
+                        'debit': 0.0, 'credit': p.amount, 'sort': 1})
+    entries.sort(key=lambda e: (e['date'], e['sort']))
+
+    balance = opening
+    for e in entries:
+        balance += e['debit'] - e['credit']
+        e['balance'] = balance
+    return {
+        'opening': opening, 'entries': entries, 'closing': balance,
+        'total_billed': sum(e['debit'] for e in entries),
+        'total_paid': sum(e['credit'] for e in entries),
+    }
+
+
 @app.route('/store/sales')
 @login_required
 @permission_required('store')
@@ -5717,6 +5857,7 @@ def store_sale_add():
                                     default=part.selling_price, min_value=0)
             total_amount = quantity * unit_price
         vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+        customer = None if vehicle_id else resolve_store_sale_customer(request.form)
 
         sale = StoreSale(
             part_id=part.id,
@@ -5726,7 +5867,8 @@ def store_sale_add():
             unit_cost=part.cost_price,
             unit_price=unit_price,
             total_amount=total_amount,
-            customer_name=request.form.get('customer_name', '').strip() if not vehicle_id else None,
+            customer_id=customer.id if customer else None,
+            customer_name=customer.name if customer else None,
             notes=request.form.get('notes', '').strip(),
             created_by=current_user.id,
         )
@@ -5748,8 +5890,9 @@ def store_sale_add():
     all_parts = SparePart.query.filter(SparePart.status == 'active',
                                        SparePart.quantity_on_hand > 0).order_by(SparePart.name).all()
     all_vehicles = Vehicle.query.filter_by(status='active').order_by(Vehicle.registration).all()
+    all_customers = StoreCustomer.query.order_by(StoreCustomer.name).all()
     return render_template('store/sale_form.html', parts=all_parts, vehicles=all_vehicles,
-                           today=date.today().strftime('%Y-%m-%d'))
+                           customers=all_customers, today=date.today().strftime('%Y-%m-%d'))
 
 
 @app.route('/store/sales/<int:sid>/edit', methods=['GET', 'POST'])
@@ -5795,7 +5938,9 @@ def store_sale_edit(sid):
         sale.unit_cost = part.cost_price
         sale.unit_price = unit_price
         sale.total_amount = total_amount
-        sale.customer_name = request.form.get('customer_name', '').strip() if not vehicle_id else None
+        customer = None if vehicle_id else resolve_store_sale_customer(request.form)
+        sale.customer_id = customer.id if customer else None
+        sale.customer_name = customer.name if customer else None
         sale.notes = request.form.get('notes', '').strip()
         log_audit('UPDATE', 'store_sales', sale.id, f'Updated sale to {quantity} x {part.name} @ {unit_price}')
         touch_sync_fields(sale)
@@ -5806,6 +5951,7 @@ def store_sale_edit(sid):
     all_parts = SparePart.query.order_by(SparePart.name).all()
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
     return render_template('store/sale_form.html', parts=all_parts, vehicles=all_vehicles, sale=sale,
+                           customers=StoreCustomer.query.order_by(StoreCustomer.name).all(),
                            today=sale.sale_date.strftime('%Y-%m-%d'))
 
 
@@ -5823,6 +5969,204 @@ def store_sale_delete(sid):
     db.session.commit()
     flash('Sale deleted and stock restored.', 'warning')
     return redirect(url_for('store_sales'))
+
+
+def _store_customer_balances(customer_ids=None):
+    """Billed, paid and balance-due per customer, in one query each rather
+    than per row — keyed by customer id."""
+    billed_q = db.session.query(StoreSale.customer_id, func.sum(StoreSale.total_amount)).filter(
+        StoreSale.customer_id.isnot(None))
+    paid_q = db.session.query(StoreCustomerPayment.customer_id, func.sum(StoreCustomerPayment.amount))
+    if customer_ids is not None:
+        billed_q = billed_q.filter(StoreSale.customer_id.in_(customer_ids))
+        paid_q = paid_q.filter(StoreCustomerPayment.customer_id.in_(customer_ids))
+    billed = dict(billed_q.group_by(StoreSale.customer_id).all())
+    paid = dict(paid_q.group_by(StoreCustomerPayment.customer_id).all())
+    return {cid: {'billed': billed.get(cid) or 0, 'paid': paid.get(cid) or 0,
+                  'balance': (billed.get(cid) or 0) - (paid.get(cid) or 0)}
+            for cid in set(billed) | set(paid) | (set(customer_ids) if customer_ids else set())}
+
+
+@app.route('/store/customers')
+@login_required
+@permission_required('store')
+def store_customers():
+    customers = StoreCustomer.query.order_by(StoreCustomer.name).all()
+    balances = _store_customer_balances()
+    return render_template('store/customers.html', customers=customers, balances=balances)
+
+
+@app.route('/store/customers/add', methods=['GET', 'POST'])
+@login_required
+@permission_required('store')
+@handle_form_errors
+def store_customer_add():
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        if not name:
+            raise ValueError('Customer name is required.')
+        c = StoreCustomer(
+            name=name,
+            phone=request.form.get('phone', '').strip() or None,
+            address=request.form.get('address', '').strip() or None,
+            notes=request.form.get('notes', '').strip() or None,
+        )
+        db.session.add(c)
+        db.session.flush()
+        log_audit('CREATE', 'store_customers', c.id, f'Added store customer {c.name}')
+        touch_sync_fields(c)
+        db.session.commit()
+        flash(f'Customer {c.name} added.', 'success')
+        return redirect(url_for('store_customer_detail', cid=c.id))
+    return render_template('store/customer_form.html', customer=None, action='Add')
+
+
+@app.route('/store/customers/<int:cid>')
+@login_required
+@permission_required('store')
+def store_customer_detail(cid):
+    c = StoreCustomer.query.filter_by(id=cid).first_or_404()
+    df, dt = None, None
+    date_from = request.args.get('date_from', '').strip()
+    date_to = request.args.get('date_to', '').strip()
+    try:
+        df = parse_date(date_from) if date_from else None
+        dt = parse_date(date_to) if date_to else None
+    except ValueError as e:
+        flash(str(e), 'warning')
+        df = dt = None
+    stmt = store_customer_statement_rows(c, df, dt)
+    return render_template('store/customer_detail.html', customer=c, stmt=stmt,
+                           date_from=date_from, date_to=date_to, today=date.today().strftime('%Y-%m-%d'))
+
+
+@app.route('/store/customers/<int:cid>/edit', methods=['GET', 'POST'])
+@login_required
+@permission_required('store')
+@handle_form_errors
+def store_customer_edit(cid):
+    c = StoreCustomer.query.filter_by(id=cid).first_or_404()
+    if request.method == 'POST':
+        name = request.form.get('name', '').strip()
+        if not name:
+            raise ValueError('Customer name is required.')
+        c.name = name
+        c.phone = request.form.get('phone', '').strip() or None
+        c.address = request.form.get('address', '').strip() or None
+        c.notes = request.form.get('notes', '').strip() or None
+        log_audit('UPDATE', 'store_customers', c.id, f'Updated store customer {c.name}')
+        touch_sync_fields(c)
+        db.session.commit()
+        flash(f'Customer {c.name} updated.', 'success')
+        return redirect(url_for('store_customer_detail', cid=cid))
+    return render_template('store/customer_form.html', customer=c, action='Edit')
+
+
+@app.route('/store/customers/<int:cid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def store_customer_delete(cid):
+    c = StoreCustomer.query.filter_by(id=cid).first_or_404()
+    name = c.name
+    if any(s for s in c.sales if s.deleted_at is None):
+        flash(f'{name} has sales on record and can\'t be removed — they must stay for the books.', 'danger')
+        return redirect(url_for('store_customer_detail', cid=cid))
+    log_audit('DELETE', 'store_customers', cid, f'Deleted store customer {name}')
+    c.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(c)
+    db.session.commit()
+    flash(f'Customer {name} removed.', 'warning')
+    return redirect(url_for('store_customers'))
+
+
+@app.route('/store/customers/<int:cid>/payments/add', methods=['POST'])
+@login_required
+@permission_required('store')
+@handle_form_errors
+def store_customer_payment_add(cid):
+    c = StoreCustomer.query.filter_by(id=cid).first_or_404()
+    amount = form_float(request.form, 'amount', min_value=0.01)
+    payment = StoreCustomerPayment(
+        customer_id=c.id,
+        payment_date=parse_date(request.form['payment_date']),
+        amount=amount,
+        method=request.form.get('method', '').strip() or None,
+        notes=request.form.get('notes', '').strip() or None,
+        created_by=current_user.id,
+    )
+    db.session.add(payment)
+    db.session.flush()
+    log_audit('CREATE', 'store_customer_payments', payment.id,
+              f'Received {amount:,.2f} from store customer {c.name}')
+    touch_sync_fields(payment)
+    db.session.commit()
+    flash(f'Payment of ${amount:,.2f} from {c.name} recorded.', 'success')
+    return redirect(url_for('store_customer_detail', cid=cid))
+
+
+@app.route('/store/customers/<int:cid>/payments/<int:pid>/delete', methods=['POST'])
+@login_required
+@admin_required
+def store_customer_payment_delete(cid, pid):
+    p = StoreCustomerPayment.query.filter_by(id=pid, customer_id=cid).first_or_404()
+    log_audit('DELETE', 'store_customer_payments', pid, f'Deleted payment of {p.amount:,.2f}')
+    p.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(p)
+    db.session.commit()
+    flash('Payment removed.', 'warning')
+    return redirect(url_for('store_customer_detail', cid=cid))
+
+
+@app.route('/store/customers/<int:cid>/statement')
+@login_required
+@permission_required('store')
+def store_customer_statement(cid):
+    """Statement of account for one outside customer over the chosen period —
+    opening balance brought forward, every sale and payment in order with a
+    running balance, and the closing balance due. PDF or CSV."""
+    c = StoreCustomer.query.filter_by(id=cid).first_or_404()
+    df, dt = query_date_range()
+    df_str, dt_str = df.strftime('%Y-%m-%d'), dt.strftime('%Y-%m-%d')
+    stmt = store_customer_statement_rows(c, df, dt)
+    safe = re.sub(r'[^A-Za-z0-9_-]+', '_', c.name).strip('_') or 'customer'
+
+    if request.args.get('format') == 'pdf':
+        header = ['Date', 'Type', 'Description', 'Qty', 'Debit (USD)', 'Credit (USD)', 'Balance (USD)']
+        rows = [[f'Balance brought forward', '', '', '', '', '', f'{stmt["opening"]:,.2f}']]
+        rows += [[e['date'].strftime('%d %b %Y'), e['kind'], e['description'],
+                  qty_filter(e['quantity']) if e['quantity'] is not None else '',
+                  f'{e["debit"]:,.2f}' if e['debit'] else '', f'{e["credit"]:,.2f}' if e['credit'] else '',
+                  f'{e["balance"]:,.2f}'] for e in stmt['entries']]
+        rows.append(['', '', 'TOTALS', '', f'{stmt["total_billed"]:,.2f}', f'{stmt["total_paid"]:,.2f}',
+                     f'{stmt["closing"]:,.2f} due'])
+        contact = ' · '.join(x for x in (c.phone, c.address) if x)
+        subtitle = f'Period: {df_str} to {dt_str}' + (f' · {contact}' if contact else '')
+        elements = _pdf_section(f'Statement of Account — {c.name}', subtitle,
+                                [_pdf_table(
+                                    [header] + rows, bold_last_row=True,
+                                    col_widths=[70, 55, 190, 40, 70, 70, 85])])
+        return _pdf_response(f'statement_{safe}_{df_str}_to_{dt_str}.pdf', elements, pagesize=landscape(A4))
+
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow([f'STATEMENT OF ACCOUNT — {c.name}'])
+    w.writerow([f'Period: {df_str} to {dt_str}'])
+    w.writerow([f'Generated: {datetime.now().strftime("%Y-%m-%d %H:%M")} by {current_user.username}'])
+    w.writerow([])
+    w.writerow(['Date', 'Type', 'Description', 'Qty', 'Debit (USD)', 'Credit (USD)', 'Balance (USD)'])
+    w.writerow(['', '', 'Balance brought forward', '', '', '', f'{stmt["opening"]:.2f}'])
+    for e in stmt['entries']:
+        w.writerow([e['date'], e['kind'], e['description'],
+                    qty_filter(e['quantity']) if e['quantity'] is not None else '',
+                    f'{e["debit"]:.2f}' if e['debit'] else '', f'{e["credit"]:.2f}' if e['credit'] else '',
+                    f'{e["balance"]:.2f}'])
+    w.writerow(['', '', 'TOTALS', '', f'{stmt["total_billed"]:.2f}', f'{stmt["total_paid"]:.2f}',
+                f'{stmt["closing"]:.2f}'])
+    out.seek(0)
+    resp = make_response(out.getvalue())
+    resp.headers['Content-Type'] = 'text/csv'
+    resp.headers['Content-Disposition'] = f'attachment; filename=statement_{safe}_{df_str}_to_{dt_str}.csv'
+    return resp
 
 
 @app.route('/store/adjustments')
@@ -13559,10 +13903,16 @@ SYNC_MODELS = {
         'log_date', 'description', 'parts_cost', 'labor_cost', 'total_cost', 'mechanic', 'notes',
         'created_by', 'created_at', 'deleted_at',
     ), {'vehicle_id': 'vehicles'}),
+    'store_customers': (StoreCustomer, (
+        'name', 'phone', 'address', 'notes', 'created_at', 'deleted_at',
+    ), {}),
+    'store_customer_payments': (StoreCustomerPayment, (
+        'payment_date', 'amount', 'method', 'notes', 'created_by', 'created_at', 'deleted_at',
+    ), {'customer_id': 'store_customers'}),
     'store_sales': (StoreSale, (
         'sale_date', 'quantity', 'unit_cost', 'unit_price', 'total_amount', 'customer_name',
         'notes', 'created_by', 'created_at', 'deleted_at',
-    ), {'part_id': 'spare_parts', 'vehicle_id': 'vehicles'}),
+    ), {'part_id': 'spare_parts', 'vehicle_id': 'vehicles', 'customer_id': 'store_customers'}),
     'store_adjustments': (StoreAdjustment, (
         'adjustment_date', 'quantity_before', 'quantity_after', 'cost_price_before', 'cost_price_after',
         'reason', 'notes', 'created_by', 'created_at', 'deleted_at',
@@ -13659,7 +14009,8 @@ DANGER_ZONE_MODULES = [
     ('ledger', 'Daily Transactions (Crew Ledger)', ['daily_logs', 'driver_deposits']),
     ('operations', 'Operations (Fuel & Maintenance Logs)', ['fuel_logs', 'maintenance_logs']),
     ('finance', 'Finance Ledger', ['loans', 'loan_payments', 'payables', 'receivables', 'capital_contributions', 'owner_drawings', 'budgets', 'expenses', 'expense_categories', 'commission_payments', 'payroll_deductions']),
-    ('store', 'Spares Store', ['spare_parts', 'store_purchases', 'store_sales', 'store_adjustments']),
+    ('store', 'Spares Store', ['spare_parts', 'store_purchases', 'store_sales', 'store_adjustments',
+                               'store_customers', 'store_customer_payments']),
 ]
 DANGER_ZONE_MODULES_BY_KEY = {key: (label, tables) for key, label, tables in DANGER_ZONE_MODULES}
 
@@ -13679,6 +14030,7 @@ DANGER_ZONE_TABLE_LABELS = {
     'payroll_deductions': 'Payroll Deductions',
     'spare_parts': 'Spare Parts', 'store_purchases': 'Store Purchases', 'store_sales': 'Store Sales',
     'store_adjustments': 'Store Adjustments',
+    'store_customers': 'Store Customers', 'store_customer_payments': 'Store Customer Payments',
 }
 
 
@@ -13698,6 +14050,8 @@ _DANGER_ZONE_LABEL_FIELDS = {
     'maintenance_logs': ('log_date', 'total_cost'),
     'store_sales': ('sale_date', 'customer_name', 'total_amount'),
     'store_adjustments': ('adjustment_date', 'reason', 'quantity_after'),
+    'store_customers': ('name', 'phone'),
+    'store_customer_payments': ('payment_date', 'amount', 'method'),
     'franchise_vehicles': ('number_plate', 'franchisee_name'),
     'vehicle_documents': ('doc_type', 'reference_number'),
     'maintenance_schedules': ('description',),
@@ -14781,6 +15135,9 @@ def migrate_db():
             if 'vehicle_id' not in store_sale_cols:
                 conn.execute(text(
                     "ALTER TABLE store_sales ADD COLUMN vehicle_id INTEGER REFERENCES vehicles(id)"))
+            if 'customer_id' not in store_sale_cols:
+                conn.execute(text(
+                    "ALTER TABLE store_sales ADD COLUMN customer_id INTEGER REFERENCES store_customers(id)"))
 
         # Store quantities can now be fractional (e.g. 2.5 litres of oil sold
         # from a bulk container) instead of being forced to whole units.
@@ -15293,6 +15650,7 @@ with app.app_context():
     db.create_all()  # recreate any tables migrate_db() dropped for a schema change
     create_default_admin()
     create_default_expense_categories()
+    backfill_store_customers()
 
 # Only a spoke (SYNC_ENABLED=true in its .env, pointed at SYNC_HUB_URL)
 # starts this loop — Central (Render) never does; it only serves

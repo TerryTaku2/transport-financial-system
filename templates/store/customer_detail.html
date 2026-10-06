@@ -1,0 +1,97 @@
+{% extends 'base.html' %}
+{% block title %}{{ customer.name }}{% endblock %}
+{% block page_title %}Store Customer — {{ customer.name }}{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>{{ customer.name }}</h1>
+    <div class="subtitle">{{ customer.phone or 'No phone on file' }}{% if customer.address %} · {{ customer.address }}{% endif %}</div>
+  </div>
+  <div class="btn-group">
+    <a href="{{ url_for('store_customer_statement', cid=customer.id, date_from=date_from, date_to=date_to, format='pdf') }}" class="btn btn-primary" target="_blank"><i data-feather="file-text"></i> Statement PDF</a>
+    <a href="{{ url_for('store_customer_statement', cid=customer.id, date_from=date_from, date_to=date_to) }}" class="btn btn-outline"><i data-feather="download"></i> Statement CSV</a>
+    <a href="{{ url_for('store_customer_edit', cid=customer.id) }}" class="btn btn-outline"><i data-feather="edit-2"></i> Edit</a>
+    <a href="{{ url_for('store_customers') }}" class="btn btn-outline"><i data-feather="arrow-left"></i> Back</a>
+  </div>
+</div>
+
+<form method="GET" class="filter-bar mb-16">
+  <input type="hidden" name="cid" value="{{ customer.id }}">
+  <div class="form-group"><label>From</label><input type="date" name="date_from" value="{{ date_from }}"></div>
+  <div class="form-group"><label>To</label><input type="date" name="date_to" value="{{ date_to }}"></div>
+  <button type="submit" class="btn btn-primary"><i data-feather="filter"></i> Show Period</button>
+  {% if date_from or date_to %}<a href="{{ url_for('store_customer_detail', cid=customer.id) }}" class="btn btn-outline">All Time</a>{% endif %}
+</form>
+
+<div class="kpi-grid">
+  <div class="kpi-card kpi-blue"><div class="kpi-label">Billed (period)</div><div class="kpi-value">{{ stmt.total_billed|currency }}</div></div>
+  <div class="kpi-card kpi-green"><div class="kpi-label">Paid (period)</div><div class="kpi-value">{{ stmt.total_paid|currency }}</div></div>
+  <div class="kpi-card {% if stmt.closing > 0 %}kpi-amber{% else %}kpi-green{% endif %}">
+    <div class="kpi-label">Balance Due (closing)</div><div class="kpi-value">{{ stmt.closing|currency }}</div>
+    {% if stmt.opening %}<div class="kpi-sub">Brought forward: {{ stmt.opening|currency }}</div>{% endif %}
+  </div>
+</div>
+
+<div class="card mb-24">
+  <div class="card-header"><h3>Record a Payment</h3></div>
+  <div class="card-body">
+    <form method="POST" action="{{ url_for('store_customer_payment_add', cid=customer.id) }}" style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div class="form-group"><label>Date</label><input type="date" name="payment_date" required value="{{ today }}"></div>
+      <div class="form-group"><label>Amount (USD)</label><input type="number" name="amount" step="any" min="0.01" required></div>
+      <div class="form-group"><label>Method</label>
+        <select name="method"><option value="Cash">Cash</option><option value="Transfer">Transfer</option><option value="Other">Other</option></select></div>
+      <div class="form-group" style="flex:1;min-width:160px;"><label>Notes</label><input type="text" name="notes" placeholder="Optional"></div>
+      <button type="submit" class="btn btn-primary"><i data-feather="check"></i> Record Payment</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-header"><h3>Statement of Account</h3></div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Date</th><th>Type</th><th>Description</th><th class="text-right">Qty</th>
+            <th class="text-right">Debit</th><th class="text-right">Credit</th><th class="text-right">Balance</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% if stmt.opening %}
+        <tr class="summary-row"><td colspan="6"><em>Balance brought forward</em></td><td class="text-right"><strong>{{ stmt.opening|currency }}</strong></td><td></td></tr>
+        {% endif %}
+        {% for e in stmt.entries %}
+        <tr>
+          <td>{{ e.date }}</td>
+          <td><span class="badge {% if e.kind == 'Sale' %}badge-blue{% else %}badge-green{% endif %}">{{ e.kind }}</span></td>
+          <td>{{ e.description }}</td>
+          <td class="text-right">{{ e.quantity|qty if e.quantity is not none else '' }}</td>
+          <td class="text-right">{{ e.debit|currency if e.debit else '—' }}</td>
+          <td class="text-right text-success">{{ e.credit|currency if e.credit else '—' }}</td>
+          <td class="text-right"><strong>{{ e.balance|currency }}</strong></td>
+          <td>
+            {% if current_user.role == 'admin' and e.kind == 'Payment' %}
+            <form method="POST" action="{{ url_for('store_customer_payment_delete', cid=customer.id, pid=e.payment_id) }}" data-confirm="Remove this payment?" style="display:inline;">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <button class="btn btn-danger btn-xs">Remove</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8"><div class="empty-state"><p>No sales or payments in this period.</p></div></td></tr>
+        {% endfor %}
+      </tbody>
+      <tfoot>
+        <tr class="summary-row">
+          <td colspan="4">TOTALS</td>
+          <td class="text-right">{{ stmt.total_billed|currency }}</td>
+          <td class="text-right">{{ stmt.total_paid|currency }}</td>
+          <td class="text-right"><strong>{{ stmt.closing|currency }}</strong></td>
+          <td></td>
+        </tr>
+      </tfoot>
+    </table>
+  </div>
+</div>
+{% endblock %}

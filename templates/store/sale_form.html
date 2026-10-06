@@ -59,8 +59,17 @@
           <div class="form-hint">If sold to a company vehicle, the amount is booked as an expense on that vehicle's income statement.</div>
         </div>
         <div class="form-group" id="sale_customer_group" {% if sale and sale.vehicle_id %}style="display:none;"{% endif %}>
-          <label>Customer</label>
-          <input type="text" name="customer_name" id="sale_customer" value="{{ sale.customer_name or '' if sale }}">
+          <label>Outside Customer</label>
+          <select name="customer_id" id="sale_customer_id">
+            <option value="">— Cash sale / none —</option>
+            {% for c in customers %}
+            <option value="{{ c.id }}" {% if sale and sale.customer_id==c.id %}selected{% endif %}>{{ c.name }}{% if c.phone %} ({{ c.phone }}){% endif %}</option>
+            {% endfor %}
+          </select>
+          <input type="text" name="customer_name" id="sale_customer" style="margin-top:6px;"
+                 placeholder="…or type a new customer's name (added automatically)"
+                 value="{% if sale and not sale.customer_id %}{{ sale.customer_name or '' }}{% endif %}">
+          <div class="form-hint">Pick an existing account to add this to their statement of account, or type a new name to create one.</div>
         </div>
         <div class="form-group">
           <label>Total</label>
