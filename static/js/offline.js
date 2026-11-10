@@ -263,9 +263,14 @@
       .catch(function () {});
   }
 
-  function enqueueSubmission(form) {
+  // clientId MUST be the same one the live attempt was sent with: when the
+  // live POST times out, the server may have saved it anyway (the request
+  // got through, only the response was lost). Reusing the id lets the
+  // server's already_synced() recognise the replay as the same entry
+  // instead of saving it a second time.
+  function enqueueSubmission(form, clientId) {
     var formData = new FormData(form);
-    var clientId = crypto.randomUUID();
+    clientId = clientId || crypto.randomUUID();
     formData.set('_client_id', clientId);
     var item = {
       clientId: clientId,
@@ -294,11 +299,26 @@
     document.querySelectorAll('form[data-offline-form]').forEach(function (form) {
       form.addEventListener('submit', function (event) {
         event.preventDefault();
+        // Ignore repeat taps while a save is still in flight — on a slow
+        // connection a second tap would otherwise send the entry again.
+        if (form.dataset.submitting === '1') return;
+        var submitButtons = form.querySelectorAll('button[type="submit"], button:not([type]), input[type="submit"]');
+        function setBusy(busy) {
+          form.dataset.submitting = busy ? '1' : '';
+          submitButtons.forEach(function (b) { b.disabled = busy; });
+        }
+        setBusy(true);
+
+        // One id per entry, sent on the live attempt and reused if it ends
+        // up queued, so the server can drop whichever copy arrives second.
+        var clientId = crypto.randomUUID();
         var dataObject = Object.fromEntries(new FormData(form).entries());
+        dataObject._client_id = clientId;
 
         submitViaFetch(form.action || window.location.href, dataObject).then(function (result) {
           if (result.outcome === 'network-error') {
-            return enqueueSubmission(form).then(function () {
+            return enqueueSubmission(form, clientId).then(function () {
+              setBusy(false);
               showInlineNotice(form, "Saved offline — will sync automatically once you're back online.");
               var firstField = form.querySelector('input, select, textarea');
               form.reset();
@@ -318,11 +338,12 @@
             return;
           }
           // 5xx — treat like a connectivity problem and queue it.
-          return enqueueSubmission(form).then(function () {
+          return enqueueSubmission(form, clientId).then(function () {
+            setBusy(false);
             showInlineNotice(form, "Saved offline — will sync automatically once you're back online.");
             form.reset();
           });
-        });
+        }).catch(function () { setBusy(false); });
       });
     });
   }

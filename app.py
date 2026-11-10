@@ -24,6 +24,7 @@ import uuid
 import webbrowser
 import zipfile
 from logging.handlers import RotatingFileHandler
+from collections import defaultdict
 from datetime import datetime, date, timedelta, timezone
 from functools import wraps
 from types import SimpleNamespace
@@ -671,6 +672,21 @@ class OfflineSyncLog(db.Model):
     endpoint = db.Column(db.String(100), nullable=False)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
     created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class DuplicateDismissal(db.Model):
+    """A group on the Possible Duplicates page that an admin reviewed and
+    marked "not a duplicate" (e.g. two genuinely identical fuel purchases on
+    the same day). Keyed by table + the sorted record ids in the group, so
+    the same group stays hidden, but if a further matching copy appears
+    later the group's ids change and it surfaces again for review."""
+    __tablename__ = 'duplicate_dismissals'
+    id = db.Column(db.Integer, primary_key=True)
+    table_name = db.Column(db.String(60), nullable=False)
+    record_ids = db.Column(db.String(500), nullable=False)
+    dismissed_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    dismissed_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
+    __table_args__ = (db.UniqueConstraint('table_name', 'record_ids', name='uq_duplicate_dismissal'),)
 
 
 class SyncSite(db.Model):
@@ -13204,6 +13220,252 @@ def user_reset_password(uid):
     db.session.commit()
     flash(f'Password reset for {u.username}.', 'success')
     return redirect(url_for('users'))
+
+
+# ─────────────────────────────────────────────────────────────
+# Possible Duplicates — finds transactions saved more than once with
+# identical details. The usual cause is a save that went through while the
+# connection dropped: the user (or the offline queue) retried and the entry
+# landed twice. The offline queue now reuses one _client_id per entry so
+# that no longer happens there, but this page catches everything else
+# (double taps on ordinary forms, re-typing an entry that "didn't save",
+# and anything recorded before that fix).
+#
+# Each group is the same table + same date + same values in every listed
+# field. The earliest-saved row is treated as the original; later rows are
+# flagged as copies. Removing a copy goes through that table's own delete
+# route, so stock is restored, the audit log is written and the deletion
+# syncs to other sites exactly as a normal delete would.
+# ─────────────────────────────────────────────────────────────
+def _dup_delete_daily_log(rid):
+    # ledger_entry_delete removes a vehicle's whole day, which would also
+    # take out the original — duplicates need just this one row gone.
+    log = DailyLog.query.filter_by(id=rid).first_or_404()
+    reg = log.vehicle.registration if log.vehicle else f'vehicle {log.vehicle_id}'
+    log_audit('DELETE', 'daily_logs', rid, f'Deleted duplicate ledger entry for {reg} on {log.log_date}')
+    log.deleted_at = datetime.now(timezone.utc)
+    touch_sync_fields(log)
+    db.session.commit()
+    flash('Duplicate ledger entry deleted.', 'warning')
+
+
+# (column, heading, lookup kind or None). Lookup kinds turn ids into names.
+DUPLICATE_CHECKS = {
+    'daily_logs': {
+        'label': 'Vehicle Ledger (fares)', 'model': DailyLog, 'date_field': 'log_date',
+        'fields': [('vehicle_id', 'Vehicle', 'vehicle'), ('driver_id', 'Driver', 'driver'),
+                   ('conductor_id', 'Conductor', 'driver'), ('gross_revenue', 'Fare', None),
+                   ('garnish', 'Garnish', None), ('trips_completed', 'Trips', None), ('notes', 'Notes', None)],
+        'delete': _dup_delete_daily_log,
+    },
+    'fuel_logs': {
+        'label': 'Fuel Logs', 'model': FuelLog, 'date_field': 'log_date',
+        'fields': [('vehicle_id', 'Vehicle', 'vehicle'), ('liters', 'Liters', None),
+                   ('total_cost', 'Cost', None), ('odometer', 'Odometer', None),
+                   ('supplier', 'Supplier', None), ('notes', 'Notes', None)],
+        'delete': lambda rid: fuel_log_delete(rid),
+    },
+    'maintenance_logs': {
+        'label': 'Maintenance Logs', 'model': MaintenanceLog, 'date_field': 'log_date',
+        'fields': [('vehicle_id', 'Vehicle', 'vehicle'), ('description', 'Description', None),
+                   ('total_cost', 'Total cost', None), ('mechanic', 'Mechanic', None)],
+        'delete': lambda rid: maintenance_log_delete(rid),
+    },
+    'expenses': {
+        'label': 'Expenses', 'model': Expense, 'date_field': 'expense_date',
+        'fields': [('category_id', 'Category', 'category'), ('vehicle_id', 'Vehicle', 'vehicle'),
+                   ('driver_id', 'Driver', 'driver'), ('amount', 'Amount', None),
+                   ('description', 'Description', None)],
+        'delete': lambda rid: expense_delete(rid),
+    },
+    'driver_deposits': {
+        'label': 'Driver Deposits', 'model': DriverDeposit, 'date_field': 'deposit_date',
+        'fields': [('driver_id', 'Driver', 'driver'), ('vehicle_id', 'Vehicle', 'vehicle'),
+                   ('amount', 'Amount', None), ('notes', 'Notes', None)],
+        'delete': lambda rid: driver_deposit_delete(rid),
+    },
+    'franchise_daily_income': {
+        'label': 'Franchise Daily Income', 'model': FranchiseDailyIncome, 'date_field': 'entry_date',
+        'fields': [('vehicle_id', 'Vehicle', 'fvehicle'), ('income', 'Income', None),
+                   ('exp_traffic_fines', 'Fines', None), ('exp_facilitation_fees', 'Facilitation', None),
+                   ('exp_workshop', 'Workshop', None), ('exp_wages', 'Wages', None),
+                   ('other_expenditure', 'Other exp.', None), ('deposited', 'Deposited', None),
+                   ('description', 'Description', None)],
+        'delete': lambda rid: franchise_daily_income_delete(rid),
+    },
+    'franchise_weekly_income': {
+        'label': 'Franchise Weekly Income', 'model': FranchiseWeeklyIncome, 'date_field': 'week_start',
+        'fields': [('vehicle_id', 'Vehicle', 'fvehicle'), ('income', 'Income', None),
+                   ('exp_traffic_fines', 'Fines', None), ('exp_facilitation_fees', 'Facilitation', None),
+                   ('exp_workshop', 'Workshop', None), ('exp_wages', 'Wages', None),
+                   ('other_expenditure', 'Other exp.', None), ('deposited', 'Deposited', None),
+                   ('description', 'Description', None)],
+        'delete': lambda rid: franchise_weekly_income_delete(rid),
+    },
+    'franchise_operational_expenses': {
+        'label': 'Franchise Operational Expenses', 'model': FranchiseOperationalExpense,
+        'date_field': 'expense_date',
+        'fields': [('category_id', 'Category', 'fcategory'), ('amount', 'Amount', None),
+                   ('description', 'Description', None)],
+        'delete': lambda rid: franchise_operational_expense_delete(rid),
+    },
+    'store_purchases': {
+        'label': 'Store Purchases', 'model': StorePurchase, 'date_field': 'purchase_date',
+        'fields': [('part_id', 'Part', 'part'), ('quantity', 'Qty', None), ('unit_cost', 'Unit cost', None),
+                   ('supplier', 'Supplier', None), ('notes', 'Notes', None)],
+        'delete': lambda rid: store_purchase_delete(rid),
+    },
+    'store_sales': {
+        'label': 'Store Sales', 'model': StoreSale, 'date_field': 'sale_date',
+        'fields': [('part_id', 'Part', 'part'), ('quantity', 'Qty', None), ('unit_price', 'Unit price', None),
+                   ('vehicle_id', 'Vehicle', 'vehicle'), ('customer_id', 'Customer', 'customer'),
+                   ('customer_name', 'Customer name', None), ('notes', 'Notes', None)],
+        'delete': lambda rid: store_sale_delete(rid),
+    },
+    'store_adjustments': {
+        'label': 'Stock Adjustments', 'model': StoreAdjustment, 'date_field': 'adjustment_date',
+        'fields': [('part_id', 'Part', 'part'), ('quantity_after', 'Qty after', None),
+                   ('cost_price_after', 'Cost after', None), ('reason', 'Reason', None), ('notes', 'Notes', None)],
+        'delete': lambda rid: store_adjustment_delete(rid),
+    },
+}
+
+DUPLICATE_PERIODS = {'30': 30, '90': 90, '365': 365, 'all': None}
+
+
+def _dup_normalise(value):
+    if isinstance(value, float):
+        return round(value, 2)
+    if isinstance(value, str):
+        return ' '.join(value.split()).lower() or None
+    return value
+
+
+def _dup_lookups():
+    def names(model, attr):
+        return {row.id: getattr(row, attr)
+                for row in model.query.execution_options(include_deleted=True).all()}
+    return {
+        'vehicle': names(Vehicle, 'registration'), 'driver': names(Driver, 'name'),
+        'fvehicle': names(FranchiseVehicle, 'number_plate'), 'category': names(ExpenseCategory, 'name'),
+        'fcategory': names(FranchiseExpenseCategory, 'name'), 'part': names(SparePart, 'name'),
+        'customer': names(StoreCustomer, 'name'), 'user': names(User, 'username'),
+    }
+
+
+def find_duplicate_groups(days=90, include_dismissed=False):
+    """Every group of 2+ live rows sharing a date and identical values in
+    the table's compared fields, newest groups first."""
+    since = datetime.now(timezone.utc) - timedelta(days=days) if days else None
+    dismissed = set() if include_dismissed else {
+        (d.table_name, d.record_ids) for d in DuplicateDismissal.query.all()}
+    lookups = None
+    groups = []
+    for table, cfg in DUPLICATE_CHECKS.items():
+        model = cfg['model']
+        query = model.query
+        if since is not None:
+            # A replayed offline entry can land hours after the original, so
+            # this bounds by the entry's own date, not by save time.
+            query = query.filter(getattr(model, cfg['date_field']) >= since.date())
+        buckets = defaultdict(list)
+        for row in query.all():
+            key = (getattr(row, cfg['date_field']),) + tuple(
+                _dup_normalise(getattr(row, col)) for col, _h, _k in cfg['fields'])
+            buckets[key].append(row)
+        for rows in buckets.values():
+            if len(rows) < 2:
+                continue
+            rows.sort(key=lambda r: (r.created_at or datetime.min, r.id))
+            ids_key = ','.join(str(r.id) for r in sorted(rows, key=lambda r: r.id))
+            if (table, ids_key) in dismissed:
+                continue
+            if lookups is None:
+                lookups = _dup_lookups()
+            display_rows = []
+            for i, row in enumerate(rows):
+                values = []
+                for col, _heading, kind in cfg['fields']:
+                    raw = getattr(row, col)
+                    values.append(lookups[kind].get(raw, raw) if kind and raw is not None else raw)
+                gap = None
+                if i and row.created_at and rows[0].created_at:
+                    gap = row.created_at - rows[0].created_at
+                display_rows.append({
+                    'id': row.id, 'is_copy': i > 0, 'cells': values, 'created_at': row.created_at,
+                    'gap': gap, 'created_by': lookups['user'].get(getattr(row, 'created_by', None)),
+                })
+            groups.append({
+                'table': table, 'label': cfg['label'], 'date': getattr(rows[0], cfg['date_field']),
+                'headings': [h for _c, h, _k in cfg['fields']], 'rows': display_rows,
+                'ids_key': ids_key,
+            })
+    groups.sort(key=lambda g: (g['date'], g['rows'][-1]['created_at'] or datetime.min), reverse=True)
+    return groups
+
+
+def _format_gap(gap):
+    if gap is None:
+        return ''
+    seconds = int(gap.total_seconds())
+    if seconds < 60:
+        return f'{seconds}s later'
+    if seconds < 3600:
+        return f'{seconds // 60} min later'
+    if seconds < 86400:
+        return f'{seconds // 3600} h {seconds % 3600 // 60} min later'
+    return f'{seconds // 86400} day(s) later'
+
+
+app.jinja_env.filters['dup_gap'] = _format_gap
+
+
+@app.route('/admin/duplicates')
+@login_required
+@admin_required
+def duplicate_transactions():
+    period = request.args.get('period', '90')
+    if period not in DUPLICATE_PERIODS:
+        period = '90'
+    groups = find_duplicate_groups(DUPLICATE_PERIODS[period])
+    copy_count = sum(len(g['rows']) - 1 for g in groups)
+    return render_template('admin/duplicates.html', groups=groups, period=period, copy_count=copy_count)
+
+
+@app.route('/admin/duplicates/<table>/remove', methods=['POST'])
+@login_required
+@admin_required
+def duplicate_transactions_remove(table):
+    """Removes the given record ids through the table's normal delete route.
+    Used both for one row and for "remove all copies" on a group."""
+    cfg = DUPLICATE_CHECKS.get(table)
+    period = request.form.get('period', '90')
+    if not cfg:
+        abort(404)
+    ids = [int(x) for x in request.form.getlist('record_id') if x.isdigit()]
+    for rid in ids:
+        cfg['delete'](rid)
+    if len(ids) > 1:
+        # Each delete route flashes its own message; one summary is clearer.
+        session.pop('_flashes', None)
+        flash(f'Removed {len(ids)} duplicate {cfg["label"].lower()} entries.', 'warning')
+    return redirect(url_for('duplicate_transactions', period=period))
+
+
+@app.route('/admin/duplicates/<table>/dismiss', methods=['POST'])
+@login_required
+@admin_required
+def duplicate_transactions_dismiss(table):
+    if table not in DUPLICATE_CHECKS:
+        abort(404)
+    ids_key = ','.join(str(i) for i in sorted(
+        int(x) for x in request.form.get('ids_key', '').split(',') if x.isdigit()))
+    if ids_key and not DuplicateDismissal.query.filter_by(table_name=table, record_ids=ids_key).first():
+        db.session.add(DuplicateDismissal(table_name=table, record_ids=ids_key, dismissed_by=current_user.id))
+        log_audit('UPDATE', table, None, f'Marked records {ids_key} as not duplicates')
+        db.session.commit()
+    flash('Marked as not a duplicate — this group will no longer be flagged.', 'info')
+    return redirect(url_for('duplicate_transactions', period=request.form.get('period', '90')))
 
 
 # ─────────────────────────────────────────────────────────────

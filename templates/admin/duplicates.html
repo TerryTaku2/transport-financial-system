@@ -1,0 +1,94 @@
+{% extends 'base.html' %}
+{% block title %}Possible Duplicates{% endblock %}
+{% block page_title %}Admin — Possible Duplicates{% endblock %}
+
+{% block content %}
+<div class="page-header">
+  <div>
+    <h1>Possible Duplicate Transactions</h1>
+    <div class="subtitle">Entries saved more than once with exactly the same details — usually a save that was retried after the connection dropped. The earliest-saved entry is kept as the original; later ones are marked as copies.</div>
+  </div>
+</div>
+
+<div class="btn-group mb-16">
+  {% for key, label in [('30', 'Last 30 days'), ('90', 'Last 90 days'), ('365', 'Last year'), ('all', 'All time')] %}
+  <a href="{{ url_for('duplicate_transactions', period=key) }}"
+     class="btn {% if period == key %}btn-primary{% else %}btn-outline{% endif %}">{{ label }}</a>
+  {% endfor %}
+</div>
+
+{% if groups %}
+  <div class="alert alert-warning mb-16">
+    {{ groups|length }} group{{ 's' if groups|length != 1 }} found, {{ copy_count }} likely cop{{ 'ies' if copy_count != 1 else 'y' }}.
+    Removing a copy uses the normal delete (stock is restored and it is recorded in the Audit Log).
+    A ledger entry with diesel also creates a fuel log, so a duplicated ledger entry usually appears under Fuel Logs too.
+  </div>
+
+  {% for g in groups %}
+  <div class="card mb-16">
+    <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+      <h3>{{ g.label }} — {{ g.date.strftime('%d %b %Y') if g.date else '—' }}</h3>
+      <span class="badge badge-amber">{{ g.rows|length }} identical entries</span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th></th><th>#</th><th>Saved at</th><th>By</th>
+            {% for h in g.headings %}<th>{{ h }}</th>{% endfor %}
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in g.rows %}
+          <tr>
+            <td>
+              {% if r.is_copy %}<span class="badge badge-red">Copy</span>
+              {% else %}<span class="badge badge-green">Original</span>{% endif %}
+            </td>
+            <td>{{ r.id }}</td>
+            <td>
+              {{ r.created_at.strftime('%d %b %Y %H:%M:%S') if r.created_at else '—' }}
+              {% if r.gap %}<div class="form-hint">{{ r.gap|dup_gap }}</div>{% endif %}
+            </td>
+            <td>{{ r.created_by or '—' }}</td>
+            {% for v in r.cells %}
+            <td>{{ '—' if v is none or v == '' else (('%.2f'|format(v)) if v is float else v) }}</td>
+            {% endfor %}
+            <td>
+              <form method="POST" action="{{ url_for('duplicate_transactions_remove', table=g.table) }}"
+                    data-confirm="Delete entry #{{ r.id }}?{% if not r.is_copy %} This is the earliest one saved.{% endif %}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="period" value="{{ period }}">
+                <input type="hidden" name="record_id" value="{{ r.id }}">
+                <button class="btn {% if r.is_copy %}btn-danger{% else %}btn-outline{% endif %} btn-xs">Delete</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="card-body" style="display:flex;gap:8px;flex-wrap:wrap;">
+      <form method="POST" action="{{ url_for('duplicate_transactions_remove', table=g.table) }}"
+            data-confirm="Keep the original (#{{ g.rows[0].id }}) and delete the {{ g.rows|length - 1 }} cop{{ 'ies' if g.rows|length > 2 else 'y' }}?">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="period" value="{{ period }}">
+        {% for r in g.rows if r.is_copy %}<input type="hidden" name="record_id" value="{{ r.id }}">{% endfor %}
+        <button class="btn btn-danger">Keep original, remove copies</button>
+      </form>
+      <form method="POST" action="{{ url_for('duplicate_transactions_dismiss', table=g.table) }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="period" value="{{ period }}">
+        <input type="hidden" name="ids_key" value="{{ g.ids_key }}">
+        <button class="btn btn-outline">Not a duplicate</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="card"><div class="card-body">
+    <div class="empty-state"><p>No duplicate transactions found for this period.</p></div>
+  </div></div>
+{% endif %}
+{% endblock %}

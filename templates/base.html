@@ -265,6 +265,9 @@
       <a href="{{ url_for('audit_log') }}" class="nav-item {% if request.endpoint == 'audit_log' %}active{% endif %}">
         <i data-feather="activity"></i> Audit Log
       </a>
+      <a href="{{ url_for('duplicate_transactions') }}" class="nav-item {% if 'duplicate_transactions' in (request.endpoint or '') %}active{% endif %}">
+        <i data-feather="copy"></i> Possible Duplicates
+      </a>
       <a href="{{ url_for('import_history') }}" class="nav-item {% if request.endpoint == 'import_history' %}active{% endif %}">
         <i data-feather="upload-cloud"></i> Import History
       </a>
