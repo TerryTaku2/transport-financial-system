@@ -23,43 +23,13 @@
   <div class="card-body">
     <form method="POST" data-offline-form>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {#- Adding: each line posts indexed fields (category_id_0, amount_0,
+          description_0, ...) so several expenses for the same vehicle can be
+          saved at once. Indexed rather than repeated `amount[]` names because
+          offline.js flattens the form with Object.fromEntries, which keeps
+          only the last value of a repeated name. Editing: one plain line. -#}
+      {% set sfx = '' if expense else '_0' %}
       <div class="form-grid mb-16">
-        <div class="form-group">
-          <label>Category<span class="req">*</span></label>
-          <select name="category_id" id="expense_category" required data-refdata="expense_categories">
-            {% for h in headings %}
-            {% if h.children %}
-            <optgroup label="{{ h.name }}">
-              <option value="{{ h.id }}" data-default-amount="{{ h.default_amount or '' }}" {% if selected_category_id|string == h.id|string %}selected{% endif %}>{{ h.name }} (general)</option>
-              {% for c in h.children|sort(attribute='name') %}
-              <option value="{{ c.id }}" data-default-amount="{{ c.default_amount or '' }}" {% if selected_category_id|string == c.id|string %}selected{% endif %}>{{ c.name }}</option>
-              {% endfor %}
-            </optgroup>
-            {% else %}
-            <option value="{{ h.id }}" data-default-amount="{{ h.default_amount or '' }}" {% if selected_category_id|string == h.id|string %}selected{% endif %}>{{ h.name }}</option>
-            {% endif %}
-            {% endfor %}
-          </select>
-          <details style="margin-top:6px;">
-            <summary class="form-hint" style="cursor:pointer;">Category not listed? Add it</summary>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" form="expense-category-quick-add">
-              <input type="hidden" name="redirect_to" value="{{ url_for('expense_edit', eid=expense.id) if expense else url_for('expense_add') }}" form="expense-category-quick-add">
-              <select name="parent_id" form="expense-category-quick-add" style="padding:6px;">
-                <option value="">New Heading (top-level)</option>
-                {% for h in headings %}
-                <option value="{{ h.id }}">Sub-heading under: {{ h.name }}</option>
-                {% endfor %}
-              </select>
-              <input type="text" name="name" form="expense-category-quick-add" placeholder="Name" style="padding:6px;" required>
-              <button type="submit" form="expense-category-quick-add" class="btn btn-outline btn-xs">Create &amp; Use</button>
-            </div>
-          </details>
-        </div>
-        <div class="form-group">
-          <label>Amount (USD)<span class="req">*</span></label>
-          <input type="number" id="expense_amount" name="amount" step="any" min="0" required placeholder="0.00" value="{{ expense.amount if expense }}">
-        </div>
         <div class="form-group">
           <label>Date<span class="req">*</span></label>
           <input type="date" name="expense_date" required value="{{ today }}">
@@ -72,6 +42,7 @@
             <option value="{{ v.id }}" {% if expense and expense.vehicle_id == v.id %}selected{% endif %}>{{ v.registration }}</option>
             {% endfor %}
           </select>
+          {% if not expense %}<div class="form-hint">Applies to every expense line below.</div>{% endif %}
         </div>
         <div class="form-group">
           <label>Driver (optional)</label>
@@ -84,12 +55,70 @@
           <div class="form-hint">Select a driver if this expense was incurred by them while away — it feeds the Fleet Reconciliation report.</div>
         </div>
       </div>
-      <div class="form-group mb-16">
-        <label>Description</label>
-        <textarea name="description" rows="2">{{ expense.description or '' if expense }}</textarea>
+
+      <div id="expense-lines">
+        <div class="expense-line" data-line style="border:1px solid var(--border, #e2e8f0);border-radius:8px;padding:12px;margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+            <strong class="expense-line-title">{{ 'Expense' if expense else 'Expense 1' }}</strong>
+            {% if not expense %}
+            <button type="button" class="btn btn-outline btn-xs" data-remove-line style="display:none;"><i data-feather="x"></i> Remove</button>
+            {% endif %}
+          </div>
+          <div class="form-grid">
+            <div class="form-group">
+              <label>Category<span class="req">*</span></label>
+              <select name="category_id{{ sfx }}" data-field="category_id" data-expense-category required data-refdata="expense_categories">
+                {% for h in headings %}
+                {% if h.children %}
+                <optgroup label="{{ h.name }}">
+                  <option value="{{ h.id }}" data-default-amount="{{ h.default_amount or '' }}" {% if selected_category_id|string == h.id|string %}selected{% endif %}>{{ h.name }} (general)</option>
+                  {% for c in h.children|sort(attribute='name') %}
+                  <option value="{{ c.id }}" data-default-amount="{{ c.default_amount or '' }}" {% if selected_category_id|string == c.id|string %}selected{% endif %}>{{ c.name }}</option>
+                  {% endfor %}
+                </optgroup>
+                {% else %}
+                <option value="{{ h.id }}" data-default-amount="{{ h.default_amount or '' }}" {% if selected_category_id|string == h.id|string %}selected{% endif %}>{{ h.name }}</option>
+                {% endif %}
+                {% endfor %}
+              </select>
+            </div>
+            <div class="form-group">
+              <label>Amount (USD)<span class="req">*</span></label>
+              <input type="number" name="amount{{ sfx }}" data-field="amount" data-expense-amount step="any" min="0" required placeholder="0.00" value="{{ expense.amount if expense }}">
+            </div>
+          </div>
+          <div class="form-group" style="margin-top:8px;">
+            <label>Description</label>
+            <textarea name="description{{ sfx }}" data-field="description" rows="2">{{ expense.description or '' if expense }}</textarea>
+          </div>
+        </div>
       </div>
+
+      {% if not expense %}
+      <div class="mb-16" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+        <button type="button" class="btn btn-outline" id="add-expense-line"><i data-feather="plus"></i> Add another expense</button>
+        <div><span class="form-hint">Total:</span> <strong id="expense-lines-total">0.00</strong></div>
+      </div>
+      {% endif %}
+
+      <details class="mb-16">
+        <summary class="form-hint" style="cursor:pointer;">Category not listed? Add it</summary>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px;">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}" form="expense-category-quick-add">
+          <input type="hidden" name="redirect_to" value="{{ url_for('expense_edit', eid=expense.id) if expense else url_for('expense_add') }}" form="expense-category-quick-add">
+          <select name="parent_id" form="expense-category-quick-add" style="padding:6px;">
+            <option value="">New Heading (top-level)</option>
+            {% for h in headings %}
+            <option value="{{ h.id }}">Sub-heading under: {{ h.name }}</option>
+            {% endfor %}
+          </select>
+          <input type="text" name="name" form="expense-category-quick-add" placeholder="Name" style="padding:6px;" required>
+          <button type="submit" form="expense-category-quick-add" class="btn btn-outline btn-xs">Create &amp; Use</button>
+        </div>
+      </details>
+
       <div class="btn-group">
-        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Expense</button>
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save {{ 'Expense' if expense else 'Expenses' }}</button>
         <a href="{{ url_for('expenses_list') }}" class="btn btn-outline">Cancel</a>
       </div>
     </form>
@@ -98,19 +127,84 @@
 
 <script>
 (function () {
-  var categorySelect = document.getElementById('expense_category');
-  var amountInput = document.getElementById('expense_amount');
-  if (!categorySelect || !amountInput) return;
+  var container = document.getElementById('expense-lines');
+  if (!container) return;
+  var addBtn = document.getElementById('add-expense-line');
+  var totalEl = document.getElementById('expense-lines-total');
+  var multi = !!addBtn;
 
-  function applyDefault() {
-    var opt = categorySelect.options[categorySelect.selectedIndex];
+  function applyDefault(line) {
+    var select = line.querySelector('[data-expense-category]');
+    var amount = line.querySelector('[data-expense-amount]');
+    var opt = select && select.options[select.selectedIndex];
     var def = opt ? opt.getAttribute('data-default-amount') : '';
     // Only pre-fills an empty field — never overwrites an amount already typed.
-    if (def && !amountInput.value) amountInput.value = def;
+    if (def && !amount.value) amount.value = def;
   }
 
-  categorySelect.addEventListener('change', applyDefault);
-  applyDefault();
+  function updateTotal() {
+    if (!totalEl) return;
+    var total = 0;
+    container.querySelectorAll('[data-expense-amount]').forEach(function (i) {
+      total += parseFloat(i.value) || 0;
+    });
+    totalEl.textContent = total.toFixed(2);
+  }
+
+  // Keeps field names contiguous (category_id_0, amount_0, ...) and the
+  // titles/remove buttons in step after adding or removing a line.
+  function renumber() {
+    var lines = container.querySelectorAll('[data-line]');
+    lines.forEach(function (line, idx) {
+      if (multi) {
+        line.querySelectorAll('[data-field]').forEach(function (f) {
+          f.name = f.getAttribute('data-field') + '_' + idx;
+        });
+        var title = line.querySelector('.expense-line-title');
+        if (title) title.textContent = 'Expense ' + (idx + 1);
+      }
+      var rm = line.querySelector('[data-remove-line]');
+      if (rm) rm.style.display = lines.length > 1 ? '' : 'none';
+    });
+    updateTotal();
+  }
+
+  function wire(line) {
+    var select = line.querySelector('[data-expense-category]');
+    select.addEventListener('change', function () { applyDefault(line); updateTotal(); });
+    var rm = line.querySelector('[data-remove-line]');
+    if (rm) rm.addEventListener('click', function () { line.remove(); renumber(); });
+  }
+
+  container.addEventListener('input', updateTotal);
+  container.querySelectorAll('[data-line]').forEach(function (line) { wire(line); applyDefault(line); });
+
+  if (addBtn) {
+    addBtn.addEventListener('click', function () {
+      var first = container.querySelector('[data-line]');
+      var line = first.cloneNode(true);
+      line.querySelectorAll('input, textarea').forEach(function (f) { f.value = ''; });
+      var select = line.querySelector('[data-expense-category]');
+      select.selectedIndex = 0;
+      container.appendChild(line);
+      wire(line);
+      applyDefault(line);
+      renumber();
+      if (window.feather) window.feather.replace();
+      select.focus();
+    });
+  }
+
+  // After an offline save offline.js resets the form — drop the extra lines too.
+  var form = container.closest('form');
+  if (form) form.addEventListener('reset', function () {
+    setTimeout(function () {
+      container.querySelectorAll('[data-line]').forEach(function (l, i) { if (i > 0) l.remove(); });
+      renumber();
+    }, 0);
+  });
+
+  renumber();
 })();
 </script>
 {% endblock %}

@@ -10396,22 +10396,53 @@ def expense_add():
         if already_synced(client_id):
             flash('Already recorded.', 'info')
             return redirect(url_for('expenses_list'))
-        e = Expense(
-            category_id=form_int(request.form, 'category_id'),
-            vehicle_id=form_int(request.form, 'vehicle_id', required=False),
-            driver_id=form_int(request.form, 'driver_id', required=False),
-            expense_date=parse_date(request.form['expense_date']),
-            description=request.form.get('description', '').strip(),
-            amount=form_float(request.form, 'amount', min_value=0),
-            created_by=current_user.id,
-        )
-        db.session.add(e)
+        # Several expense lines can be entered in one go for the same
+        # vehicle/driver/date. Lines are posted as indexed fields
+        # (category_id_0, amount_0, description_0, category_id_1, ...)
+        # rather than repeated `amount[]` names, because offline.js flattens
+        # the form with Object.fromEntries, which would keep only the last
+        # value of a repeated name. The plain singular fields are still
+        # accepted (offline entries queued before this form changed).
+        vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+        driver_id = form_int(request.form, 'driver_id', required=False)
+        expense_date = parse_date(request.form['expense_date'])
+        indices = sorted({int(m.group(1)) for k in request.form
+                          if (m := re.fullmatch(r'(?:category_id|amount)_(\d+)', k))})
+        suffixes = [f'_{i}' for i in indices] or ['']
+
+        created = []
+        for sfx in suffixes:
+            category_raw = (request.form.get(f'category_id{sfx}') or '').strip()
+            amount_raw = (request.form.get(f'amount{sfx}') or '').strip()
+            description = (request.form.get(f'description{sfx}') or '').strip()
+            if sfx and not amount_raw and not description:
+                continue  # a blank extra line left on the form
+            line = f'Line {len(created) + 1}: ' if len(suffixes) > 1 else ''
+            if not category_raw:
+                raise ValueError(f'{line}Choose a category.')
+            if not amount_raw:
+                raise ValueError(f'{line}Enter an amount.')
+            created.append(Expense(
+                category_id=form_int(request.form, f'category_id{sfx}'),
+                vehicle_id=vehicle_id,
+                driver_id=driver_id,
+                expense_date=expense_date,
+                description=description,
+                amount=form_float(request.form, f'amount{sfx}', min_value=0),
+                created_by=current_user.id,
+            ))
+        if not created:
+            raise ValueError('Enter at least one expense (category + amount).')
+
+        for e in created:
+            db.session.add(e)
         db.session.flush()
-        log_audit('CREATE', 'expenses', e.id, f'Expense of {e.amount}')
+        for e in created:
+            log_audit('CREATE', 'expenses', e.id, f'Expense of {e.amount}')
+            touch_sync_fields(e)
         record_offline_sync(client_id, 'expense_add')
-        touch_sync_fields(e)
         db.session.commit()
-        flash('Expense recorded.', 'success')
+        flash(f'{len(created)} expenses recorded.' if len(created) > 1 else 'Expense recorded.', 'success')
         return redirect(url_for('expenses_list'))
     headings = ExpenseCategory.query.filter_by(parent_id=None).order_by(ExpenseCategory.name).all()
     all_vehicles = Vehicle.query.order_by(Vehicle.registration).all()
