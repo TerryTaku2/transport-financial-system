@@ -13,6 +13,7 @@
 
 <div class="card">
   <div class="card-body">
+    {% if part %}
     <form method="POST">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <div class="form-grid mb-16">
@@ -62,9 +63,59 @@
         <a href="{{ url_for('store_parts') }}" class="btn btn-outline">Cancel</a>
       </div>
     </form>
+    {% else %}
+    <form method="POST">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <div data-line-items data-line-title="Part">
+        <div data-lines>
+          <div data-line style="border:1px solid var(--border, #e2e8f0);border-radius:8px;padding:12px;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <strong data-line-title>Part 1</strong>
+              <button type="button" class="btn btn-outline btn-xs" data-remove-line style="display:none;"><i data-feather="x"></i> Remove</button>
+            </div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Part Name<span class="req">*</span></label>
+                <input type="text" name="name_0" data-field="name" placeholder="e.g. Brake Pads (Front)">
+              </div>
+              <div class="form-group">
+                <label>Part Number</label>
+                <input type="text" name="part_number_0" data-field="part_number">
+              </div>
+              <div class="form-group">
+                <label>Unit</label>
+                <input type="text" name="unit_0" data-field="unit" data-default="pc" value="pc" placeholder="pc, box, set, litre...">
+              </div>
+              <div class="form-group">
+                <label>Reorder Level</label>
+                <input type="number" name="reorder_level_0" data-field="reorder_level" data-default="0" value="0" min="0" step="1">
+              </div>
+              <div class="form-group">
+                <label>Markup (%)</label>
+                <input type="number" name="markup_percent_0" data-field="markup_percent" data-default="0" value="0" min="0" step="0.1">
+              </div>
+              <div class="form-group">
+                <label>Notes</label>
+                <input type="text" name="notes_0" data-field="notes">
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mb-16">
+          <button type="button" class="btn btn-outline" data-add-line><i data-feather="plus"></i> Add another part</button>
+          <div class="form-hint" style="margin-top:6px;">Blank extra lines are ignored. Selling price = cost (from purchases) + markup.</div>
+        </div>
+      </div>
+      <div class="btn-group">
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Parts</button>
+        <a href="{{ url_for('store_parts') }}" class="btn btn-outline">Cancel</a>
+      </div>
+    </form>
+    {% endif %}
   </div>
 </div>
 
+{% if part %}
 <script>
   document.getElementById('sp_markup').addEventListener('input', function () {
     var cost = {{ part.cost_price if part else 0 }};
@@ -72,4 +123,5 @@
     document.getElementById('sp_price_preview').textContent = '$' + (cost * (1 + markup / 100)).toFixed(2);
   });
 </script>
+{% endif %}
 {% endblock %}

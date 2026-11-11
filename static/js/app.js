@@ -178,6 +178,9 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   if (saleVehicle) saleVehicle.addEventListener('change', onSaleVehicleChange);
 
+  // ── Multi-line entry forms (several expenses/parts/purchases/sales at once) ──
+  initLineItems();
+
   // ── Confirm delete ──
   document.querySelectorAll('form[data-confirm]').forEach(function (form) {
     form.addEventListener('submit', function (e) {
@@ -256,6 +259,87 @@ document.addEventListener('DOMContentLoaded', function () {
 // kept in the DOM (invisible, overlaid) so form submission, `required`
 // validation, and offline.js's repopulateSelects() all keep working exactly
 // as before — this only changes how the value gets picked.
+/* Multi-line entry: lets one form submit several items (Add Expense, store
+   purchases/sales, Add Spare Part). Markup contract:
+
+     <div data-line-items data-line-title="Part">
+       <div data-lines>
+         <div data-line>
+           <span data-line-title></span>
+           <button type="button" data-remove-line>Remove</button>
+           <input data-field="quantity" name="quantity_0" data-default="">
+           <span data-line-output></span>   (cleared on a new line)
+         </div>
+       </div>
+       <button type="button" data-add-line>Add another</button>
+     </div>
+
+   "Add another" clones the first line with its values reset (inputs to
+   their data-default, selects to the first option). Every [data-field] is
+   renamed <field>_<index> so names stay contiguous after a removal —
+   indexed rather than repeated names because offline.js flattens queued
+   forms with Object.fromEntries (see form_line_suffixes() in app.py).
+   Page scripts react through the bubbling events "line-added"
+   (detail.line) and "lines-changed". */
+function initLineItems() {
+  document.querySelectorAll('[data-line-items]').forEach(function (wrap) {
+    var list = wrap.querySelector('[data-lines]');
+    if (!list) return;
+    var addBtn = wrap.querySelector('[data-add-line]');
+    var titlePrefix = wrap.getAttribute('data-line-title') || 'Item';
+
+    function lines() { return list.querySelectorAll('[data-line]'); }
+
+    function renumber() {
+      var all = lines();
+      all.forEach(function (line, idx) {
+        line.querySelectorAll('[data-field]').forEach(function (f) {
+          f.name = f.getAttribute('data-field') + '_' + idx;
+        });
+        var title = line.querySelector('[data-line-title]');
+        if (title) title.textContent = titlePrefix + ' ' + (idx + 1);
+        var rm = line.querySelector('[data-remove-line]');
+        if (rm) rm.style.display = all.length > 1 ? '' : 'none';
+      });
+      wrap.dispatchEvent(new CustomEvent('lines-changed', { bubbles: true }));
+    }
+
+    list.addEventListener('click', function (e) {
+      var rm = e.target.closest('[data-remove-line]');
+      if (!rm || lines().length < 2) return;
+      rm.closest('[data-line]').remove();
+      renumber();
+    });
+
+    if (addBtn) addBtn.addEventListener('click', function () {
+      var line = lines()[0].cloneNode(true);
+      line.querySelectorAll('input:not([type="hidden"]), textarea').forEach(function (f) {
+        f.value = f.getAttribute('data-default') || '';
+        f.disabled = false;
+      });
+      line.querySelectorAll('select').forEach(function (s) { s.selectedIndex = 0; });
+      line.querySelectorAll('[data-line-output]').forEach(function (o) { o.textContent = ''; });
+      list.appendChild(line);
+      renumber();
+      wrap.dispatchEvent(new CustomEvent('line-added', { bubbles: true, detail: { line: line } }));
+      if (typeof feather !== 'undefined') feather.replace();
+      var first = line.querySelector('select, input:not([type="hidden"]), textarea');
+      if (first) first.focus();
+    });
+
+    // offline.js resets the form after queueing it — drop the extra lines too.
+    var form = wrap.closest('form');
+    if (form) form.addEventListener('reset', function () {
+      setTimeout(function () {
+        lines().forEach(function (l, i) { if (i > 0) l.remove(); });
+        renumber();
+      }, 0);
+    });
+
+    renumber();
+  });
+}
+
 function enhanceSearchableSelects() {
   document.querySelectorAll('select[data-refdata="drivers"], select[data-refdata="vehicles"], select[data-refdata="franchise_vehicles"]').forEach(function (select) {
     if (select.dataset.searchEnhanced) return;

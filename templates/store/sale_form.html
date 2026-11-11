@@ -23,6 +23,7 @@
           <label>Date<span class="req">*</span></label>
           <input type="date" name="sale_date" required value="{{ today }}">
         </div>
+        {% if sale %}
         <div class="form-group">
           <label>Part<span class="req">*</span></label>
           <select id="sale_part" name="part_id" required data-refdata="parts">
@@ -48,6 +49,7 @@
           <input type="number" id="sale_total_price" name="total_price" step="any" min="0" placeholder="Optional — overrides Unit Price">
           <div class="form-hint">Enter the total directly instead of a unit price — Unit Price will be calculated as Total &divide; Quantity.</div>
         </div>
+        {% endif %}
         <div class="form-group">
           <label>Sold To Vehicle (internal)</label>
           <select name="vehicle_id" id="sale_vehicle" data-refdata="vehicles">
@@ -56,7 +58,7 @@
             <option value="{{ v.id }}" {% if sale and sale.vehicle_id==v.id %}selected{% endif %}>{{ v.registration }} — {{ v.make }} {{ v.model }}</option>
             {% endfor %}
           </select>
-          <div class="form-hint">If sold to a company vehicle, the amount is booked as an expense on that vehicle's income statement.</div>
+          <div class="form-hint">If sold to a company vehicle, the amount is booked as an expense on that vehicle's income statement.{% if not sale %} Applies to every part below.{% endif %}</div>
         </div>
         <div class="form-group" id="sale_customer_group" {% if sale and sale.vehicle_id %}style="display:none;"{% endif %}>
           <label>Outside Customer</label>
@@ -71,21 +73,135 @@
                  value="{% if sale and not sale.customer_id %}{{ sale.customer_name or '' }}{% endif %}">
           <div class="form-hint">Pick an existing account to add this to their statement of account, or type a new name to create one.</div>
         </div>
+        {% if sale %}
         <div class="form-group">
           <label>Total</label>
           <div style="font-size:20px;font-weight:700;color:var(--success);padding-top:6px;" id="sale_total_preview">{{ (sale.total_amount if sale else 0)|currency }}</div>
         </div>
-        <div class="form-group full">
-          <label>Notes</label>
-          <textarea name="notes">{{ sale.notes or '' if sale }}</textarea>
+        {% endif %}
+      </div>
+
+      {% if not sale %}
+      <div id="sale-lines" data-line-items data-line-title="Part">
+        <div data-lines>
+          <div data-line style="border:1px solid var(--border, #e2e8f0);border-radius:8px;padding:12px;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <strong data-line-title>Part 1</strong>
+              <button type="button" class="btn btn-outline btn-xs" data-remove-line style="display:none;"><i data-feather="x"></i> Remove</button>
+            </div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Part<span class="req">*</span></label>
+                <select name="part_id_0" data-field="part_id" data-sale-part required data-refdata="parts">
+                  <option value="">Select part</option>
+                  {% for p in parts %}
+                  <option value="{{ p.id }}" data-price="{{ p.selling_price }}" data-stock="{{ p.quantity_on_hand }}">
+                    {{ p.name }}{% if p.part_number %} ({{ p.part_number }}){% endif %} — {{ p.quantity_on_hand|qty }} {{ p.unit }} available
+                  </option>
+                  {% endfor %}
+                </select>
+                <div style="font-size:11.5px;color:var(--text-muted);margin-top:4px;" data-line-output data-sale-stock-hint></div>
+              </div>
+              <div class="form-group">
+                <label>Quantity<span class="req">*</span></label>
+                <input type="number" name="quantity_0" data-field="quantity" data-sale-qty min="0.01" step="any" required>
+              </div>
+              <div class="form-group">
+                <label>Unit Price (USD)<span class="req" data-sale-price-req>*</span></label>
+                <input type="number" name="unit_price_0" data-field="unit_price" data-sale-price step="any" min="0" required>
+              </div>
+              <div class="form-group">
+                <label>Total Selling Price (USD)</label>
+                <input type="number" name="total_price_0" data-field="total_price" data-sale-total-price step="any" min="0" placeholder="Optional — overrides Unit Price">
+              </div>
+              <div class="form-group">
+                <label>Line Total</label>
+                <div style="font-size:16px;font-weight:700;padding-top:8px;" data-line-output data-sale-line-total></div>
+              </div>
+            </div>
+          </div>
         </div>
+        <div class="mb-16" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <button type="button" class="btn btn-outline" data-add-line><i data-feather="plus"></i> Add another part</button>
+          <div><span class="form-hint">Total:</span> <strong style="font-size:20px;color:var(--success);" id="sale_grand_total">$0.00</strong></div>
+        </div>
+        <div class="form-hint mb-16">Total Selling Price, when entered on a line, replaces that line's Unit Price — Unit Price is then calculated as Total &divide; Quantity.</div>
+      </div>
+      {% endif %}
+
+      <div class="form-group mb-16">
+        <label>Notes</label>
+        <textarea name="notes">{{ sale.notes or '' if sale }}</textarea>
       </div>
       <div class="btn-group">
-        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Sale</button>
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save {{ 'Sale' if sale else 'Sales' }}</button>
         <a href="{{ url_for('store_sales') }}" class="btn btn-outline">Cancel</a>
       </div>
     </form>
   </div>
 </div>
+
+{% if not sale %}
+<script>
+(function () {
+  // Line add/remove/renumbering is initLineItems() in app.js; this handles
+  // each line's price prefill, stock cap, Total-Price override and totals
+  // (the per-line equivalent of the single-sale code in app.js).
+  var wrap = document.getElementById('sale-lines');
+  var grand = document.getElementById('sale_grand_total');
+  if (!wrap) return;
+
+  function lineTotal(line) {
+    var q = parseFloat(line.querySelector('[data-sale-qty]').value) || 0;
+    var override = line.querySelector('[data-sale-total-price]').value.trim();
+    if (override !== '') return parseFloat(override) || 0;
+    return q * (parseFloat(line.querySelector('[data-sale-price]').value) || 0);
+  }
+
+  function update() {
+    var total = 0;
+    wrap.querySelectorAll('[data-line]').forEach(function (line) {
+      var t = lineTotal(line);
+      line.querySelector('[data-sale-line-total]').textContent = t ? '$' + t.toFixed(2) : '';
+      total += t;
+    });
+    grand.textContent = '$' + total.toFixed(2);
+  }
+
+  function onPartChange(line) {
+    var select = line.querySelector('[data-sale-part]');
+    var opt = select.options[select.selectedIndex];
+    var has = opt && opt.value;
+    var stock = has ? parseFloat(opt.getAttribute('data-stock')) || 0 : 0;
+    if (has) line.querySelector('[data-sale-price]').value = (parseFloat(opt.getAttribute('data-price')) || 0).toFixed(2);
+    var qty = line.querySelector('[data-sale-qty]');
+    if (has) qty.setAttribute('max', stock); else qty.removeAttribute('max');
+    line.querySelector('[data-sale-stock-hint]').textContent = has ? stock + ' in stock' : '';
+  }
+
+  // Total Price and Unit Price are mutually exclusive per line — entering a
+  // Total Price disables that line's Unit Price until it's cleared again.
+  function onTotalPriceChange(line) {
+    var overriding = line.querySelector('[data-sale-total-price]').value.trim() !== '';
+    var price = line.querySelector('[data-sale-price]');
+    price.disabled = overriding;
+    price.required = !overriding;
+    line.querySelector('[data-sale-price-req]').style.display = overriding ? 'none' : '';
+  }
+
+  wrap.addEventListener('change', function (e) {
+    if (e.target.matches('[data-sale-part]')) onPartChange(e.target.closest('[data-line]'));
+    update();
+  });
+  wrap.addEventListener('input', function (e) {
+    if (e.target.matches('[data-sale-total-price]')) onTotalPriceChange(e.target.closest('[data-line]'));
+    update();
+  });
+  wrap.addEventListener('line-added', function (e) { onTotalPriceChange(e.detail.line); update(); });
+  wrap.addEventListener('lines-changed', update);
+  update();
+})();
+</script>
+{% endif %}
 {% endif %}
 {% endblock %}

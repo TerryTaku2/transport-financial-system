@@ -2900,6 +2900,27 @@ def check_unique(model, field_name, value, label=None, exclude_id=None):
         raise ValueError(f'{label} "{value}" is already in use.')
 
 
+def form_line_suffixes(form, *fields):
+    """Field-name suffixes for a multi-line entry form (Add Expense, store
+    purchases/sales, Add Spare Part): ['_0', '_1', ...] for each line that
+    posted any of `fields` (e.g. category_id_0, amount_0), in line order.
+
+    Lines are posted as indexed fields rather than repeated `amount[]`
+    names because offline.js flattens a queued form with
+    Object.fromEntries, which would keep only the last value of a repeated
+    name. Falls back to [''] — the plain singular field names — when no
+    indexed field is present (edit forms, offline entries queued before a
+    form went multi-line)."""
+    pattern = re.compile(r'(?:%s)_(\d+)' % '|'.join(map(re.escape, fields)))
+    indices = sorted({int(m.group(1)) for key in form if (m := pattern.fullmatch(key))})
+    return [f'_{i}' for i in indices] or ['']
+
+
+def line_error_prefix(suffixes, number):
+    """'Line 2: ' on a multi-line submission, '' on a single-line one."""
+    return f'Line {number}: ' if len(suffixes) > 1 else ''
+
+
 def handle_form_errors(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -5390,23 +5411,39 @@ def store_parts():
 @handle_form_errors
 def store_part_add():
     if request.method == 'POST':
-        part = SparePart(
-            name=request.form['name'].strip(),
-            part_number=request.form.get('part_number', '').strip(),
-            unit=request.form.get('unit', 'pc').strip() or 'pc',
-            markup_percent=form_float(request.form, 'markup_percent', required=False,
-                                      default=0, min_value=0),
-            reorder_level=form_int(request.form, 'reorder_level', required=False,
-                                   default=0, min_value=0),
-            notes=request.form.get('notes', '').strip(),
-            created_by=current_user.id,
-        )
-        db.session.add(part)
+        # Several parts can be added in one submission — see form_line_suffixes().
+        suffixes = form_line_suffixes(request.form, 'name', 'part_number')
+        created = []
+        for sfx in suffixes:
+            name = (request.form.get(f'name{sfx}') or '').strip()
+            part_number = (request.form.get(f'part_number{sfx}') or '').strip()
+            if sfx and not name and not part_number:
+                continue  # a blank extra line left on the form
+            line = line_error_prefix(suffixes, len(created) + 1)
+            if not name:
+                raise ValueError(f'{line}Part name is required.')
+            created.append(SparePart(
+                name=name,
+                part_number=part_number,
+                unit=(request.form.get(f'unit{sfx}') or 'pc').strip() or 'pc',
+                markup_percent=form_float(request.form, f'markup_percent{sfx}', label=f'{line}Markup',
+                                          required=False, default=0, min_value=0),
+                reorder_level=form_int(request.form, f'reorder_level{sfx}', label=f'{line}Reorder level',
+                                       required=False, default=0, min_value=0),
+                notes=(request.form.get(f'notes{sfx}') or '').strip(),
+                created_by=current_user.id,
+            ))
+        if not created:
+            raise ValueError('Enter at least one part name.')
+        for part in created:
+            db.session.add(part)
         db.session.flush()
-        log_audit('CREATE', 'spare_parts', part.id, f'Added spare part: {part.name}')
-        touch_sync_fields(part)
+        for part in created:
+            log_audit('CREATE', 'spare_parts', part.id, f'Added spare part: {part.name}')
+            touch_sync_fields(part)
         db.session.commit()
-        flash('Spare part added. Record a purchase to bring in stock.', 'success')
+        flash((f'{len(created)} spare parts added.' if len(created) > 1 else 'Spare part added.')
+              + ' Record a purchase to bring in stock.', 'success')
         return redirect(url_for('store_parts'))
     return render_template('store/part_form.html', part=None)
 
@@ -5504,34 +5541,59 @@ def store_purchase_add():
         if already_synced(client_id):
             flash('Already recorded.', 'info')
             return redirect(url_for('store_purchases'))
-        part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
-        quantity = form_float(request.form, 'quantity', min_value=0.01)
-        unit_cost = form_float(request.form, 'unit_cost', min_value=0)
+        # Several parts can be bought in one submission (same date and
+        # supplier) — see form_line_suffixes(). Each line is its own
+        # StorePurchase; lines are applied in order, so the same part on
+        # two lines rolls both into its average cost correctly.
+        purchase_date = parse_date(request.form['purchase_date'])
+        supplier = request.form.get('supplier', '').strip()
+        notes = request.form.get('notes', '').strip()
+        suffixes = form_line_suffixes(request.form, 'part_id', 'quantity')
 
-        purchase = StorePurchase(
-            part_id=part.id,
-            purchase_date=parse_date(request.form['purchase_date']),
-            quantity=quantity,
-            unit_cost=unit_cost,
-            total_cost=quantity * unit_cost,
-            supplier=request.form.get('supplier', '').strip(),
-            notes=request.form.get('notes', '').strip(),
-            created_by=current_user.id,
-        )
-        new_total_qty = part.quantity_on_hand + quantity
-        part.cost_price = ((part.quantity_on_hand * part.cost_price) +
-                           (quantity * unit_cost)) / new_total_qty
-        part.quantity_on_hand = new_total_qty
+        created = []
+        for sfx in suffixes:
+            part_raw = (request.form.get(f'part_id{sfx}') or '').strip()
+            qty_raw = (request.form.get(f'quantity{sfx}') or '').strip()
+            cost_raw = (request.form.get(f'unit_cost{sfx}') or '').strip()
+            if sfx and not part_raw and not qty_raw and not cost_raw:
+                continue  # a blank extra line left on the form
+            line = line_error_prefix(suffixes, len(created) + 1)
+            part = SparePart.query.filter_by(
+                id=form_int(request.form, f'part_id{sfx}', label=f'{line}Part')).first()
+            if not part:
+                raise ValueError(f'{line}Selected part not found.')
+            quantity = form_float(request.form, f'quantity{sfx}', label=f'{line}Quantity', min_value=0.01)
+            unit_cost = form_float(request.form, f'unit_cost{sfx}', label=f'{line}Unit cost', min_value=0)
 
-        db.session.add(purchase)
+            purchase = StorePurchase(
+                part_id=part.id,
+                purchase_date=purchase_date,
+                quantity=quantity,
+                unit_cost=unit_cost,
+                total_cost=quantity * unit_cost,
+                supplier=supplier,
+                notes=notes,
+                created_by=current_user.id,
+            )
+            new_total_qty = part.quantity_on_hand + quantity
+            part.cost_price = ((part.quantity_on_hand * part.cost_price) +
+                               (quantity * unit_cost)) / new_total_qty
+            part.quantity_on_hand = new_total_qty
+            db.session.add(purchase)
+            created.append((purchase, part))
+        if not created:
+            raise ValueError('Enter at least one part to purchase.')
+
         db.session.flush()
-        log_audit('CREATE', 'store_purchases', purchase.id,
-                  f'Purchased {quantity} x {part.name} @ {unit_cost}')
+        for purchase, part in created:
+            log_audit('CREATE', 'store_purchases', purchase.id,
+                      f'Purchased {purchase.quantity} x {part.name} @ {purchase.unit_cost}')
+            touch_sync_fields(purchase)
+            touch_sync_fields(part)
         record_offline_sync(client_id, 'store_purchase_add')
-        touch_sync_fields(purchase)
-        touch_sync_fields(part)
         db.session.commit()
-        flash('Purchase recorded and stock updated.', 'success')
+        flash(f'{len(created)} purchases recorded and stock updated.' if len(created) > 1
+              else 'Purchase recorded and stock updated.', 'success')
         return redirect(url_for('store_purchases'))
 
     all_parts = SparePart.query.filter_by(status='active').order_by(SparePart.name).all()
@@ -5856,51 +5918,81 @@ def store_sale_add():
         if already_synced(client_id):
             flash('Already recorded.', 'info')
             return redirect(url_for('store_sales'))
-        part = SparePart.query.filter_by(id=form_int(request.form, 'part_id')).first_or_404()
-        quantity = form_float(request.form, 'quantity', min_value=0.01)
-        if quantity > part.quantity_on_hand:
-            raise ValueError(f'Only {part.quantity_on_hand} {part.unit}(s) of {part.name} in stock.')
-        # Total Price lets the total be entered directly (e.g. a negotiated
-        # round figure) instead of via a per-unit price — when given, it's
-        # the authoritative amount and unit_price is only backed out from it
-        # for the per-unit records; otherwise unit_price x quantity governs.
-        total_price = form_float(request.form, 'total_price', required=False, min_value=0)
-        if total_price is not None:
-            unit_price = total_price / quantity
-            total_amount = total_price
-        else:
-            unit_price = form_float(request.form, 'unit_price', required=False,
-                                    default=part.selling_price, min_value=0)
-            total_amount = quantity * unit_price
+        # Several parts can be sold/issued in one submission to the same
+        # vehicle or customer on the same date — see form_line_suffixes().
+        # Each line is its own StoreSale; lines are applied in order, so the
+        # same part on two lines is checked against the stock left after
+        # the earlier line.
+        sale_date = parse_date(request.form['sale_date'])
+        notes = request.form.get('notes', '').strip()
         vehicle_id = form_int(request.form, 'vehicle_id', required=False)
+        suffixes = form_line_suffixes(request.form, 'part_id', 'quantity')
+
+        lines = []
+        for sfx in suffixes:
+            part_raw = (request.form.get(f'part_id{sfx}') or '').strip()
+            qty_raw = (request.form.get(f'quantity{sfx}') or '').strip()
+            if sfx and not part_raw and not qty_raw:
+                continue  # a blank extra line left on the form
+            line = line_error_prefix(suffixes, len(lines) + 1)
+            part = SparePart.query.filter_by(
+                id=form_int(request.form, f'part_id{sfx}', label=f'{line}Part')).first()
+            if not part:
+                raise ValueError(f'{line}Selected part not found.')
+            quantity = form_float(request.form, f'quantity{sfx}', label=f'{line}Quantity', min_value=0.01)
+            if quantity > part.quantity_on_hand:
+                raise ValueError(f'{line}Only {part.quantity_on_hand} {part.unit}(s) of {part.name} in stock.')
+            # Total Price lets the total be entered directly (e.g. a negotiated
+            # round figure) instead of via a per-unit price — when given, it's
+            # the authoritative amount and unit_price is only backed out from it
+            # for the per-unit records; otherwise unit_price x quantity governs.
+            total_price = form_float(request.form, f'total_price{sfx}', label=f'{line}Total price',
+                                     required=False, min_value=0)
+            if total_price is not None:
+                unit_price = total_price / quantity
+                total_amount = total_price
+            else:
+                unit_price = form_float(request.form, f'unit_price{sfx}', label=f'{line}Unit price',
+                                        required=False, default=part.selling_price, min_value=0)
+                total_amount = quantity * unit_price
+            part.quantity_on_hand -= quantity
+            lines.append((part, quantity, unit_price, total_amount))
+        if not lines:
+            raise ValueError('Enter at least one part to sell.')
+
+        # Resolved only once every line is valid, so a rejected submission
+        # doesn't leave a newly typed customer behind.
         customer = None if vehicle_id else resolve_store_sale_customer(request.form)
+        created = []
+        for part, quantity, unit_price, total_amount in lines:
+            sale = StoreSale(
+                part_id=part.id,
+                vehicle_id=vehicle_id,
+                sale_date=sale_date,
+                quantity=quantity,
+                unit_cost=part.cost_price,
+                unit_price=unit_price,
+                total_amount=total_amount,
+                customer_id=customer.id if customer else None,
+                customer_name=customer.name if customer else None,
+                notes=notes,
+                created_by=current_user.id,
+            )
+            db.session.add(sale)
+            created.append((sale, part))
 
-        sale = StoreSale(
-            part_id=part.id,
-            vehicle_id=vehicle_id,
-            sale_date=parse_date(request.form['sale_date']),
-            quantity=quantity,
-            unit_cost=part.cost_price,
-            unit_price=unit_price,
-            total_amount=total_amount,
-            customer_id=customer.id if customer else None,
-            customer_name=customer.name if customer else None,
-            notes=request.form.get('notes', '').strip(),
-            created_by=current_user.id,
-        )
-        part.quantity_on_hand -= quantity
-
-        db.session.add(sale)
         db.session.flush()
-        log_audit('CREATE', 'store_sales', sale.id,
-                  f'Sold {quantity} x {part.name} @ {unit_price}' +
-                  (f' to vehicle {sale.vehicle.registration} (booked as an expense on that vehicle)'
-                   if sale.vehicle else ''))
+        for sale, part in created:
+            log_audit('CREATE', 'store_sales', sale.id,
+                      f'Sold {sale.quantity} x {part.name} @ {sale.unit_price}' +
+                      (f' to vehicle {sale.vehicle.registration} (booked as an expense on that vehicle)'
+                       if sale.vehicle else ''))
+            touch_sync_fields(sale)
+            touch_sync_fields(part)
         record_offline_sync(client_id, 'store_sale_add')
-        touch_sync_fields(sale)
-        touch_sync_fields(part)
         db.session.commit()
-        flash('Sale recorded and stock updated.', 'success')
+        flash(f'{len(created)} sales recorded and stock updated.' if len(created) > 1
+              else 'Sale recorded and stock updated.', 'success')
         return redirect(url_for('store_sales'))
 
     all_parts = SparePart.query.filter(SparePart.status == 'active',
@@ -10397,18 +10489,11 @@ def expense_add():
             flash('Already recorded.', 'info')
             return redirect(url_for('expenses_list'))
         # Several expense lines can be entered in one go for the same
-        # vehicle/driver/date. Lines are posted as indexed fields
-        # (category_id_0, amount_0, description_0, category_id_1, ...)
-        # rather than repeated `amount[]` names, because offline.js flattens
-        # the form with Object.fromEntries, which would keep only the last
-        # value of a repeated name. The plain singular fields are still
-        # accepted (offline entries queued before this form changed).
+        # vehicle/driver/date — see form_line_suffixes().
         vehicle_id = form_int(request.form, 'vehicle_id', required=False)
         driver_id = form_int(request.form, 'driver_id', required=False)
         expense_date = parse_date(request.form['expense_date'])
-        indices = sorted({int(m.group(1)) for k in request.form
-                          if (m := re.fullmatch(r'(?:category_id|amount)_(\d+)', k))})
-        suffixes = [f'_{i}' for i in indices] or ['']
+        suffixes = form_line_suffixes(request.form, 'category_id', 'amount')
 
         created = []
         for sfx in suffixes:
@@ -10417,18 +10502,18 @@ def expense_add():
             description = (request.form.get(f'description{sfx}') or '').strip()
             if sfx and not amount_raw and not description:
                 continue  # a blank extra line left on the form
-            line = f'Line {len(created) + 1}: ' if len(suffixes) > 1 else ''
+            line = line_error_prefix(suffixes, len(created) + 1)
             if not category_raw:
                 raise ValueError(f'{line}Choose a category.')
             if not amount_raw:
                 raise ValueError(f'{line}Enter an amount.')
             created.append(Expense(
-                category_id=form_int(request.form, f'category_id{sfx}'),
+                category_id=form_int(request.form, f'category_id{sfx}', label=f'{line}Category'),
                 vehicle_id=vehicle_id,
                 driver_id=driver_id,
                 expense_date=expense_date,
                 description=description,
-                amount=form_float(request.form, f'amount{sfx}', min_value=0),
+                amount=form_float(request.form, f'amount{sfx}', label=f'{line}Amount', min_value=0),
                 created_by=current_user.id,
             ))
         if not created:

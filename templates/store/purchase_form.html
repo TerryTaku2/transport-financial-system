@@ -18,6 +18,7 @@
   <div class="card-body">
     <form method="POST" {% if not purchase %}data-offline-form{% endif %}>
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      {% if purchase %}
       <div class="form-grid mb-16">
         <div class="form-group">
           <label>Date<span class="req">*</span></label>
@@ -53,12 +54,93 @@
           <textarea name="notes">{{ purchase.notes or '' if purchase }}</textarea>
         </div>
       </div>
+      {% else %}
+      <div class="form-grid mb-16">
+        <div class="form-group">
+          <label>Date<span class="req">*</span></label>
+          <input type="date" name="purchase_date" required value="{{ today }}">
+        </div>
+        <div class="form-group">
+          <label>Supplier</label>
+          <input type="text" name="supplier">
+          <div class="form-hint">Applies to every part below.</div>
+        </div>
+      </div>
+
+      <div id="purchase-lines" data-line-items data-line-title="Part">
+        <div data-lines>
+          <div data-line style="border:1px solid var(--border, #e2e8f0);border-radius:8px;padding:12px;margin-bottom:12px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+              <strong data-line-title>Part 1</strong>
+              <button type="button" class="btn btn-outline btn-xs" data-remove-line style="display:none;"><i data-feather="x"></i> Remove</button>
+            </div>
+            <div class="form-grid">
+              <div class="form-group">
+                <label>Part<span class="req">*</span></label>
+                <select name="part_id_0" data-field="part_id" required data-refdata="parts">
+                  <option value="">Select part</option>
+                  {% for p in parts %}
+                  <option value="{{ p.id }}">{{ p.name }}{% if p.part_number %} ({{ p.part_number }}){% endif %} — {{ p.quantity_on_hand|qty }} {{ p.unit }} on hand</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <div class="form-group">
+                <label>Quantity<span class="req">*</span></label>
+                <input type="number" name="quantity_0" data-field="quantity" data-pur-qty min="0.01" step="any" required>
+              </div>
+              <div class="form-group">
+                <label>Unit Cost (USD)<span class="req">*</span></label>
+                <input type="number" name="unit_cost_0" data-field="unit_cost" data-pur-cost step="any" min="0" required>
+              </div>
+              <div class="form-group">
+                <label>Line Total</label>
+                <div style="font-size:16px;font-weight:700;padding-top:8px;" data-line-output data-pur-line-total></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="mb-16" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
+          <button type="button" class="btn btn-outline" data-add-line><i data-feather="plus"></i> Add another part</button>
+          <div><span class="form-hint">Total Cost:</span> <strong style="font-size:20px;color:var(--danger);" id="pur_grand_total">$0.00</strong></div>
+        </div>
+      </div>
+
+      <div class="form-group mb-16">
+        <label>Notes</label>
+        <textarea name="notes"></textarea>
+      </div>
+      {% endif %}
       <div class="btn-group">
-        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save Purchase</button>
+        <button type="submit" class="btn btn-primary"><i data-feather="save"></i> Save {{ 'Purchase' if purchase else 'Purchases' }}</button>
         <a href="{{ url_for('store_purchases') }}" class="btn btn-outline">Cancel</a>
       </div>
     </form>
   </div>
 </div>
+
+{% if not purchase %}
+<script>
+(function () {
+  // Line add/remove/renumbering is initLineItems() in app.js; this only
+  // keeps the per-line and grand totals up to date.
+  var wrap = document.getElementById('purchase-lines');
+  var grand = document.getElementById('pur_grand_total');
+  if (!wrap) return;
+  function update() {
+    var total = 0;
+    wrap.querySelectorAll('[data-line]').forEach(function (line) {
+      var q = parseFloat(line.querySelector('[data-pur-qty]').value) || 0;
+      var c = parseFloat(line.querySelector('[data-pur-cost]').value) || 0;
+      line.querySelector('[data-pur-line-total]').textContent = q && c ? '$' + (q * c).toFixed(2) : '';
+      total += q * c;
+    });
+    grand.textContent = '$' + total.toFixed(2);
+  }
+  wrap.addEventListener('input', update);
+  wrap.addEventListener('lines-changed', update);
+  update();
+})();
+</script>
+{% endif %}
 {% endif %}
 {% endblock %}
